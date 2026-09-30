@@ -139,3 +139,15 @@ def test_token_protects_api_and_socket(settings, apis):
             pass
         with client.websocket_connect("/ws?role=ui&token=s3cret") as ws:
             recv_until(ws, lambda m: m.get("type") == "hello_ack")
+
+
+def test_saving_a_key_says_whether_it_works(settings, apis):
+    app = create_app(settings, apis.client())
+    with TestClient(app) as client:
+        bad = client.post("/api/secrets", json={"name": "GROQ_API_KEY", "value": " gsk_wrong "}).json()
+        assert not bad["check"]["ok"] and "didn't accept" in bad["check"]["message"]
+        good = client.post("/api/secrets", json={"name": "GROQ_API_KEY", "value": "gsk_right"}).json()
+        assert good["check"] == {"ok": True, "message": "Groq key works."}
+        el = client.post("/api/secrets", json={"name": "ELEVENLABS_API_KEY", "value": "sk_x"}).json()
+        assert el["check"]["message"] == "ElevenLabs key works. 8,800 characters left this month."
+        assert settings.secret("GROQ_API_KEY") == "gsk_right"

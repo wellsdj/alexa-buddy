@@ -22,6 +22,20 @@
 
 <main class="layout">
   <section class="talk card" aria-label="Talk to Buddy">
+    <div class="setup-box" id="setup-box" hidden>
+      <h2>Two quick steps and Buddy is ready</h2>
+      <div class="setup-step" id="setup-groq">
+        <p><b>1. Groq key (free, needed).</b> Open <a href="https://console.groq.com/keys" target="_blank" rel="noopener">console.groq.com/keys</a>,
+          sign in (Google is fine), click <i>Create API Key</i>, give it any name, then copy the key and paste it here:</p>
+        <span class="row"><input type="password" id="setup-groq-key" placeholder="gsk_…" autocomplete="off"><button class="btn primary small" data-save-key="GROQ_API_KEY" data-input="setup-groq-key">Save</button></span>
+      </div>
+      <div class="setup-step" id="setup-eleven">
+        <p><b>2. ElevenLabs key (free plan, for the nice voice).</b> Open <a href="https://elevenlabs.io/app/developers/api-keys" target="_blank" rel="noopener">elevenlabs.io → API keys</a>,
+          sign up, click <i>Create Key</i> (if it asks about access, turn on <i>Text to Speech</i>), then copy and paste it here:</p>
+        <span class="row"><input type="password" id="setup-eleven-key" placeholder="sk_…" autocomplete="off"><button class="btn primary small" data-save-key="ELEVENLABS_API_KEY" data-input="setup-eleven-key">Save</button></span>
+        <p class="note">Skip this and Buddy uses a free offline voice instead. <a href="#" id="setup-skip-eleven">Skip</a></p>
+      </div>
+    </div>
     <div class="stage">
       <button class="orb" id="orb" data-state="offline" aria-label="Buddy status" title="Click to stop Buddy talking">
         <span class="orb-ring"></span><span class="orb-core"></span>

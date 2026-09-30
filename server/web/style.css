@@ -231,3 +231,11 @@ kbd { font: 11px var(--mono); padding: 1px 5px; border-radius: 4px; background: 
   position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%);
   background: var(--ink); color: var(--bg); padding: 10px 16px; border-radius: 10px; font-weight: 600; max-width: 90vw;
 }
+
+/* ---------- first-run setup ---------- */
+.setup-box { border: 2px solid var(--accent); background: var(--accent-soft); border-radius: 14px; padding: 14px 16px; display: grid; gap: 12px; }
+.setup-box h2 { margin: 0; font-size: 17px; }
+.setup-step p { margin: 0 0 8px; line-height: 1.45; }
+.setup-step .row { display: flex; gap: 6px; }
+.setup-step input { flex: 1; min-width: 0; padding: 9px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); }
+.setup-box a { color: var(--accent); font-weight: 600; }

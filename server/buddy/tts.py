@@ -81,8 +81,10 @@ class ElevenLabsTTS:
         if not key:
             self.quota = None
             return None
+        self.quota_status = None
         try:
             r = await self.client.get(f"{ELEVEN_BASE}/user/subscription", headers={"xi-api-key": key})
+            self.quota_status = r.status_code
             if r.status_code == 200:
                 j = r.json()
                 self.quota = {

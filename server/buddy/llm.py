@@ -77,7 +77,9 @@ class GroqLLM:
         if not force and self.available_models is not None and time.time() - self.discovered_at < 6 * 3600:
             return self.available_models
         try:
+            self.discover_status = None
             r = await self.client.get(f"{GROQ_BASE}/models", headers={"Authorization": f"Bearer {self._key()}"})
+            self.discover_status = r.status_code
             if r.status_code == 200:
                 ids = {m["id"] for m in r.json().get("data", []) if m.get("active", True)}
                 self.available_models = ids

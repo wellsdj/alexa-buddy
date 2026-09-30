@@ -412,6 +412,12 @@ function showKeys(keys) {
   };
   k("GROQ_API_KEY", "key-groq");
   k("ELEVENLABS_API_KEY", "key-eleven");
+  let skipEleven = false;
+  try { skipEleven = localStorage.getItem("buddy-skip-eleven") === "1"; } catch {}
+  $("setup-groq").hidden = keys.GROQ_API_KEY.set;
+  $("setup-eleven").hidden = keys.ELEVENLABS_API_KEY.set || skipEleven;
+  $("setup-box").hidden = $("setup-groq").hidden && $("setup-eleven").hidden;
+  S.lastKeys = keys;
   const pill = $("pill-keys");
   pill.dataset.ok = keys.GROQ_API_KEY.set && keys.ELEVENLABS_API_KEY.set ? "true" : keys.GROQ_API_KEY.set ? "warn" : "false";
   pill.title = keys.GROQ_API_KEY.set ? (keys.ELEVENLABS_API_KEY.set ? "Both keys set" : "No ElevenLabs key: offline voice will be used") : "Groq key missing";
@@ -565,11 +571,16 @@ function init() {
         const r = await api("/api/secrets", { method: "POST", body: { name: b.dataset.saveKey, value: input.value.trim() } });
         input.value = "";
         showKeys(r.keys);
-        toast("Key saved on the server.");
+        toast(r.check?.message || "Key saved.");
         loadStatus();
       } catch (err) { toast(err.message); }
     };
   }
+  $("setup-skip-eleven").onclick = (e) => {
+    e.preventDefault();
+    try { localStorage.setItem("buddy-skip-eleven", "1"); } catch {}
+    if (S.lastKeys) showKeys(S.lastKeys);
+  };
   $("place-go").onclick = async (e) => {
     e.preventDefault();
     const q = $("place-search").value.trim();

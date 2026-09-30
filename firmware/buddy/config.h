@@ -19,8 +19,10 @@
 // hold 10 s = forget Wi-Fi and reopen the setup hotspot.
 #define BUTTON_PIN    0
 
-// On-board RGB status LED: GPIO 48 on DevKitC-1 v1.0, GPIO 38 on v1.1. -1 to disable.
+// On-board RGB status LED: GPIO 48 on DevKitC-1 v1.0, GPIO 38 on v1.1. Both are driven so
+// either board version works (neither pin is used for anything else). -1 to disable.
 #define STATUS_LED_PIN 48
+#define STATUS_LED_PIN_ALT 38
 #define LED_BRIGHTNESS 40  // 0-255; the on-board LED is very bright
 
 // Microphone loudness. The INMP441 is quiet, so its 24-bit samples are shifted down by

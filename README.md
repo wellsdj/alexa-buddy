@@ -20,25 +20,31 @@ buddy/
 
 ---
 
-## 1. Start the server (Mac)
+## 1. Install and start Buddy on your Mac (5 minutes)
 
-1. Install **Python 3.12** from <https://www.python.org/downloads/macos/> if you don't have it.
-2. Open Terminal and run:
+1. Open **Terminal**: press Cmd+Space, type `terminal`, press Enter.
+2. Copy this whole line, paste it into Terminal and press Enter:
    ```
-   cd path/to/buddy/server
-   ./run.sh
+   curl -fsSL https://raw.githubusercontent.com/wellsdj/Serum-Plugin-Creator/claude/alexa-desk-robot-hardware-txxae5/buddy/install.sh | bash
    ```
-   The first run takes a few minutes. Your browser then opens **http://localhost:8000**.
-3. If macOS asks *"Allow Python to accept incoming network connections?"*, click **Allow**. The desk unit can't connect without it.
-4. On the web page, go to **Settings → API keys** and paste in your keys:
-   - **Groq** (free): <https://console.groq.com/keys>
-   - **ElevenLabs** (the free plan is fine): <https://elevenlabs.io/app/settings/api-keys>
+   Wait a few minutes. You don't need to install anything else, not even Python.
+3. Your browser opens on Buddy's page. Follow the orange **"Two quick steps"** box to paste in your Groq key (free) and your ElevenLabs key (free).
+4. If macOS asks *"Allow Python to accept incoming network connections?"*, click **Allow**.
 
-To test without the hardware, click **Hands-free** and say "hey buddy". You can also hold
-**Space** to talk, or type in the box.
+You now have three buttons on your Desktop:
+- **Start Buddy**: double-click it whenever you want Buddy running. Leave its window open.
+- **Put Buddy on the board**: sets up the ESP32 (step 3 below).
+- **Update Buddy**: gets the latest version. Your memories, alarms and keys are kept.
 
-The weather is set to **Richmond, London** by default. You can change it under
-Settings → Home location.
+To try it before the hardware arrives, click **Hands-free** on the web page and say "hey buddy". You can also hold **Space** to talk, or type in the box.
+
+To make Buddy start by itself every time you log in, so you never need the Start button, paste this into Terminal:
+```
+~/Buddy/server/autostart.sh on
+```
+To turn that off again, paste `~/Buddy/server/autostart.sh off`.
+
+The weather is set to **Richmond, London** by default. You can change it under Settings → Home location.
 
 ## 2. Wire the desk unit
 
@@ -66,23 +72,30 @@ the ESP32-S3 board.
 - Keep the mic wires short, and keep them away from the speaker wires.
 - The mic hole on the INMP441 is on the side without the chip. Point that side towards you.
 
-## 3. Put the code on the ESP32-S3 (once)
+## 3. Put Buddy on the ESP32-S3 (once)
 
-1. Install the **Arduino IDE** from <https://www.arduino.cc/en/software>.
+1. Plug the board into the Mac with a USB cable. Use the board's socket labelled **USB**; if nothing happens, try the other socket. Some cables only charge, so if the board isn't found, try another cable.
+2. Double-click **Put Buddy on the board** on your Desktop.
+3. Wait about 30 seconds until it says **Done!**
+
+If it says the board didn't answer, it shows you what to do:
+1. Hold the **BOOT** button.
+2. While holding it, tap **RST**.
+3. Let go, then press Enter.
+
+<details><summary>Advanced: build it yourself with the Arduino IDE instead</summary>
+
+1. Install the Arduino IDE.
 2. Add ESP32 support:
-   - Go to **Settings** and, under *Additional boards manager URLs*, add:
-     `https://espressif.github.io/arduino-esp32/package_esp32_index.json`
-   - Then go to **Tools → Board → Boards Manager**, search for **esp32**, and install **esp32 by Espressif** (version 3.x).
-3. Go to **Tools → Manage Libraries** and install:
-   - **WebSockets** by Markus Sattler
-   - **WiFiManager** by tzapu
-   - **ArduinoJson** by Benoit Blanchon
-4. Open `firmware/buddy/buddy.ino`. The code is in the `buddy_main.cpp` tab.
-5. In **Tools**, set:
-   - **Board:** ESP32S3 Dev Module
-   - **Partition Scheme:** Huge APP (3MB No OTA/1MB SPIFFS)
-   - **Port:** the USB port your board is plugged into. Use the board's USB socket labelled **UART** or **COM**.
-6. Click **Upload**. If it won't connect, hold the **BOOT** button while it says "Connecting…".
+   - In **Settings → Additional boards manager URLs**, add `https://espressif.github.io/arduino-esp32/package_esp32_index.json`.
+   - In **Boards Manager**, install **esp32 by Espressif** 3.x.
+3. Install these libraries: **WebSockets** (Markus Sattler), **WiFiManager** (tzapu) and **ArduinoJson** (Benoit Blanchon).
+4. Open `firmware/buddy/buddy.ino` and set these in **Tools**:
+   - Board: **ESP32S3 Dev Module**
+   - Partition Scheme: **Huge APP (3MB No OTA/1MB SPIFFS)**
+5. Click Upload.
+
+</details>
 
 ## 4. Connect it to your Wi-Fi (once)
 
@@ -92,8 +105,8 @@ the ESP32-S3 board.
 4. The board joins your Wi-Fi and finds the laptop automatically. It plays a little "hello" tune when it's connected.
 
 If it can't find the laptop:
-- Make sure the laptop is on the same Wi-Fi and `./run.sh` is running.
-- If it still can't, hold the BOOT button for 10 s to reopen setup. Type in the laptop's address this time. The server prints it when it starts, e.g. `192.168.1.23`.
+- Make sure the laptop is on the same Wi-Fi and Buddy is running (double-click **Start Buddy**).
+- If it still can't, hold the BOOT button for 10 s to reopen setup. Type in the laptop's address this time. It's shown in the Start Buddy window as "ESP32 server address", e.g. `192.168.1.23`.
 
 ## Using it
 

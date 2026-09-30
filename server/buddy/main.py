@@ -54,7 +54,7 @@ class Advertiser:
                 addresses=[socket.inet_aton(ip)], port=port,
                 properties={"path": "/ws"}, server=f"buddy-{socket.gethostname().split('.')[0]}.local.")
             self.zc = Zeroconf()
-            self.zc.register_service(self.info)
+            self.zc.register_service(self.info, allow_name_change=True)
             log.info("advertising _buddy._tcp on %s:%d", ip, port)
         except Exception as e:  # noqa: BLE001
             log.warning("mDNS advertising failed: %s", e)
@@ -164,13 +164,30 @@ def create_app(settings: Settings | None = None, http=None) -> FastAPI:
         name = body.get("name")
         if name not in SECRET_KEYS:
             raise HTTPException(400, "unknown key")
-        settings.set_secret(name, body.get("value", ""))
+        value = (body.get("value") or "").strip()
+        settings.set_secret(name, value)
         if name == "GROQ_API_KEY":
             await hub.llm.discover(force=True)
+            code = getattr(hub.llm, "discover_status", None)
+            message = ("Groq key removed." if not value else
+                       "Groq key works." if code == 200 else
+                       "Groq didn't accept that key. Copy it again (it starts with gsk_)." if code in (401, 403) else
+                       "Key saved, but Groq couldn't be reached to check it. Is the internet on?")
         else:
             hub.tts.eleven.blocked_until = 0
-            await hub.tts.eleven.refresh_quota()
-        return {"keys": settings.secret_status()}
+            quota = await hub.tts.eleven.refresh_quota()
+            code = getattr(hub.tts.eleven, "quota_status", None)
+            if not value:
+                message = "ElevenLabs key removed. Buddy will use the offline voice."
+            elif code == 200:
+                left = (quota["limit"] - quota["used"]) if quota and quota.get("limit") else None
+                message = "ElevenLabs key works." + (f" {left:,} characters left this month." if left is not None else "")
+            elif code in (401, 403):
+                message = ("Key saved, but ElevenLabs wouldn't confirm it. If Buddy's voice sounds robotic, "
+                           "make a new key with Text to Speech access turned on.")
+            else:
+                message = "Key saved, but ElevenLabs couldn't be reached to check it."
+        return {"keys": settings.secret_status(), "check": {"ok": code == 200, "message": message}}
 
     @app.get("/api/log")
     async def get_log():

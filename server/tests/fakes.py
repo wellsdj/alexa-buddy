@@ -71,6 +71,8 @@ class FakeAPIs:
     def handler(self, request: httpx.Request) -> httpx.Response:
         url = str(request.url)
         if "api.groq.com" in url and url.endswith("/models"):
+            if request.headers.get("authorization") == "Bearer gsk_wrong":
+                return httpx.Response(401, json={"error": {"message": "Invalid API Key"}})
             return httpx.Response(200, json={"data": [{"id": m, "active": True} for m in self.models]})
         if "audio/transcriptions" in url:
             body = request.content.decode(errors="ignore")

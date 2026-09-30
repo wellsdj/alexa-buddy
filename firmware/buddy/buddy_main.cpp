@@ -294,6 +294,9 @@ static void led(uint8_t r, uint8_t g, uint8_t b) {
   if (v == last) return;
   last = v;
   rgbLedWrite(STATUS_LED_PIN, (r * LED_BRIGHTNESS) / 255, (g * LED_BRIGHTNESS) / 255, (b * LED_BRIGHTNESS) / 255);
+#if defined(STATUS_LED_PIN_ALT) && STATUS_LED_PIN_ALT >= 0
+  rgbLedWrite(STATUS_LED_PIN_ALT, (r * LED_BRIGHTNESS) / 255, (g * LED_BRIGHTNESS) / 255, (b * LED_BRIGHTNESS) / 255);
+#endif
 #endif
 }
 
