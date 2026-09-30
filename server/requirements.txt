@@ -1,0 +1,12 @@
+fastapi>=0.110
+uvicorn[standard]>=0.29
+httpx>=0.27
+numpy>=1.26
+python-dotenv>=1.0
+zeroconf>=0.130
+# Intel Macs: 1.23.2 is the last release built for them (needs macOS 13+; older macOS gets 1.19.2).
+onnxruntime>=1.19,<=1.23.2; sys_platform == "darwin" and platform_machine == "x86_64"
+onnxruntime>=1.19; sys_platform != "darwin" or platform_machine != "x86_64"
+# Free offline voice, used when ElevenLabs is unavailable.
+piper-tts>=1.3
+# For running the tests: pip install pytest pytest-timeout
