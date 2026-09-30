@@ -49,14 +49,16 @@ buddy_env() {
     fi
     rm -f "$dir/.venv/.installed"
   fi
-  if [ ! -f "$dir/.venv/.installed" ] || [ "$dir/requirements.txt" -nt "$dir/.venv/.installed" ]; then
+  local want
+  want="$(cksum < "$dir/requirements.txt")"
+  if [ "$(cat "$dir/.venv/.installed" 2>/dev/null)" != "$want" ]; then
     echo "Installing Buddy's parts (takes 2-5 minutes; it's working even if nothing moves)..."
     if [ -f "$dir/.venv/.uv" ]; then
       "$(_buddy_uv)" pip install -q --python "$VENV_PY" -r "$dir/requirements.txt" || return 1
     else
       "$VENV_PY" -m pip install -q -r "$dir/requirements.txt" || return 1
     fi
-    touch "$dir/.venv/.installed"
+    echo "$want" > "$dir/.venv/.installed"
   fi
   "$VENV_PY" "$dir/setup_models.py" || return 1
 }
