@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
 # Buddy installer / updater. Paste this into Terminal:
-#   curl -fsSL https://raw.githubusercontent.com/wellsdj/Serum-Plugin-Creator/claude/alexa-desk-robot-hardware-txxae5/buddy/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/wellsdj/alexa-buddy/main/install.sh | bash
 # It puts Buddy in ~/Buddy, adds buttons to your Desktop, and starts it.
 # Running it again updates Buddy and keeps your keys, memories, alarms and settings.
 set -e
-BRANCH="claude/alexa-desk-robot-hardware-txxae5"
-ZIP_URL="${BUDDY_ZIP_URL:-https://codeload.github.com/wellsdj/Serum-Plugin-Creator/zip/refs/heads/$BRANCH}"
+BRANCH="main"
+ZIP_URL="${BUDDY_ZIP_URL:-https://codeload.github.com/wellsdj/alexa-buddy/zip/refs/heads/$BRANCH}"
 DEST="${BUDDY_HOME:-$HOME/Buddy}"
-INSTALL_CMD="curl -fsSL https://raw.githubusercontent.com/wellsdj/Serum-Plugin-Creator/$BRANCH/buddy/install.sh | bash"
+INSTALL_CMD="curl -fsSL https://raw.githubusercontent.com/wellsdj/alexa-buddy/$BRANCH/install.sh | bash"
 
 echo "Downloading Buddy..."
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 curl -fL --progress-bar -o "$TMP/buddy.zip" "$ZIP_URL"
 unzip -q "$TMP/buddy.zip" -d "$TMP"
-SRC="$(ls -d "$TMP"/*/buddy | head -1)"
+SRC="$(ls -d "$TMP"/*/ | head -1)"
 [ -d "$SRC/server" ] || { echo "Download looked wrong; try again in a minute."; exit 1; }
 
 mkdir -p "$DEST"

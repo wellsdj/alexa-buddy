@@ -13,7 +13,7 @@ How it works:
 - **The web page** lets you test everything with your laptop's mic before the hardware arrives. It also manages alarms, memory and settings.
 
 ```
-buddy/
+alexa-buddy/
   server/     Python server + web page (run this on your laptop)
   firmware/   ESP32-S3 code (flash once with the Arduino IDE)
 ```
@@ -25,7 +25,7 @@ buddy/
 1. Open **Terminal**: press Cmd+Space, type `terminal`, press Enter.
 2. Copy this whole line, paste it into Terminal and press Enter:
    ```
-   curl -fsSL https://raw.githubusercontent.com/wellsdj/Serum-Plugin-Creator/claude/alexa-desk-robot-hardware-txxae5/buddy/install.sh | bash
+   curl -fsSL https://raw.githubusercontent.com/wellsdj/alexa-buddy/main/install.sh | bash
    ```
    Wait a few minutes. You don't need to install anything else, not even Python.
 3. Your browser opens on Buddy's page. Follow the orange **"Two quick steps"** box to paste in your Groq key (free) and your ElevenLabs key (free).
