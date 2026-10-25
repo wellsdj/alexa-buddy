@@ -145,10 +145,12 @@ speaker we'd add. Buddy's voice goes into its **AUX IN**, so the radio doesn't n
   (so Wi-Fi still works).
 - [ ] Sound: wire the PCM5102A's output straight onto the AUX IN socket's legs inside
   (left, right, ground), so no cable sticks out. Select AUX with the radio's SOURCE button.
-- [ ] Power, pick one:
-  - simplest: a USB cable out of the back to a phone charger;
-  - neatest (one plug): a small 5V converter board (about £3) fed from the radio's own power input.
-    Needs the radio adapter's voltage first (it's printed on the adapter).
+- [ ] Power: the radio has a **USB charging socket** on the back (5V) and runs from a **9V 2A** adapter.
+  - First test: plug Buddy's USB cable into the radio's USB socket. Does Buddy stay on when the
+    radio is switched to standby? If yes, power Buddy from that socket's 5V and GND inside: one plug for both.
+  - If the USB socket switches off in standby: a small 9V to 5V converter board (about £3)
+    fed from the radio's 9V input instead.
+- [ ] Opening: screws are most likely under the 4 round feet in the bottom corners.
 - [ ] Mic: a 2–3 mm hole in the case, on the top or back, away from the speakers, with a bit of foam
   around the INMP441 so it doesn't pick up vibration.
 - [ ] LED ring behind the front grille or around the display (later, with the phase 2 board software).
