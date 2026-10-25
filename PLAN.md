@@ -9,6 +9,7 @@ Swap Groq's free models for Claude Haiku, using an Anthropic API key.
 **What you do**
 - [ ] Get an API key at [console.anthropic.com](https://console.anthropic.com) and add some credit.
   This is separate from a Claude Pro/Max subscription, which can't be used by apps like Buddy.
+  Note: Anthropic needs a card to buy API credit. No card = stay on Groq (free).
 - [ ] Paste the key into Buddy's web page when the new key box is there.
 
 **What gets built**
@@ -24,9 +25,15 @@ Swap Groq's free models for Claude Haiku, using an Anthropic API key.
 
 - **Voice check:** Buddy learns your voice (WeSpeaker) so it knows when it's you talking.
   The voice recording never goes on GitHub.
-- **Hosting:** run Buddy's brain on Oracle Always Free (London) so the laptop doesn't need to be on.
-  Use Vercel for the web page.
-- **Wake word on the board:** the desk unit listens for "hey buddy" by itself.
+- **Hosting: everything on Vercel** (free, no card), so the laptop doesn't need to be on.
+  (Oracle was dropped: it wants a credit card.)
+  - The desk unit hears the wake word itself, records the question, and sends it to Vercel over the
+    internet (encrypted). Vercel sends the spoken answer back.
+  - The web page, memory, Diary and settings all live on Vercel, using its free storage.
+  - The nightly memory review runs as a Vercel scheduled job, some time between 8 and 9pm.
+  - Alarms and timers keep living on the desk unit, so they ring even if the internet drops.
+- **Wake word on the board** (needed for Vercel): the desk unit listens for the wake word by itself.
+  "Hey buddy" needs a custom model trained for the board; a ready-made word could be used meanwhile.
 
 ## Hardware notes
 
