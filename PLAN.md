@@ -137,7 +137,22 @@ speaker we'd add. Buddy's voice goes into its **AUX IN**, so the radio doesn't n
 - [ ] Does the radio switch itself off after a while of silence on AUX? If yes, look for an
   auto-standby setting to turn off; otherwise Buddy needs a small software fix (keeps it awake).
 - [ ] Keep Buddy's mic away from the radio's speakers, so it doesn't hear itself.
-- Later option: put Buddy inside the radio, with the LED ring behind the grille.
+
+### Buddy lives inside the radio (decided)
+
+- [ ] Open the radio carefully (photos at every step, screws in labelled groups, watch the wires).
+- [ ] Find a spot inside for the ESP32 + PCM5102A, away from the speaker magnets and any metal
+  (so Wi-Fi still works).
+- [ ] Sound: wire the PCM5102A's output straight onto the AUX IN socket's legs inside
+  (left, right, ground), so no cable sticks out. Select AUX with the radio's SOURCE button.
+- [ ] Power, pick one:
+  - simplest: a USB cable out of the back to a phone charger;
+  - neatest (one plug): a small 5V converter board (about £3) fed from the radio's own power input.
+    Needs the radio adapter's voltage first (it's printed on the adapter).
+- [ ] Mic: a 2–3 mm hole in the case, on the top or back, away from the speakers, with a bit of foam
+  around the INMP441 so it doesn't pick up vibration.
+- [ ] LED ring behind the front grille or around the display (later, with the phase 2 board software).
+- [ ] The radio still works as a normal radio.
 
 ---
 
