@@ -107,6 +107,40 @@ Three layers, like a filing system:
 
 ---
 
+## Sound: Buddy plays through the VQ Hepburn Mk II radio
+
+The radio has 2 full-range speakers + 2 tweeters, its own amp and tuning: better than any small
+speaker we'd add. Buddy's voice goes into its **AUX IN**, so the radio doesn't need opening.
+
+**What to buy**
+- [ ] A **PCM5102A** DAC board (Amazon UK, about £4–7). Pick one whose photos show the pins fitted.
+- [ ] A 3.5mm to 3.5mm audio cable (if the radio doesn't have one).
+- [ ] Only if there's a hum: a "ground loop isolator" (about £5).
+
+**Wiring (needs the iron)**
+
+| PCM5102A pin | ESP32 pin |
+|---|---|
+| VIN | 3V3 (or 5V once IN-OUT is bridged) |
+| GND | GND |
+| BCK | 15 (same as the amp's BCLK) |
+| LCK | 16 (same as the amp's LRC) |
+| DIN | 7 (same as the amp's DIN) |
+| SCK | GND |
+
+- [ ] Back pads: 1 → L, 2 → L, **3 → H**, 4 → L (otherwise it stays silent).
+- [ ] The little amp and speaker can stay connected or be removed.
+- [ ] Cable from the PCM5102A's headphone socket into the radio's AUX IN. Radio on AUX, volume about 3/4;
+  Buddy controls the volume from there.
+
+**To check**
+- [ ] Does the radio switch itself off after a while of silence on AUX? If yes, look for an
+  auto-standby setting to turn off; otherwise Buddy needs a small software fix (keeps it awake).
+- [ ] Keep Buddy's mic away from the radio's speakers, so it doesn't hear itself.
+- Later option: put Buddy inside the radio, with the LED ring behind the grille.
+
+---
+
 ## Hardware notes
 
 - The amp runs from **3V3** for now, because the board's 5V pin is dead on the USB socket.
