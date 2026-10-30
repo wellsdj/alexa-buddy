@@ -131,6 +131,8 @@
         <label>ElevenLabs <span class="keystate" id="key-eleven"></span>
           <span class="row"><input type="password" id="eleven-key" placeholder="sk_…" autocomplete="off"><button class="btn small" data-save-key="ELEVENLABS_API_KEY" data-input="eleven-key">Save</button></span></label>
         <p class="note" id="eleven-quota"></p>
+        <label>Claude <span class="note">optional, pay as you go: Buddy's brain when set</span> <span class="keystate" id="key-claude"></span>
+          <span class="row"><input type="password" id="claude-key" placeholder="sk-ant-…" autocomplete="off"><button class="btn small" data-save-key="ANTHROPIC_API_KEY" data-input="claude-key">Save</button></span></label>
       </fieldset>
       <fieldset>
         <legend>You</legend>
@@ -165,8 +167,13 @@
       </fieldset>
       <fieldset>
         <legend>Brains</legend>
-        <label>Everyday model <input data-setting="fast_model" type="text" list="model-list"></label>
-        <label>Big-task model <input data-setting="smart_model" type="text" list="model-list"></label>
+        <label>Thinks with
+          <select data-setting="brain"><option value="auto">Claude when its key is set (Groq as backup)</option><option value="groq">Groq only (free)</option></select></label>
+        <label>Claude everyday model <input data-setting="claude_fast_model" type="text" list="claude-models"></label>
+        <label>Claude big-task model <input data-setting="claude_smart_model" type="text" list="claude-models"></label>
+        <datalist id="claude-models"><option value="claude-haiku-5-5"><option value="claude-sonnet-5-5"><option value="claude-opus-5-5"></datalist>
+        <label>Groq everyday model <input data-setting="fast_model" type="text" list="model-list"></label>
+        <label>Groq big-task model <input data-setting="smart_model" type="text" list="model-list"></label>
         <label>Fallbacks (comma separated) <input data-setting="fallback_models" type="text"></label>
         <datalist id="model-list"></datalist>
         <p class="note" id="model-note"></p>

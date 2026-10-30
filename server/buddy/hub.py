@@ -28,9 +28,11 @@ from . import intents
 from .alarms import Alarm, AlarmStore, DAY_NAMES, spoken_time
 from .audio import rms_dbfs
 from .brain import Brain, Conversation, Reply
+from .claude import ClaudeLLM
 from .config import Settings
 from .llm import GroqLLM
 from .memory import MemoryManager, MemoryStore
+from .router import LLMRouter
 from .stt import GroqSTT, STTError
 from .tts import ElevenLabsTTS, TTSRouter, TTSUnavailable
 from .vad import CHUNK as VAD_CHUNK
@@ -337,10 +339,10 @@ class Session:
 
 
 class Hub:
-    def __init__(self, settings: Settings, http=None):
+    def __init__(self, settings: Settings, http=None, claude_http=None):
         self.settings = settings
         d = settings.data_dir
-        self.llm = GroqLLM(settings, http)
+        self.llm = LLMRouter(settings, GroqLLM(settings, http), ClaudeLLM(settings, claude_http))
         self.stt = GroqSTT(settings, http)
         self.tts = TTSRouter(settings, ElevenLabsTTS(settings, http))
         self.weather = Weather(settings, http)

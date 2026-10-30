@@ -31,6 +31,9 @@ DEFAULTS: dict[str, Any] = {
     "smart_model": "openai/gpt-oss-120b",
     "fallback_models": ["qwen/qwen3.6-27b", "openai/gpt-oss-120b", "openai/gpt-oss-20b"],
     "stt_model": "whisper-large-v3-turbo",
+    "brain": "auto",  # auto: Claude when its key is set, Groq otherwise and as backup | groq: Groq only
+    "claude_fast_model": "claude-haiku-5-5",
+    "claude_smart_model": "claude-haiku-5-5",
     "tts_engine": "auto",  # auto | elevenlabs | piper | browser
     "elevenlabs_voice_id": "JBFqnCBsd6RMkjVDRZzb",  # "George": warm British male, a premade voice
     "elevenlabs_model": "eleven_flash_v2_5",
@@ -48,7 +51,7 @@ DEFAULTS: dict[str, Any] = {
     "device_token": "",
 }
 
-SECRET_KEYS = ("GROQ_API_KEY", "ELEVENLABS_API_KEY")
+SECRET_KEYS = ("GROQ_API_KEY", "ELEVENLABS_API_KEY", "ANTHROPIC_API_KEY")
 
 
 class Settings:

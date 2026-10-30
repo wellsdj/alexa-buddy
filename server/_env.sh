@@ -1,17 +1,17 @@
 # Shared by run.sh, ../firmware/flash.sh and ../install.sh: makes sure .venv exists with
-# everything installed. If there's no Python 3.10+ on the Mac, it fetches one with uv
+# everything installed. If there's no Python 3.11+ on the Mac, it fetches one with uv
 # (no admin password, nothing installed system-wide). Source it from anywhere.
 BUDDY_SERVER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV_PY="$BUDDY_SERVER_DIR/.venv/bin/python"
 
 _buddy_find_python() {
   local p
-  for p in python3.12 python3.13 python3.11 python3.10 python3; do
+  for p in python3.12 python3.13 python3.11 python3; do
     local path
     path="$(command -v "$p" 2>/dev/null)" || continue
     # Apple's /usr/bin/python3 is 3.9 and pops up a "developer tools" installer: skip it.
     [ "$path" = "/usr/bin/python3" ] && continue
-    if "$path" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' 2>/dev/null; then
+    if "$path" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)' 2>/dev/null; then
       echo "$path"
       return 0
     fi
@@ -35,6 +35,11 @@ _buddy_uv() {
 
 buddy_env() {
   local dir="$BUDDY_SERVER_DIR"
+  # Older installs used Python 3.10; the Claude library needs 3.11+, so rebuild once on update.
+  if [ -x "$VENV_PY" ] && ! "$VENV_PY" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)' 2>/dev/null; then
+    echo "Upgrading Buddy's Python (one-off)..."
+    rm -rf "$dir/.venv"
+  fi
   if [ ! -x "$VENV_PY" ]; then
     echo "Setting up Buddy (first time only, a few minutes)..."
     local py=""

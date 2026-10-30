@@ -21,16 +21,18 @@ Swap Groq's free models for Claude Haiku, using an Anthropic API key.
 - [ ] Get an API key at [console.anthropic.com](https://console.anthropic.com) and add some credit.
   - This is separate from a Claude Pro/Max subscription, which can't be used by apps like Buddy.
   - Anthropic needs a card to buy API credit. No card = stay on Groq (free) and skip this phase.
-- [ ] Paste the key into Buddy's web page when the new key box is there.
+- [ ] Double-click **Update Buddy**, then **Start Buddy**.
+- [ ] Paste the key into Buddy's web page: Settings → API keys → **Claude** → Save.
 
 **What gets built**
-- [ ] A **Claude key** box on the web page, which says straight away whether the key works.
-- [ ] A **Brain** choice in Settings: Groq (free) or Claude.
-- [ ] Claude Haiku for everyday questions; a smarter Claude model for "think harder" and big jobs.
-- [ ] Groq stays as the ears (speech to text) and ElevenLabs stays as the voice.
-- [ ] Memory, alarms, reminders and weather keep working exactly as now.
-- [ ] Safety net: if the Claude key fails or runs out of credit, Buddy switches back to Groq by itself.
-- [ ] README updated with the new steps.
+- [x] A **Claude key** box on the web page, which says straight away whether the key works.
+- [x] A **Thinks with** choice in Settings: Claude when its key is set (Groq as backup), or Groq only.
+- [x] Claude Haiku for everyday questions (quick, low effort) and for "think harder" and big jobs
+  (thinks harder). Either can be switched to Sonnet or Opus in Settings.
+- [x] Groq stays as the ears (speech to text) and ElevenLabs stays as the voice.
+- [x] Memory, alarms, reminders and weather keep working exactly as now. Web searches use Claude's search.
+- [x] Safety net: if the Claude key fails or runs out of credit, Buddy switches back to Groq by itself.
+- [x] README updated with the new steps.
 
 Meanwhile, on Groq: Everyday model = `openai/gpt-oss-120b`, Big-task model = Qwen 3.8 27B.
 

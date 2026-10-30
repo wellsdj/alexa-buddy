@@ -1,6 +1,8 @@
 fastapi>=0.110
 uvicorn[standard]>=0.29
 httpx>=0.27
+# Claude as Buddy's brain (optional: only used when a Claude key is set).
+anthropic>=2.3,<3; python_version >= "3.11"
 numpy>=1.26
 python-dotenv>=1.0
 zeroconf>=0.130

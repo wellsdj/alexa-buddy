@@ -68,9 +68,9 @@ class Advertiser:
                 pass
 
 
-def create_app(settings: Settings | None = None, http=None) -> FastAPI:
+def create_app(settings: Settings | None = None, http=None, claude_http=None) -> FastAPI:
     settings = settings or Settings(DATA_DIR)
-    hub = Hub(settings, http)
+    hub = Hub(settings, http, claude_http)
     adv = Advertiser()
 
     @asynccontextmanager
@@ -166,9 +166,12 @@ def create_app(settings: Settings | None = None, http=None) -> FastAPI:
             raise HTTPException(400, "unknown key")
         value = (body.get("value") or "").strip()
         settings.set_secret(name, value)
-        if name == "GROQ_API_KEY":
+        if name == "ANTHROPIC_API_KEY":
+            code, message = (await hub.llm.claude.check()) if value else (
+                None, "Claude key removed. Buddy thinks with Groq again.")
+        elif name == "GROQ_API_KEY":
             await hub.llm.discover(force=True)
-            code = getattr(hub.llm, "discover_status", None)
+            code = getattr(hub.llm.groq, "discover_status", None)
             message = ("Groq key removed." if not value else
                        "Groq key works." if code == 200 else
                        "Groq didn't accept that key. Copy it again (it starts with gsk_)." if code in (401, 403) else

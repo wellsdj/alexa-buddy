@@ -110,3 +110,48 @@ class FakeAPIs:
 
     def client(self) -> httpx.AsyncClient:
         return httpx.AsyncClient(transport=httpx.MockTransport(self.handler))
+
+
+def claude_message(*blocks: dict, stop_reason: str | None = None) -> dict:
+    """A Messages API reply. Blocks are content dicts, e.g. claude_text("hi") or claude_tool(...)."""
+    blocks = blocks or (claude_text("Okay."),)
+    if stop_reason is None:
+        stop_reason = "tool_use" if any(b["type"] == "tool_use" for b in blocks) else "end_turn"
+    return {"id": "msg_test", "type": "message", "role": "assistant", "model": "claude-haiku-5-5",
+            "content": [{"type": "thinking", "thinking": "", "signature": "sig-1"}, *blocks],
+            "stop_reason": stop_reason, "stop_sequence": None, "usage": {"input_tokens": 100, "output_tokens": 20}}
+
+
+def claude_text(text: str) -> dict:
+    return {"type": "text", "text": text}
+
+
+def claude_tool(name: str, args: dict, id: str = "toolu_1") -> dict:
+    return {"type": "tool_use", "id": id, "name": name, "input": args}
+
+
+def claude_error(status: int, kind: str, message: str):
+    return lambda body: (status, {"type": "error", "error": {"type": kind, "message": message}})
+
+
+class FakeClaude:
+    """Fake Anthropic API for the official SDK (which talks through httpx2, not httpx)."""
+
+    def __init__(self):
+        self.script: list = []  # reply dicts, or callables(body) -> (status, json)
+        self.requests: list[dict] = []
+
+    def handler(self, request):
+        import httpx2
+        body = json.loads(request.content)
+        self.requests.append(body)
+        step = self.script.pop(0) if self.script else claude_message()
+        if callable(step):
+            status, payload = step(body)
+            return httpx2.Response(status, json=payload)
+        return httpx2.Response(200, json=step)
+
+    def client(self):
+        import anthropic
+        import httpx2
+        return anthropic.DefaultAsyncHttpxClient(transport=httpx2.MockTransport(self.handler))

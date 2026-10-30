@@ -7,7 +7,7 @@ or delete any of it just by talking.
 How it works:
 - **The desk unit** (ESP32-S3, mic and speaker) is the ears and mouth. It also keeps a copy of your alarms, so they still ring if the laptop is off.
 - **The server** runs on your laptop and does the thinking:
-  - Groq's free models for hearing and thinking
+  - Groq's free models for hearing and thinking (or Claude for thinking, if you add a key)
   - ElevenLabs for the voice, with a free offline voice as backup
   - Open-Meteo for the weather, which is free and needs no key
 - **The web page** lets you test everything with your laptop's mic before the hardware arrives. It also manages alarms, memory and settings.
@@ -149,6 +149,22 @@ The on-board light shows what Buddy is doing:
 **Memory.** Buddy learns from your chats in the background and tidies its memory once a day. It merges duplicates and drops trivia, but never anything you asked it to remember. You can see and edit everything on the web page's **Memory** tab.
 
 **Alarms without the laptop.** The desk unit stores the next 8 days of alarms, so they still ring if the laptop is asleep or off.
+
+## Optional: Claude as Buddy's brain
+
+Buddy can think with **Claude Haiku** instead of Groq's free models. Groq still does the
+hearing (speech to text), and ElevenLabs still does the voice.
+
+1. Make an API key at [console.anthropic.com](https://console.anthropic.com) and add some credit
+   under **Billing**. This is pay as you go and separate from a Claude Pro or Max subscription.
+2. Double-click **Update Buddy**, then **Start Buddy**.
+3. On the web page: **Settings → API keys → Claude**, paste the key and click **Save**. It tells
+   you straight away whether the key works and whether the account has credit.
+
+From then on Claude answers, and the Activity tab shows **Brain: Claude**. If the key stops
+working or the credit runs out, Buddy goes back to Groq by itself. Under **Settings → Brains**
+you can switch back to Groq only, or pick a bigger Claude model (Sonnet or Opus) for everyday
+questions or big tasks.
 
 ## Free plans and what happens at the limits
 

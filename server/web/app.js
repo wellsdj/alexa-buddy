@@ -412,6 +412,7 @@ function showKeys(keys) {
   };
   k("GROQ_API_KEY", "key-groq");
   k("ELEVENLABS_API_KEY", "key-eleven");
+  k("ANTHROPIC_API_KEY", "key-claude");
   let skipEleven = false;
   try { skipEleven = localStorage.getItem("buddy-skip-eleven") === "1"; } catch {}
   $("setup-groq").hidden = keys.GROQ_API_KEY.set;
@@ -458,6 +459,7 @@ async function loadStatus() {
   $("eleven-quota").textContent = q && q.limit ? `ElevenLabs credits used this month: ${q.used.toLocaleString()} of ${q.limit.toLocaleString()} (${q.tier})` : "";
   const cool = Object.entries(st.llm.cooldowns || {}).map(([m, s]) => `${m.replace("openai/", "")} ${s}s`).join(", ");
   const stats = [
+    ["Brain", st.llm.brain === "claude" ? "Claude" : "Groq"],
     ["Everyday model", (st.llm.fast || [])[0] || "none available"],
     ["Big-task model", (st.llm.smart || [])[0] || "none available"],
     ["Rate-limited", cool || "none"],
