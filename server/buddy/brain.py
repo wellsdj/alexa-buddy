@@ -1,10 +1,11 @@
-"""The conversation brain: fast-path intents first, then Groq with tools.
+"""The conversation brain: fast-path intents first, then Claude Haiku with tools.
 
-Token budget matters on the free tier (about 8k tokens/minute per model), so:
-- common commands never touch the model (intents.py),
-- action tools (alarms, memory, volume) are confirmed with our own sentence instead of a
-  second model call,
-- only questions go through a follow-up model call, with a short history.
+- Common commands never touch the model (intents.py), so they're instant and free.
+- Action tools (alarms, memory, volume) are confirmed with our own sentence instead of a
+  second model call; only questions go through a follow-up call, with a short history.
+- Haiku answers quickly by default. For long writing, planning or tricky reasoning it can
+  think much harder, but only after asking ("Want me to have a proper think?"), unless
+  the user already asked it to think hard.
 """
 from __future__ import annotations
 
@@ -20,17 +21,22 @@ from zoneinfo import ZoneInfo
 from . import intents
 from .alarms import DAY_NAMES, AlarmStore, human_duration, ordinal, spoken_time
 from .config import Settings
-from .llm import GroqLLM, LLMError
+from .llm import LLMError
 from .memory import MemoryManager, MemoryStore
 from .timeparse import find_clock, find_date, find_repeat, resolve_clock, words_to_digits
 from .weather import WMO, Weather
 
 log = logging.getLogger("buddy.brain")
 
-SMART_HINTS = re.compile(
-    r"\b(explain|why does|why do|how does|how do i|plan|write|draft|compare|pros and cons|"
-    r"step by step|in detail|detailed|story|poem|essay|summari[sz]e|help me (decide|think|work out)|"
-    r"what should i|advice|recipe)\b", re.I)
+# Asking for it counts as permission: no need to ask "shall I think hard?" first.
+THINK_REQUEST = re.compile(
+    r"\b(think (harder|hard|properly|carefully|it through|about (it|this|that) properly)|"
+    r"have a (proper |good |real )?think|take your time|use your big brain|really think)\b", re.I)
+YES = re.compile(r"^\W*(yes|yeah|yep|yup|sure|please|go on|go for it|do it|ok(ay)?|alright|why not|"
+                 r"go ahead|definitely|of course|think (about it|hard)|yes please)\b", re.I)
+NO = re.compile(r"^\W*(no|nah|nope|don'?t|quick(ly)?|just (tell|give|answer)|short (answer|version)|"
+                r"not now|no thanks?)\b", re.I)
+THINK_OFFER = "That's a meaty one. It'll take a few more seconds, but want me to have a proper think about it?"
 
 
 @dataclass
@@ -119,7 +125,8 @@ TOOLS = [
         "name": "web_search", "description": "Search the web for current or factual info (news, sport, prices, opening times, events).",
         "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}},
     {"type": "function", "function": {
-        "name": "think_harder", "description": "Hand this request to a bigger model: long writing, planning, tricky reasoning.",
+        "name": "think_harder", "description": "Think much harder about this request (long writing, planning, tricky "
+                                                "reasoning). Buddy asks the user's permission first.",
         "parameters": {"type": "object", "properties": {"reason": {"type": "string"}}}}},
 ]
 ACTION_TOOLS = {"set_alarm", "set_timer", "set_reminder", "cancel_alarm", "remember", "forget",
@@ -138,7 +145,7 @@ Rules:
 - "Remember ..." means use remember. To forget or change a memory, use forget or update_memory with its id.
 - Before clear_memory, ask the user to confirm; only call it with confirmed=true after they say yes.
 - For news, sport, prices, opening hours or anything recent, use web_search.
-- For long writing, planning or tricky reasoning, call think_harder.
+- For long writing, planning or tricky reasoning, call think_harder (it asks the user first).
 - If you ask the user something, end with a question mark.
 - Never say you did something unless a tool confirmed it."""
 
@@ -160,7 +167,7 @@ def speakable(text: str, limit: int = 900) -> str:
 
 
 class Brain:
-    def __init__(self, settings: Settings, llm: GroqLLM, alarms: AlarmStore, memory: MemoryStore,
+    def __init__(self, settings: Settings, llm, alarms: AlarmStore, memory: MemoryStore,
                  memory_mgr: MemoryManager, weather: Weather):
         self.settings = settings
         self.llm = llm
@@ -185,7 +192,7 @@ class Brain:
             reply = await self._intent(intent, conv, ctx) if intent else None
         if reply is None:
             reply = await self._llm(text, conv, ctx)
-        reply.text = speakable(reply.text, 1400 if reply.model and "120b" in reply.model else 900)
+        reply.text = speakable(reply.text, 1400 if reply.intent == "llm_deep" else 900)
         conv.add("user", text)
         if reply.text:
             conv.add("assistant", reply.text)
@@ -199,6 +206,8 @@ class Brain:
             reply.follow_up = True
         elif mode == "off":
             reply.follow_up = False
+        if reply.intent == "off":
+            reply.follow_up = False  # it's going to sleep: don't keep listening
         reply.ms = int((time.monotonic() - t0) * 1000)
         return reply
 
@@ -207,6 +216,12 @@ class Brain:
         p, conv.pending = conv.pending, None
         if not p:
             return None
+        if p.get("intent") == "think":
+            if YES.search(text):
+                return await self._llm(p["text"], conv, ctx, tier="smart")
+            if NO.search(text):
+                return await self._llm(p["text"], conv, ctx, allow_think=False)
+            return None  # something else entirely: treat it as a new request
         if p.get("intent") == "alarm_time":
             digits = words_to_digits(text)
             clock = find_clock(digits)
@@ -223,6 +238,8 @@ class Brain:
         a = it.args
         now = self.now()
         n = it.name
+        if n == "off":
+            return Reply("Okay, I'm off. Say hey buddy when you need me.", [{"type": "sleep"}], intent=n)
         if n == "stop":
             acts = [{"type": "stop"}]
             if ctx.get("ringing"):
@@ -326,35 +343,48 @@ class Brain:
             memories=self.memory.render_for_prompt(1800),
         )
 
-    async def _llm(self, text: str, conv: Conversation, ctx: dict) -> Reply:
-        tier = "smart" if (len(text) > 180 or SMART_HINTS.search(text)) else "fast"
+    async def _llm(self, text: str, conv: Conversation, ctx: dict, tier: str = "fast",
+                   allow_think: bool = True) -> Reply:
+        if THINK_REQUEST.search(text):
+            tier = "smart"
         messages = [{"role": "system", "content": await self.system_prompt()}]
         messages += conv.history[-6:]
         messages.append({"role": "user", "content": text})
+        tools = TOOLS if allow_think else [t for t in TOOLS if t["function"]["name"] != "think_harder"]
         try:
-            return await self._tool_loop(messages, conv, ctx, tier)
+            return await self._tool_loop(messages, conv, ctx, tier, tools, text)
         except LLMError as e:
             log.warning("LLM failed: %s", e)
-            if "No Groq API key" in str(e):
-                return Reply("I need a Groq API key before I can answer that. You can add one in the web page settings.",
+            err = str(e)
+            if "No Claude API key" in err:
+                return Reply("I need a Claude API key before I can answer that. You can add one in the web page "
+                             "settings.", intent="llm_error")
+            if "no credit" in err:
+                return Reply("My Claude account has run out of credit. You can top it up at console dot "
+                             "anthropic dot com. Alarms, timers and the weather still work.", intent="llm_error")
+            if "didn't accept" in err:
+                return Reply("Claude didn't accept my key. Have a look at the key in the web page settings.",
                              intent="llm_error")
             return Reply("Sorry, my brain's having a moment. The quick things like alarms, timers and weather "
                          "still work though.", intent="llm_error")
 
-    async def _tool_loop(self, messages: list[dict], conv: Conversation, ctx: dict, tier: str) -> Reply:
+    async def _tool_loop(self, messages: list[dict], conv: Conversation, ctx: dict, tier: str,
+                         tools: list[dict], request: str) -> Reply:
         actions: list[dict] = []
         confirmations: list[str] = []
         model = ""
+        intent = "llm_deep" if tier == "smart" else "llm"
         for _ in range(4):
-            res = await self.llm.chat(messages, tier=tier, tools=TOOLS, max_tokens=900 if tier == "smart" else 500)
+            res = await self.llm.chat(messages, tier=tier, tools=tools, max_tokens=900 if tier == "smart" else 500)
             model = res.model
             if not res.tool_calls:
                 text = res.content or " ".join(confirmations)
-                return Reply(text, actions, model=model, intent="llm")
+                return Reply(text, actions, model=model, intent=intent)
             names = [c["function"]["name"] for c in res.tool_calls]
             if "think_harder" in names and tier != "smart":
-                tier = "smart"
-                continue
+                # Thinking hard is slower and costs more, so ask first. A yes reruns it (see _pending).
+                conv.pending = {"intent": "think", "text": request}
+                return Reply(THINK_OFFER, actions, model=model, intent="think_offer", follow_up=True)
             messages.append(res.assistant_message)
             info_needed = False
             for call in res.tool_calls:

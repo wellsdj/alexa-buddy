@@ -1,9 +1,9 @@
 import asyncio
 import json
 
-from buddy.llm import GroqLLM
+from buddy.claude import ClaudeLLM
 from buddy.memory import MemoryManager, MemoryStore
-from tests.fakes import chat_response
+from tests.fakes import claude_message, claude_text
 
 
 def test_add_dedupes_and_pins(tmp_path):
@@ -33,37 +33,37 @@ def test_clear_makes_backup(tmp_path):
     assert list((tmp_path / "memory_backups").glob("*before-clear.json"))
 
 
-def test_learning_applies_ops(settings, apis):
+def test_learning_applies_ops(settings, claude):
     store = MemoryStore(settings.data_dir / "memory.json")
     store.add("Likes jazz", "preferences")
-    apis.chat_script.append(chat_response("openai/gpt-oss-120b", json.dumps({
+    claude.script.append(claude_message(claude_text(json.dumps({
         "add": [{"text": "Has a dog called Biscuit", "category": "people"}],
         "update": [{"id": 1, "text": "Loves jazz, especially Miles Davis"}],
-        "delete": []})))
-    mgr = MemoryManager(store, GroqLLM(settings, apis.client()), settings)
+        "delete": []}))))
+    mgr = MemoryManager(store, ClaudeLLM(settings, claude.client()), settings)
     r = asyncio.run(mgr.learn_from([{"role": "user", "content": "My dog Biscuit loves it when I play Miles Davis"},
                                     {"role": "assistant", "content": "Lovely."}]))
     assert r["added"] == ["Has a dog called Biscuit."]
     assert store.get(1).text == "Loves jazz, especially Miles Davis."
-    assert apis.chat_requests[0]["model"] == "openai/gpt-oss-120b"  # learning uses the smart model
-    assert apis.chat_requests[0]["response_format"] == {"type": "json_object"}
+    assert claude.requests[0]["output_config"]["effort"] == "high"  # learning thinks harder
+    assert claude.requests[0]["system"].endswith("Reply with a single JSON object and nothing else.")
 
 
-def test_compaction_keeps_pinned_and_rejects_destruction(settings, apis):
+def test_compaction_keeps_pinned_and_rejects_destruction(settings, claude):
     store = MemoryStore(settings.data_dir / "memory.json")
     for i in range(10):
         store.add(f"Trivial detail {i} about something unrelated {i * 31}")
     pinned, _ = store.add("Allergic to peanuts", "about_you", pinned=True)
-    mgr = MemoryManager(store, GroqLLM(settings, apis.client()), settings)
+    mgr = MemoryManager(store, ClaudeLLM(settings, claude.client()), settings)
     # 1) A result that drops almost everything is refused.
-    apis.chat_script.append(chat_response("openai/gpt-oss-120b", json.dumps(
-        {"memories": [{"text": "Trivial detail 0", "category": "other", "from": [1]}], "dropped": list(range(2, 11))})))
+    claude.script.append(claude_message(claude_text(json.dumps(
+        {"memories": [{"text": "Trivial detail 0", "category": "other", "from": [1]}], "dropped": list(range(2, 11))}))))
     r = asyncio.run(mgr.compact())
     assert r["error"] == "too destructive" and len(store) == 11
     # 2) A sensible merge is applied, and the pinned memory survives even though the model forgot it.
-    apis.chat_script.append(chat_response("openai/gpt-oss-120b", json.dumps(
+    claude.script.append(claude_message(claude_text(json.dumps(
         {"memories": [{"text": f"Merged detail {i}", "category": "other", "from": [i * 2 + 1, i * 2 + 2]}
-                      for i in range(5)], "dropped": []})))
+                      for i in range(5)], "dropped": []}))))
     r = asyncio.run(mgr.compact())
     assert r == {"before": 11, "after": 6}
     texts = [m.text for m in store.list()]

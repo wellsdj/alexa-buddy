@@ -27,6 +27,11 @@ PHRASES = {
     "neg_buddy_holly": "I was listening to Buddy Holly yesterday.",
     "neg_weather": "The weather in Richmond is quite nice this afternoon.",
     "neg_hey_body": "Hey, nobody told me about the meeting.",
+    "room_let_me_ask": "Let me ask you a question.",
+    "room_dinner": "What do you fancy for dinner tonight?",
+    "mid_my_buddy": "So yesterday I told my buddy about the match and he just laughed at me.",
+    "mid_hey_buddy": "So I walked in and went hey buddy to my mate, and he just ignored me completely.",
+    "pos_hey_buddy_off": "Hey buddy, off.",
 }
 
 

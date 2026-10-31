@@ -68,9 +68,9 @@ class Advertiser:
                 pass
 
 
-def create_app(settings: Settings | None = None, http=None, claude_http=None) -> FastAPI:
+def create_app(settings: Settings | None = None, http=None, claude_http=None, stt=None) -> FastAPI:
     settings = settings or Settings(DATA_DIR)
-    hub = Hub(settings, http, claude_http)
+    hub = Hub(settings, http, claude_http, stt)
     adv = Advertiser()
 
     @asynccontextmanager
@@ -167,13 +167,14 @@ def create_app(settings: Settings | None = None, http=None, claude_http=None) ->
         value = (body.get("value") or "").strip()
         settings.set_secret(name, value)
         if name == "ANTHROPIC_API_KEY":
-            code, message = (await hub.llm.claude.check()) if value else (
-                None, "Claude key removed. Buddy thinks with Groq again.")
+            code, message = (await hub.llm.check()) if value else (
+                None, "Claude key removed. Buddy can't answer questions until you add one.")
         elif name == "GROQ_API_KEY":
-            await hub.llm.discover(force=True)
-            code = getattr(hub.llm.groq, "discover_status", None)
-            message = ("Groq key removed." if not value else
-                       "Groq key works." if code == 200 else
+            await hub.listener.discover(force=True)
+            code = getattr(hub.listener, "discover_status", None)
+            message = ("Groq key removed. Buddy uses simple phrase rules to tell when you're talking to it."
+                       if not value else
+                       "Groq key works. Buddy uses it to tell when you're talking to it." if code == 200 else
                        "Groq didn't accept that key. Copy it again (it starts with gsk_)." if code in (401, 403) else
                        "Key saved, but Groq couldn't be reached to check it. Is the internet on?")
         else:
@@ -198,8 +199,8 @@ def create_app(settings: Settings | None = None, http=None, claude_http=None) ->
 
     @app.get("/api/models")
     async def models():
-        await hub.llm.discover(force=True)
-        return hub.llm.status()
+        await hub.listener.discover(force=True)
+        return hub.llm_status()
 
     # ---------- alarms ----------
     @app.get("/api/alarms")

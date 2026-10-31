@@ -6,10 +6,12 @@ or delete any of it just by talking.
 
 How it works:
 - **The desk unit** (ESP32-S3, mic and speaker) is the ears and mouth. It also keeps a copy of your alarms, so they still ring if the laptop is off.
-- **The server** runs on your laptop and does the thinking:
-  - Groq's free models for hearing and thinking (or Claude for thinking, if you add a key)
-  - ElevenLabs for the voice, with a free offline voice as backup
-  - Open-Meteo for the weather, which is free and needs no key
+- **The server** runs on your laptop:
+  - **Hearing:** speech-to-text runs on the laptop itself (free, private: your voice never leaves the house)
+  - **Thinking:** Claude Haiku, with web search; it asks before thinking hard about big questions
+  - **Knowing you're talking to it:** Groq's free models (optional key), or simple phrase rules
+  - **Voice:** ElevenLabs, with a free offline voice as backup
+  - **Weather:** Open-Meteo, which is free and needs no key
 - **The web page** lets you test everything with your laptop's mic before the hardware arrives. It also manages alarms, memory and settings.
 
 ```
@@ -28,7 +30,11 @@ alexa-buddy/
    curl -fsSL https://raw.githubusercontent.com/wellsdj/alexa-buddy/main/install.sh | bash
    ```
    Wait a few minutes. You don't need to install anything else, not even Python.
-3. Your browser opens on Buddy's page. Follow the orange **"Two quick steps"** box to paste in your Groq key (free) and your ElevenLabs key (free).
+3. Your browser opens on Buddy's page. Follow the orange **"A few quick steps"** box to paste in your keys:
+   - **Claude** (needed: Buddy's brain). Make it at [console.anthropic.com](https://console.anthropic.com) and add some
+     credit under **Billing**. It's pay as you go, separate from a Claude Pro or Max subscription, and costs pennies.
+   - **ElevenLabs** (free, for the nice voice).
+   - **Groq** (free, optional: helps Buddy tell when you're talking to it).
 4. If macOS asks *"Allow Python to accept incoming network connections?"*, click **Allow**.
 
 You now have three buttons on your Desktop:
@@ -126,7 +132,18 @@ If it can't find the laptop:
 | "Clear your memory" | Asks you to confirm first; a backup is kept |
 | "Turn it up" / "Volume 4" | Volume from 0 to 10 |
 | "Say that again" | Repeats the last answer |
-| Anything else | Answered by the AI. It searches the web when it needs to. Say "think harder" for tough questions |
+| Anything else | Answered by Claude Haiku. It searches the web when it needs to |
+| A big question (plans, long writing, tricky problems) | Buddy asks "Want me to have a proper think about it?" Say yes for a deeper answer, or no for a quick one. Saying "think it through properly" skips the question |
+| "Off" | Buddy stops listening to the room until you say "hey buddy" again |
+
+**How Buddy knows you're talking to it**
+- **"Hey buddy"** after a moment of quiet always wakes it.
+- **While it's on**, it hears everything near the desk unit and answers what's meant for it, so
+  "let me ask you a question" works without saying "hey buddy". Chat between people, the TV, or
+  "my buddy Dave" mid-sentence are ignored. The speech is turned into text on your laptop; with a
+  Groq key, that text is sent to Groq to judge whether it was meant for Buddy.
+- **"Off"** stops that. Then only "hey buddy" wakes it, which also turns it back on.
+- To only ever use "hey buddy", untick **Settings → Listening → listen to everything nearby**.
 
 **Button, lights and sounds**
 
@@ -150,25 +167,10 @@ The on-board light shows what Buddy is doing:
 
 **Alarms without the laptop.** The desk unit stores the next 8 days of alarms, so they still ring if the laptop is asleep or off.
 
-## Optional: Claude as Buddy's brain
-
-Buddy can think with **Claude Haiku** instead of Groq's free models. Groq still does the
-hearing (speech to text), and ElevenLabs still does the voice.
-
-1. Make an API key at [console.anthropic.com](https://console.anthropic.com) and add some credit
-   under **Billing**. This is pay as you go and separate from a Claude Pro or Max subscription.
-2. Double-click **Update Buddy**, then **Start Buddy**.
-3. On the web page: **Settings → API keys → Claude**, paste the key and click **Save**. It tells
-   you straight away whether the key works and whether the account has credit.
-
-From then on Claude answers, and the Activity tab shows **Brain: Claude**. If the key stops
-working or the credit runs out, Buddy goes back to Groq by itself. Under **Settings → Brains**
-you can switch back to Groq only, or pick a bigger Claude model (Sonnet or Opus) for everyday
-questions or big tasks.
-
 ## Free plans and what happens at the limits
 
-- **Groq (free):** there are per-minute and per-day limits. Everyday chat uses a small fast model, and only big jobs use the larger one (tough questions, "think harder", and tidying memory). If a model is busy or at its limit, Buddy switches to another one automatically.
+- **Claude (pay as you go):** Haiku costs about 10p per million words read and 50p per million written, so everyday use is pennies a month. A web search is about 1p. If the key stops working or the credit runs out, Buddy says so; alarms, timers and weather keep working.
+- **Groq (free, optional):** only judges whether room talk is for Buddy. It has per-minute and per-day limits; if it's busy, Buddy uses simple phrase rules until it's free again.
 - **ElevenLabs (free):** about 10,000 credits a month. When they run out, Buddy switches to the free offline British voice by itself. The web page shows how much you have left.
 - **Weather (Open-Meteo):** free, with no key needed.
 
@@ -177,7 +179,8 @@ questions or big tasks.
 - **It doesn't hear "hey buddy".** Check the *Mic level* meter on the web page (set *Meters show* to the desk unit). If it barely moves:
   - Go to **Settings → Listening → Desk unit mic boost** and turn it up.
   - You can also lower **Wake sensitivity**.
-- **It wakes up by itself.** Raise **Wake sensitivity**.
+- **It wakes up by itself.** Raise **Wake sensitivity**. The **Activity** tab shows every sentence Buddy heard while listening to the room, and whether it thought it was meant for it.
+- **It says its ears aren't downloaded.** Double-click **Update Buddy**: the first time it downloads about 240 MB.
 - **The sound is quiet or distorted.** Say "volume 8". If it's distorted even at low volume, check the amp's GND and 5V clips.
 - **See what the board is doing.** In the Arduino IDE, open **Tools → Serial Monitor** at 115200 baud.
 
@@ -197,3 +200,4 @@ Model credits (all open licences):
 - feature models from openWakeWord (Apache-2.0)
 - Silero VAD (MIT)
 - Piper voices (see their model cards)
+- Moonshine speech-to-text by Useful Sensors (MIT), run with sherpa-onnx (Apache-2.0)

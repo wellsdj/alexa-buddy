@@ -1,6 +1,6 @@
-"""Claude (Anthropic) as Buddy's brain, with the same chat() / web_search() interface as GroqLLM.
+"""Claude (Anthropic) as Buddy's brain: chat with tools, web search, and a key check.
 
-brain.py and memory.py build OpenAI-style messages (Groq's format). They're converted to the
+brain.py and memory.py build OpenAI-style messages (the common format). They're converted to the
 Messages API here and replies are converted back, so nothing else needs to know which brain
 answered. Claude's own reply blocks (thinking and tool calls) travel with the assistant message
 under "_claude", so they go back unchanged in the next round of a tool loop, as the API requires.
@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 
 try:
     import anthropic
-except ImportError:  # an old install that hasn't been updated yet: Buddy carries on with Groq
+except ImportError:  # an old install that hasn't been updated yet
     anthropic = None
 
 from .config import Settings
@@ -159,6 +159,8 @@ class ClaudeLLM:
                    builtin_tools: list[dict] | None = None) -> ClaudeResult:
         # temperature and builtin_tools are Groq knobs; Claude only takes default sampling.
         api = self._api()
+        if time.time() < self.blocked_until and self.last_error:
+            raise LLMError(self.last_error)  # key rejected or out of credit: don't hammer the API
         model = self.model(tier)
         system, msgs = convert_messages(messages)
         if json_mode:
@@ -192,7 +194,7 @@ class ClaudeLLM:
                             blocks=[b.model_dump(exclude_none=True) for b in r.content])
 
     async def web_search(self, query: str) -> str:
-        """Claude's own web search. Returns '' if it can't, so the caller can try Groq's."""
+        """Claude's own web search, answered in a few spoken sentences."""
         model = self.model("smart")
         # The dynamic-filtering version runs on Sonnet and Opus; the basic one runs everywhere.
         kind = "web_search_20260209" if ("sonnet" in model or "opus" in model) else "web_search_20250305"
@@ -208,15 +210,17 @@ class ClaudeLLM:
                     break
                 # A long search can pause; sending its own reply back lets it carry on.
                 msgs = msgs[:1] + [{"role": "assistant", "content": [b.model_dump(exclude_none=True) for b in r.content]}]
-            return "".join(b.text for b in r.content if b.type == "text").strip()
+            found = "".join(b.text for b in r.content if b.type == "text").strip()
+            return found or "The search didn't find anything useful."
         except (anthropic.APIError, LLMError) as e:
             log.info("Claude web search failed: %s", e)
-            return ""
+            return "Web search isn't available right now."
 
     async def check(self) -> tuple[int | None, str]:
         """Try the key with a tiny request. Returns (status code or None, message for the user)."""
         if anthropic is None:
             return None, "Key saved, but " + NOT_INSTALLED + "."
+        self.blocked_until = 0.0  # a new key gets a fresh chance
         model = self.model("fast")
         try:
             await self._api().messages.create(
@@ -228,7 +232,7 @@ class ClaudeLLM:
                 return e.status_code, "Anthropic didn't accept that key. Copy it again (it starts with sk-ant-)."
             if "no credit" in str(err):
                 return 402, ("The key works, but your Anthropic account has no credit yet. Add some at "
-                             "console.anthropic.com under Billing. Buddy uses Groq until then.")
+                             "console.anthropic.com under Billing, then click Save again.")
             if e.status_code == 404:
                 return 404, f"The key works, but the model {model} wasn't found. Check the Claude model in Settings."
             return e.status_code, f"Key saved, but Claude said: {_error_text(e)[:140]}"
@@ -236,7 +240,7 @@ class ClaudeLLM:
             return None, "Key saved, but Anthropic couldn't be reached to check it. Is the internet on?"
         self.blocked_until = 0.0
         self.last_error = ""
-        return 200, "Claude key works. Buddy now thinks with Claude."
+        return 200, "Claude key works. Buddy is ready to think."
 
     def status(self) -> dict:
         return {

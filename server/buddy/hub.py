@@ -4,6 +4,14 @@ Every WebSocket client is a Session. The ESP32 is a session with role "device"; 
 open web page is a session with role "ui" and can act as a virtual device (streaming its
 microphone), so the web page exercises exactly the same code path as the hardware.
 
+How Buddy decides you're talking to it:
+- "Hey buddy" after a moment of quiet always wakes it (chime, light, listening).
+- "Buddy" in the middle of someone's sentence doesn't wake it straight away: the sentence is
+  transcribed silently and the context check (listening.py) decides.
+- While Buddy is on, the desk unit's audio is transcribed sentence by sentence on this
+  computer and the context check decides whether each one is for Buddy ("let me ask you a
+  question" works without the wake word). Saying "off" stops that until "hey buddy" again.
+
 Wire protocol (both directions over one WebSocket):
   client -> server  binary: 16 kHz mono int16 PCM from the microphone
                     text:   JSON control messages ({"type": ...})
@@ -30,10 +38,10 @@ from .audio import rms_dbfs
 from .brain import Brain, Conversation, Reply
 from .claude import ClaudeLLM
 from .config import Settings
+from .listening import ContextJudge
 from .llm import GroqLLM
 from .memory import MemoryManager, MemoryStore
-from .router import LLMRouter
-from .stt import GroqSTT, STTError
+from .stt import LocalSTT, STTError
 from .tts import ElevenLabsTTS, TTSRouter, TTSUnavailable
 from .vad import CHUNK as VAD_CHUNK
 from .vad import Endpointer, StreamingVad
@@ -63,7 +71,10 @@ class Session:
         self.vad_history: collections.deque = collections.deque(maxlen=int(3.0 * SR / VAD_CHUNK))
         self.capture: list[np.ndarray] = []
         self.endpointer: Endpointer | None = None
-        self.verify = False
+        self.silent: str | None = None  # listening without telling anyone: "wake" | "context" | "room"
+        self.mentioned = False  # the wake word fired somewhere inside the sentence being captured
+        self.captured = 0  # samples heard since this capture started (not counting the pre-roll)
+        self.quiet_until = 0.0  # don't take Buddy's own voice for someone talking
         self.ptt = False
         self.follow = False
         self.inbox: asyncio.Queue = asyncio.Queue(maxsize=400)
@@ -128,7 +139,7 @@ class Session:
                 # arrives at once, the pre-roll is cut relative to the moment of the wake word.
                 for start in range(0, len(pcm), 1920):
                     piece = pcm[start:start + 1920]
-                    run_wake = self.hands_free and (self.state != "listening" or self.verify)
+                    run_wake = self.hands_free and (self.state != "listening" or bool(self.silent))
                     wake, probs = await asyncio.to_thread(
                         self._analyze, piece, run_wake, float(s["wake_threshold"]), float(s["wake_verify_threshold"]))
                     await self._on_audio(piece, wake, probs)
@@ -165,12 +176,13 @@ class Session:
 
         if self.state == "listening":
             self.capture.append(pcm)
-            if self.verify and wake and wake.confident:
-                self.verify = False
-                await self.earcon("wake")
-                await self.set_state("listening", force=True)  # it was listening silently until now
-                await self.hub.broadcast_ui({"type": "event", "kind": "wake", "session": self.id,
-                                             "score": round(wake.score, 3), "confident": True})
+            self.captured += len(pcm)
+            if self.silent and wake and wake.confident:
+                # Measured in audio, not clock time: audio can arrive in bursts over Wi-Fi.
+                if self.silent == "room" and self.captured / SR > 1.8:
+                    self.mentioned = True  # "buddy" mid-sentence: let the context check decide
+                else:
+                    await self._promote(wake)  # "hey buddy" started the sentence: wake for real
             if self.ptt:
                 return
             result = self.endpointer.update(probs)
@@ -178,31 +190,66 @@ class Session:
                 await self._finish_capture(result)
             return
 
-        if wake is None or not self.hands_free:
+        if not self.hands_free:
             return
-        if wake.confident and (self.state in ("idle", "speaking") or self.ringing):
-            await self.hub.broadcast_ui({"type": "event", "kind": "wake", "session": self.id,
-                                         "score": round(wake.score, 3), "confident": True})
-            if self.state == "speaking":
-                await self.stop_speaking()
-            if self.ringing:
-                await self.send_json({"type": "alarm_stop"})
-            await self.start_listening(preroll_s=0.8, verify=False, earcon=True)
-        elif self.state == "idle" and self._verify_allowed(now):
-            self.verify_times.append(now)
-            await self.start_listening(preroll_s=2.2, verify=True, earcon=False)
+        if wake is not None:
+            quiet = self._quiet_before()
+            # While Buddy talks its own voice fills the room, so a clear "hey buddy" interrupts anyway.
+            if wake.confident and (quiet or self.state == "speaking") and (
+                    self.state in ("idle", "speaking") or self.ringing):
+                await self.hub.broadcast_ui({"type": "event", "kind": "wake", "session": self.id,
+                                             "score": round(wake.score, 3), "confident": True})
+                if self.state == "speaking":
+                    await self.stop_speaking()
+                if self.ringing:
+                    await self.send_json({"type": "alarm_stop"})
+                self.hub.set_awake(True)
+                await self.start_listening(preroll_s=0.8, earcon=True)
+                return
+            if self.state == "idle" and self._verify_allowed(now):
+                self.verify_times.append(now)
+                if quiet:  # a soft or unclear "hey buddy" out of nowhere: check what was said
+                    await self.start_listening(preroll_s=2.2, silent="wake", earcon=False)
+                else:  # said mid-sentence: hear the whole sentence, then judge it in context
+                    await self.start_listening(preroll_s=3.0, silent="context", earcon=False)
+                    self.mentioned = True
+                return
+        if (self.role == "device" and self.state == "idle" and not self.ringing and now >= self.quiet_until
+                and self.hub.room_listening_active() and probs and max(probs) > 0.6):
+            await self.start_listening(preroll_s=0.6, silent="room", earcon=False, no_speech_s=3.0)
+
+    async def _promote(self, wake) -> None:
+        """A silent capture turned out to start with "hey buddy": chime and light up as usual."""
+        self.silent = None
+        self.hub.set_awake(True)
+        await self.earcon("wake")
+        await self.set_state("listening", force=True)
+        await self.hub.broadcast_ui({"type": "event", "kind": "wake", "session": self.id,
+                                     "score": round(wake.score, 3), "confident": True})
+
+    def _quiet_before(self) -> bool:
+        """Was it quiet just before the wake word? It fires ~0.9 s into "hey buddy", so look at the
+        1.3 s before that. Mostly silence there means "hey buddy" came out of nowhere."""
+        probs = list(self.vad_history)
+        phrase, before = int(0.9 * SR / VAD_CHUNK), int(1.3 * SR / VAD_CHUNK)
+        window = probs[-(phrase + before):-phrase] if len(probs) > phrase else []
+        if not window:
+            return True
+        return sum(p > 0.5 for p in window) / len(window) < 0.3
 
     def _verify_allowed(self, now: float) -> bool:
         recent = [t for t in self.verify_times if now - t < 3600]
         if recent and now - recent[-1] < 4:
             return False
-        return len(recent) < 90  # keep "maybe" checks well inside Groq's free STT quota
+        return len(recent) < 300
 
     # ---------- listening ----------
-    async def start_listening(self, preroll_s: float = 0.0, verify: bool = False, earcon: bool = True,
+    async def start_listening(self, preroll_s: float = 0.0, silent: str | None = None, earcon: bool = True,
                               ptt: bool = False, no_speech_s: float = 6.0) -> None:
         s = self.hub.settings
-        self.verify = verify
+        self.silent = silent
+        self.mentioned = False
+        self.captured = 0
         self.ptt = ptt
         pre = self._take_preroll(preroll_s) if preroll_s else np.zeros(0, dtype=np.int16)
         self.capture = [pre] if len(pre) else []
@@ -211,14 +258,14 @@ class Session:
         if preroll_s:
             n = int(preroll_s * SR / VAD_CHUNK)
             self.endpointer.update(list(self.vad_history)[-n:])
-        if self.detector and not verify:
+        if self.detector and not silent:
             self.detector.reset()
         if earcon:
             await self.earcon("wake")
-        if not verify:
+        if not silent:
             await self.set_state("listening")
         else:
-            self.state = "listening"  # silent: no LED, no chime until the transcript confirms it
+            self.state = "listening"  # silent: no LED, no chime unless it turns out to be for Buddy
 
     async def end_ptt(self) -> None:
         if self.state == "listening" and self.ptt:
@@ -226,21 +273,22 @@ class Session:
 
     async def _finish_capture(self, reason: str) -> None:
         audio = np.concatenate(self.capture) if self.capture else np.zeros(0, dtype=np.int16)
-        verify, self.verify, self.ptt = self.verify, False, False
+        silent, self.silent, self.ptt = self.silent, None, False
+        mentioned, self.mentioned = self.mentioned, False
         speech_s = self.endpointer.speech_seconds if self.endpointer else 0.0
         self.capture = []
         if reason == "timeout" or len(audio) < SR * 0.3:
             self.state = "idle"
             await self.send_json({"type": "state", "state": "idle"})
-            if not verify:
+            if not silent:
                 await self.earcon("nospeech")
             return
-        if verify:
-            self.state = "thinking"  # still silent until the transcript proves it was "hey buddy"
+        if silent:
+            self.state = "thinking"  # still silent until the transcript shows it's for Buddy
         else:
             await self.set_state("thinking")
             await self.earcon("end")
-        asyncio.create_task(self.hub.process_audio(self, audio, speech_s, verify))
+        asyncio.create_task(self.hub.process_audio(self, audio, speech_s, silent, mentioned))
 
     # ---------- speaking ----------
     async def speak(self, text: str, then_listen: bool = False) -> None:
@@ -287,6 +335,8 @@ class Session:
             await asyncio.wait_for(self.playback_done.wait(), timeout=remaining + 4.0)
         except asyncio.TimeoutError:
             pass
+        self.quiet_until = time.time() + 1.0  # the last of Buddy's voice is still in the room
+        self.hub.last_spoke_at = time.time()
         if then_listen and self.hands_free:
             await self.start_listening(earcon=True, no_speech_s=5.0)
         else:
@@ -339,11 +389,15 @@ class Session:
 
 
 class Hub:
-    def __init__(self, settings: Settings, http=None, claude_http=None):
+    def __init__(self, settings: Settings, http=None, claude_http=None, stt=None):
         self.settings = settings
         d = settings.data_dir
-        self.llm = LLMRouter(settings, GroqLLM(settings, http), ClaudeLLM(settings, claude_http))
-        self.stt = GroqSTT(settings, http)
+        self.llm = ClaudeLLM(settings, claude_http)  # Buddy's brain
+        self.listener = GroqLLM(settings, http)  # optional: judges whether room talk is for Buddy
+        self.judge = ContextJudge(settings, self.listener)
+        self.stt = stt or LocalSTT(settings)
+        self.awake = True  # "off" sets this to False until the next "hey buddy"
+        self.last_spoke_at = 0.0
         self.tts = TTSRouter(settings, ElevenLabsTTS(settings, http))
         self.weather = Weather(settings, http)
         self.alarms = AlarmStore(d / "alarms.json", settings["timezone"])
@@ -380,7 +434,9 @@ class Hub:
     async def start(self) -> None:
         self.tasks.append(asyncio.create_task(self._scheduler()))
         self.tasks.append(asyncio.create_task(self._housekeeping()))
-        asyncio.create_task(self.llm.discover())
+        asyncio.create_task(self.listener.discover())
+        if hasattr(self.stt, "warm"):
+            asyncio.create_task(asyncio.to_thread(self.stt.warm))
         asyncio.create_task(self.tts.eleven.refresh_quota())
         asyncio.create_task(self.weather.fetch())
 
@@ -429,40 +485,67 @@ class Hub:
             await self.broadcast_ui({"type": "event", "kind": "alarms"})
 
     # ---------- the pipeline ----------
-    def _stt_prompt(self) -> str:
-        name = self.settings["user_name"]
-        return f"Hey Buddy. {('I am ' + name + '. ') if name else ''}Set an alarm, what's the weather in Richmond?"
+    def room_listening_active(self) -> bool:
+        return self.awake and bool(self.settings["room_listening"]) and self.stt.available()
 
-    async def process_audio(self, s: Session, audio: np.ndarray, speech_s: float, verify: bool) -> None:
+    def set_awake(self, on: bool) -> None:
+        if on != self.awake:
+            self.awake = on
+            self.record("awake" if on else "asleep")
+            self._soon(self.broadcast_ui({"type": "event", "kind": "settings"}))
+
+    async def process_audio(self, s: Session, audio: np.ndarray, speech_s: float, silent: str | None = None,
+                            mentioned: bool = False) -> None:
         t0 = time.monotonic()
         try:
-            text = await self.stt.transcribe(audio, self._stt_prompt(), speech_s)
+            text = await self.stt.transcribe(audio, "", speech_s)
         except STTError as e:
             log.warning("STT failed: %s", e)
             self.record("error", where="stt", error=str(e))
-            if verify:
+            if silent:
                 await s.set_state("idle")
                 return
-            msg = ("I need a Groq API key to understand speech. Add it on the web page."
-                   if "No Groq API key" in str(e) else "Sorry, I couldn't hear that properly. Try again?")
-            await self.announce(s, msg)
+            await self.announce(s, str(e) if "Update Buddy" in str(e) else "Sorry, I couldn't hear that properly. Try again?")
             return
         stt_ms = int((time.monotonic() - t0) * 1000)
-        if verify:
+        if silent == "wake":
+            # A soft "hey buddy" out of nowhere. If the words are clearly something else, ignore it;
+            # if they're unclear, wake up anyway to be sure.
             words = text.lower().split()
-            if not intents.has_wake(text) and not any("budd" in w or w.strip(",.!?") == "buddy" for w in words[:4]):
+            starts_buddy = intents.has_wake(text) or any("budd" in w for w in words[:4])
+            if text.strip() and not starts_buddy:
                 self.record("wake_rejected", session=s.id, heard=text)
-                s.state = "idle"
-                await s.send_json({"type": "state", "state": "idle"})
+                await s.set_state("idle")
                 return
             self.record("wake_verified", session=s.id, heard=text)
-            await s.earcon("wake")
-            await s.set_state("thinking")
-            if not intents.strip_wake(text):
-                await s.start_listening(earcon=False, no_speech_s=6.0)
+            await self._accept(s, text, stt_ms)
+            return
+        if silent in ("context", "room"):
+            if not text.strip():
+                await s.set_state("idle")
                 return
+            self.judge.hear(text)
+            since = time.time() - self.last_spoke_at if self.last_spoke_at else 1e9
+            for_buddy = await self.judge.is_for_buddy(text, mentioned, self.conv.last_reply, since)
+            self.record("heard", session=s.id, heard=text, for_buddy=for_buddy, how=self.judge.last_how,
+                        stt_ms=stt_ms)
+            if not for_buddy:
+                await s.set_state("idle")
+                return
+            await self._accept(s, text, stt_ms)
+            return
         if not text.strip():
             await self.announce(s, "Sorry, I didn't catch that.")
+            return
+        await self.respond(s, text, stt_ms=stt_ms)
+
+    async def _accept(self, s: Session, text: str, stt_ms: int) -> None:
+        """Something heard silently turned out to be for Buddy: light up and answer it."""
+        self.set_awake(True)
+        await s.earcon("wake")
+        await s.set_state("thinking")
+        if not intents.strip_wake(text):  # just "hey buddy": now listen for the question
+            await s.start_listening(earcon=False, no_speech_s=6.0)
             return
         await self.respond(s, text, stt_ms=stt_ms)
 
@@ -497,7 +580,9 @@ class Hub:
 
     async def apply_action(self, s: Session, act: dict) -> None:
         kind = act.get("type")
-        if kind == "volume":
+        if kind == "sleep":
+            self.set_awake(False)
+        elif kind == "volume":
             await self.broadcast({"type": "volume", "level": act["level"]})
         elif kind == "stop":
             if s.state == "speaking":
@@ -617,11 +702,24 @@ class Hub:
                     if self.memory_mgr.needs_compaction():
                         r = await self.memory_mgr.compact()
                         self.record("memory_compaction", result=r)
-                    await self.llm.discover(force=True)
+                    await self.listener.discover(force=True)
             except asyncio.CancelledError:
                 raise
             except Exception:  # noqa: BLE001
                 log.exception("housekeeping failed")
+
+    def llm_status(self) -> dict:
+        """Claude (the brain) plus the Groq listener, in the shape the web page expects."""
+        g = self.listener.status()
+        claude = self.llm.status()
+        groq_err = g["last_error"] if self.settings.secret("GROQ_API_KEY") else ""
+        return {
+            "brain": "claude", "claude": claude,
+            "fast": [claude["fast"]], "smart": [claude["smart"]],
+            "listener": g["fast"][:1], "available": g["available"],
+            "cooldowns": g["cooldowns"], "limits": g["limits"],
+            "last_error": claude["last_error"] or (f"listener: {groq_err}" if groq_err else ""),
+        }
 
     def status(self) -> dict:
         return {
@@ -629,7 +727,9 @@ class Hub:
                           "since": s.connected_at, "info": s.info, "ringing": s.ringing}
                          for s in self.sessions.values()],
             "keys": self.settings.secret_status(),
-            "llm": self.llm.status(),
+            "llm": self.llm_status(),
+            "stt": self.stt.status(),
+            "listening": {"awake": self.awake, "room": self.room_listening_active()},
             "tts": self.tts.status(),
             "memory": {"count": len(self.memory), "status": self.memory_mgr.last_status},
             "weather_error": self.weather.last_error,

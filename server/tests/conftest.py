@@ -16,6 +16,7 @@ from tests.fakes import FakeAPIs, FakeClaude  # noqa: E402
 @pytest.fixture
 def settings(tmp_path):
     s = Settings(tmp_path)
+    s.set_secret("ANTHROPIC_API_KEY", "sk-ant-test")
     s.set_secret("GROQ_API_KEY", "gsk_test")
     s.set_secret("ELEVENLABS_API_KEY", "el_test")
     return s

@@ -1,5 +1,5 @@
-"""Fake Groq / ElevenLabs / Open-Meteo at the HTTP layer, so tests exercise the real
-request building and response parsing without network access or API keys."""
+"""Fake Claude / Groq / ElevenLabs / Open-Meteo at the HTTP layer, plus fake ears, so tests
+exercise the real request building and response parsing without network access or API keys."""
 from __future__ import annotations
 
 import json
@@ -110,6 +110,27 @@ class FakeAPIs:
 
     def client(self) -> httpx.AsyncClient:
         return httpx.AsyncClient(transport=httpx.MockTransport(self.handler))
+
+    def stt(self) -> "FakeSTT":
+        return FakeSTT(self)
+
+
+class FakeSTT:
+    """Stands in for the on-computer speech recogniser: hands out apis.transcripts in order."""
+
+    def __init__(self, apis: FakeAPIs):
+        self.apis = apis
+        self.last_ms = 1
+
+    def available(self) -> bool:
+        return True
+
+    async def transcribe(self, pcm, prompt: str = "", speech_seconds: float = 1.0) -> str:
+        self.apis.stt_requests.append({"has_wav": len(pcm) > 0, "seconds": len(pcm) / 16000})
+        return self.apis.transcripts.pop(0) if self.apis.transcripts else ""
+
+    def status(self) -> dict:
+        return {"engine": "fake", "installed": True, "last_ms": self.last_ms}
 
 
 def claude_message(*blocks: dict, stop_reason: str | None = None) -> dict:

@@ -23,17 +23,23 @@
 <main class="layout">
   <section class="talk card" aria-label="Talk to Buddy">
     <div class="setup-box" id="setup-box" hidden>
-      <h2>Two quick steps and Buddy is ready</h2>
-      <div class="setup-step" id="setup-groq">
-        <p><b>1. Groq key (free, needed).</b> Open <a href="https://console.groq.com/keys" target="_blank" rel="noopener">console.groq.com/keys</a>,
-          sign in (Google is fine), click <i>Create API Key</i>, give it any name, then copy the key and paste it here:</p>
-        <span class="row"><input type="password" id="setup-groq-key" placeholder="gsk_…" autocomplete="off"><button class="btn primary small" data-save-key="GROQ_API_KEY" data-input="setup-groq-key">Save</button></span>
+      <h2>A few quick steps and Buddy is ready</h2>
+      <div class="setup-step" id="setup-claude">
+        <p><b>1. Claude key (needed: Buddy's brain).</b> Open <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">console.anthropic.com</a>,
+          sign in, add some credit under <i>Billing</i>, click <i>Create Key</i>, then copy the key and paste it here:</p>
+        <span class="row"><input type="password" id="setup-claude-key" placeholder="sk-ant-…" autocomplete="off"><button class="btn primary small" data-save-key="ANTHROPIC_API_KEY" data-input="setup-claude-key">Save</button></span>
       </div>
       <div class="setup-step" id="setup-eleven">
         <p><b>2. ElevenLabs key (free plan, for the nice voice).</b> Open <a href="https://elevenlabs.io/app/developers/api-keys" target="_blank" rel="noopener">elevenlabs.io → API keys</a>,
           sign up, click <i>Create Key</i> (if it asks about access, turn on <i>Text to Speech</i>), then copy and paste it here:</p>
         <span class="row"><input type="password" id="setup-eleven-key" placeholder="sk_…" autocomplete="off"><button class="btn primary small" data-save-key="ELEVENLABS_API_KEY" data-input="setup-eleven-key">Save</button></span>
         <p class="note">Skip this and Buddy uses a free offline voice instead. <a href="#" id="setup-skip-eleven">Skip</a></p>
+      </div>
+      <div class="setup-step" id="setup-groq">
+        <p><b>3. Groq key (free, optional: helps Buddy tell when you're talking to it).</b> Open <a href="https://console.groq.com/keys" target="_blank" rel="noopener">console.groq.com/keys</a>,
+          sign in (Google is fine), click <i>Create API Key</i>, then copy the key and paste it here:</p>
+        <span class="row"><input type="password" id="setup-groq-key" placeholder="gsk_…" autocomplete="off"><button class="btn primary small" data-save-key="GROQ_API_KEY" data-input="setup-groq-key">Save</button></span>
+        <p class="note">Skip this and Buddy uses simple phrase rules instead. <a href="#" id="setup-skip-groq">Skip</a></p>
       </div>
     </div>
     <div class="stage">
@@ -126,13 +132,13 @@
     <div class="panel settings" id="panel-settings" role="tabpanel" hidden>
       <fieldset>
         <legend>API keys</legend>
-        <label>Groq <span class="keystate" id="key-groq"></span>
+        <label>Claude <span class="note">Buddy's brain (pay as you go)</span> <span class="keystate" id="key-claude"></span>
+          <span class="row"><input type="password" id="claude-key" placeholder="sk-ant-…" autocomplete="off"><button class="btn small" data-save-key="ANTHROPIC_API_KEY" data-input="claude-key">Save</button></span></label>
+        <label>Groq <span class="note">optional, free: tells when you're talking to Buddy</span> <span class="keystate" id="key-groq"></span>
           <span class="row"><input type="password" id="groq-key" placeholder="gsk_…" autocomplete="off"><button class="btn small" data-save-key="GROQ_API_KEY" data-input="groq-key">Save</button></span></label>
         <label>ElevenLabs <span class="keystate" id="key-eleven"></span>
           <span class="row"><input type="password" id="eleven-key" placeholder="sk_…" autocomplete="off"><button class="btn small" data-save-key="ELEVENLABS_API_KEY" data-input="eleven-key">Save</button></span></label>
         <p class="note" id="eleven-quota"></p>
-        <label>Claude <span class="note">optional, pay as you go: Buddy's brain when set</span> <span class="keystate" id="key-claude"></span>
-          <span class="row"><input type="password" id="claude-key" placeholder="sk-ant-…" autocomplete="off"><button class="btn small" data-save-key="ANTHROPIC_API_KEY" data-input="claude-key">Save</button></span></label>
       </fieldset>
       <fieldset>
         <legend>You</legend>
@@ -155,6 +161,7 @@
         <label>Pause that ends your sentence (ms) <input data-setting="end_of_speech_ms" type="number" min="400" max="2000" step="50"></label>
         <label>Keep listening after a reply
           <select data-setting="follow_up"><option value="off">Never</option><option value="questions">When Buddy asks a question</option><option value="always">Always</option></select></label>
+        <label class="check"><input data-setting="room_listening" type="checkbox"> While Buddy is on, listen to everything nearby and answer what's meant for it (say "off" to stop, "hey buddy" to start again)</label>
         <label class="check"><input data-setting="morning_briefing" type="checkbox"> Morning briefing after alarms</label>
       </fieldset>
       <fieldset>
@@ -167,14 +174,12 @@
       </fieldset>
       <fieldset>
         <legend>Brains</legend>
-        <label>Thinks with
-          <select data-setting="brain"><option value="auto">Claude when its key is set (Groq as backup)</option><option value="groq">Groq only (free)</option></select></label>
-        <label>Claude everyday model <input data-setting="claude_fast_model" type="text" list="claude-models"></label>
-        <label>Claude big-task model <input data-setting="claude_smart_model" type="text" list="claude-models"></label>
+        <label>Everyday model (Claude) <input data-setting="claude_fast_model" type="text" list="claude-models"></label>
+        <label>Deep-thinking model (Claude) <span class="note">used only after Buddy asks and you say yes</span>
+          <input data-setting="claude_smart_model" type="text" list="claude-models"></label>
         <datalist id="claude-models"><option value="claude-haiku-5-5"><option value="claude-sonnet-5-5"><option value="claude-opus-5-5"></datalist>
-        <label>Groq everyday model <input data-setting="fast_model" type="text" list="model-list"></label>
-        <label>Groq big-task model <input data-setting="smart_model" type="text" list="model-list"></label>
-        <label>Fallbacks (comma separated) <input data-setting="fallback_models" type="text"></label>
+        <label>Listener model (Groq) <span class="note">judges whether room talk is for Buddy</span> <input data-setting="fast_model" type="text" list="model-list"></label>
+        <label>Listener fallbacks (comma separated) <input data-setting="fallback_models" type="text"></label>
         <datalist id="model-list"></datalist>
         <p class="note" id="model-note"></p>
       </fieldset>

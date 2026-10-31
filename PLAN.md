@@ -34,7 +34,18 @@ Swap Groq's free models for Claude Haiku, using an Anthropic API key.
 - [x] Safety net: if the Claude key fails or runs out of credit, Buddy switches back to Groq by itself.
 - [x] README updated with the new steps.
 
-Meanwhile, on Groq: Everyday model = `openai/gpt-oss-120b`, Big-task model = Qwen 3.8 27B.
+### Phase 1b: Haiku only, ears on the Mac, smarter listening (done)
+
+- [x] Claude Haiku does all the answering, thinking and web research (no Groq answers or fallback).
+- [x] Deep thinking only after Buddy asks ("Want me to have a proper think about it?") and you say yes.
+- [x] Ears run on the Mac (Moonshine speech-to-text, free and private); no Groq for hearing.
+- [x] While on, Buddy hears everything nearby and answers what's meant for it ("let me ask you a
+  question" works without the wake word). Groq's free model (optional key) judges each sentence;
+  without it, simple phrase rules do.
+- [x] "Hey buddy" after quiet always wakes it; "buddy" mid-sentence is judged in context instead.
+- [x] "Off" stops room listening until the next "hey buddy".
+- Note for phase 2: the ears run on the laptop, so moving everything to Vercel needs a plan for
+  hearing (e.g. ears on a small home computer, or a speech-to-text service).
 
 ---
 

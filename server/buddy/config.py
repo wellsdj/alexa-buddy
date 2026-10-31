@@ -17,7 +17,8 @@ DATA_DIR = Path(os.environ.get("BUDDY_DATA_DIR", ROOT / "data"))
 
 load_dotenv(ROOT / ".env")
 
-# Groq retires models regularly (Llama left the free tier on 2026-08-16), so these are
+# Claude Haiku answers. Groq's free models (optional key) only judge whether something said
+# in the room was meant for Buddy. Groq retires models regularly, so its model names are
 # preferences, not hard requirements: llm.py checks what the account can actually see.
 DEFAULTS: dict[str, Any] = {
     "assistant_name": "Buddy",
@@ -30,8 +31,7 @@ DEFAULTS: dict[str, Any] = {
     "fast_model": "openai/gpt-oss-20b",
     "smart_model": "openai/gpt-oss-120b",
     "fallback_models": ["qwen/qwen3.6-27b", "openai/gpt-oss-120b", "openai/gpt-oss-20b"],
-    "stt_model": "whisper-large-v3-turbo",
-    "brain": "auto",  # auto: Claude when its key is set, Groq otherwise and as backup | groq: Groq only
+    "room_listening": True,  # while on, hear everything nearby and answer what's meant for Buddy
     "claude_fast_model": "claude-haiku-5-5",
     "claude_smart_model": "claude-haiku-5-5",
     "tts_engine": "auto",  # auto | elevenlabs | piper | browser

@@ -1,5 +1,5 @@
 """Instant, deterministic handling of the things people say most. No model call, so
-these work even when Groq is rate-limited or offline, and they never mis-hear a time."""
+these work even when the internet is down, and they never mis-hear a time."""
 from __future__ import annotations
 
 import re
@@ -52,6 +52,10 @@ def match(text: str, now: datetime, context: dict | None = None) -> Intent | Non
         return Intent("snooze", {"minutes": (d[0] // 60) if d else None})
     if context.get("ringing") and re.search(r"\b(stop|off|i'?m up|awake|dismiss|cancel)\b", t):
         return Intent("stop")
+    # "Off" puts Buddy to sleep: it stops listening to the room until someone says "hey buddy".
+    if re.fullmatch(r"((turn|switch|power) )?(yourself )?off( now)?|power down|go to sleep|sleep( now)?|"
+                    r"you can (go to sleep|turn off|switch off)", t):
+        return Intent("off")
 
     if re.fullmatch(r"(thanks|thank you|cheers|ta|thank you (buddy|so much|very much)|nice one|thanks (mate|buddy))", t):
         return Intent("thanks")

@@ -23,7 +23,7 @@ def recv_until(ws, predicate, limit=400):
 
 
 def test_typed_question_is_answered_with_audio(settings, apis):
-    app = create_app(settings, apis.client())
+    app = create_app(settings, apis.client(), None, apis.stt())
     with TestClient(app) as client, client.websocket_connect("/ws?role=ui&name=test") as ws:
         recv_until(ws, lambda m: m.get("type") == "hello_ack")
         ws.send_text(json.dumps({"type": "text", "text": "what's the weather"}))
@@ -41,7 +41,7 @@ def test_typed_question_is_answered_with_audio(settings, apis):
 
 def test_elevenlabs_out_of_credit_tells_browser_to_speak(settings, apis):
     apis.tts_status = 401
-    app = create_app(settings, apis.client())
+    app = create_app(settings, apis.client(), None, apis.stt())
     with TestClient(app) as client, client.websocket_connect("/ws?role=ui") as ws:
         recv_until(ws, lambda m: m.get("type") == "hello_ack")
         ws.send_text(json.dumps({"type": "text", "text": "what time is it"}))
@@ -51,7 +51,7 @@ def test_elevenlabs_out_of_credit_tells_browser_to_speak(settings, apis):
 
 
 def test_device_gets_schedule_and_reminder_is_spoken(settings, apis):
-    app = create_app(settings, apis.client())
+    app = create_app(settings, apis.client(), None, apis.stt())
     hub = app.state.hub
     with TestClient(app) as client, client.websocket_connect("/ws?role=device&name=esp32") as ws:
         ws.send_text(json.dumps({"type": "hello", "fw": "1.0"}))
@@ -70,7 +70,7 @@ def test_device_gets_schedule_and_reminder_is_spoken(settings, apis):
 
 
 def test_device_gets_mic_boost_and_volume_changes(settings, apis):
-    app = create_app(settings, apis.client())
+    app = create_app(settings, apis.client(), None, apis.stt())
     with TestClient(app) as client, client.websocket_connect("/ws?role=device&name=esp32") as ws:
         ws.send_text(json.dumps({"type": "hello", "fw": "1.0"}))
         ack, _ = recv_until(ws, lambda m: m.get("type") == "hello_ack")
@@ -83,7 +83,7 @@ def test_device_gets_mic_boost_and_volume_changes(settings, apis):
 
 def test_voice_stop_silences_ringing_alarm_and_briefs(settings, apis):
     settings.update({"morning_briefing": True})
-    app = create_app(settings, apis.client())
+    app = create_app(settings, apis.client(), None, apis.stt())
     hub = app.state.hub
     a = hub.alarms.add_alarm("07:00", "daily")
     with TestClient(app) as client, \
@@ -103,7 +103,7 @@ def test_voice_stop_silences_ringing_alarm_and_briefs(settings, apis):
 
 
 def test_rest_api_round_trip(settings, apis):
-    app = create_app(settings, apis.client())
+    app = create_app(settings, apis.client(), None, apis.stt())
     with TestClient(app) as client:
         assert client.get("/api/status").json()["keys"]["GROQ_API_KEY"]["set"]
         r = client.post("/api/memory", json={"text": "Likes flat whites", "category": "preferences"})
@@ -127,7 +127,7 @@ def test_rest_api_round_trip(settings, apis):
 
 def test_token_protects_api_and_socket(settings, apis):
     settings.update({"device_token": "s3cret"})
-    app = create_app(settings, apis.client())
+    app = create_app(settings, apis.client(), None, apis.stt())
     with TestClient(app) as client:
         assert client.get("/api/status").status_code == 401
         assert client.get("/api/status", headers={"X-Buddy-Token": "s3cret"}).status_code == 200
@@ -142,12 +142,12 @@ def test_token_protects_api_and_socket(settings, apis):
 
 
 def test_saving_a_key_says_whether_it_works(settings, apis):
-    app = create_app(settings, apis.client())
+    app = create_app(settings, apis.client(), None, apis.stt())
     with TestClient(app) as client:
         bad = client.post("/api/secrets", json={"name": "GROQ_API_KEY", "value": " gsk_wrong "}).json()
         assert not bad["check"]["ok"] and "didn't accept" in bad["check"]["message"]
         good = client.post("/api/secrets", json={"name": "GROQ_API_KEY", "value": "gsk_right"}).json()
-        assert good["check"] == {"ok": True, "message": "Groq key works."}
+        assert good["check"] == {"ok": True, "message": "Groq key works. Buddy uses it to tell when you're talking to it."}
         el = client.post("/api/secrets", json={"name": "ELEVENLABS_API_KEY", "value": "sk_x"}).json()
         assert el["check"]["message"] == "ElevenLabs key works. 8,800 characters left this month."
         assert settings.secret("GROQ_API_KEY") == "gsk_right"
