@@ -537,6 +537,9 @@ class Hub:
         if not text.strip():
             await self.announce(s, "Sorry, I didn't catch that.")
             return
+        if not intents.strip_wake(text):  # just "hey buddy" and a pause: wait for the question
+            await s.start_listening(earcon=False, no_speech_s=6.0)
+            return
         await self.respond(s, text, stt_ms=stt_ms)
 
     async def _accept(self, s: Session, text: str, stt_ms: int) -> None:

@@ -219,3 +219,18 @@ def test_mid_sentence_hey_buddy_with_room_listening_off_is_judged_in_context(set
         ws.send_text(json.dumps({"type": "text", "text": "what time is it"}))
         _, seen = recv_until(ws, lambda m: m.get("type") == "audio_start")
         assert wake_earcons(seen) == 0 and not claude.requests
+
+
+def test_hey_buddy_then_a_pause_waits_for_the_question(settings, apis, claude):
+    rng = np.random.default_rng(8)
+    apis.transcripts = ["Hey buddy.", "What time is it?"]
+    app = create_app(settings, apis.client(), claude.client(), apis.stt())
+    with TestClient(app) as client, device(client) as ws:
+        ws.send_text(json.dumps({"type": "hello"}))
+        recv_until(ws, lambda m: m.get("type") == "alarms")
+        stream(ws, said("pos_hey_buddy__en-us-lessac-medium__0.9.wav", rng, after=1.5))
+        recv_until(ws, lambda m: m.get("type") == "state" and m.get("state") == "thinking")
+        recv_until(ws, lambda m: m.get("type") == "state" and m.get("state") == "listening")  # listening again
+        stream(ws, said("room_dinner__en-us-lessac-medium__0.9.wav", rng, before=0.3))  # any speech will do
+        start, _ = recv_until(ws, lambda m: m.get("type") == "audio_start")
+        assert start["text"].startswith("It's ")
