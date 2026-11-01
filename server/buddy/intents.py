@@ -80,6 +80,9 @@ def match(text: str, now: datetime, context: dict | None = None) -> Intent | Non
     voice = _voice(t)
     if voice:
         return voice
+    music = _music(t)
+    if music:
+        return music
 
     if re.fullmatch(r"(thanks|thank you|cheers|ta|thank you (buddy|so much|very much)|nice one|thanks (mate|buddy))", t):
         return Intent("thanks")
@@ -123,6 +126,29 @@ def match(text: str, now: datetime, context: dict | None = None) -> Intent | Non
         hit = fn(t, now)
         if hit:
             return hit
+    return None
+
+
+def _music(t: str) -> Intent | None:
+    """Spotify: the quick ones. Anything fancier ("play something chill for studying") goes to Claude."""
+    t = re.sub(r"^(buddy|ok|okay|hey)[ ,]+", "", t)
+    if re.fullmatch(r"(pause|stop|turn off|kill|mute)( the)? (music|song|spotify|tune)s?|pause( it| that)?|music off", t):
+        return Intent("music", {"action": "pause"})
+    if re.fullmatch(r"(resume|unpause|carry on|continue|play|start|put on|turn on)( the)? (music|song|spotify|tunes)"
+                    r"( again)?|resume( it)?|unpause( it)?|music on", t):
+        return Intent("music", {"action": "resume"})
+    if re.fullmatch(r"(skip|next)( (this|it|that))?( (song|track|tune|one))?( please)?|next( song| track| tune)?"
+                    r"( please)?|skip (this|the) (song|track|tune)", t):
+        return Intent("music", {"action": "next"})
+    if re.fullmatch(r"(previous|last|go back( to the last)?)( song| track| tune)( please)?|play the (last|previous) "
+                    r"(song|track)( again)?|back a (song|track)", t):
+        return Intent("music", {"action": "previous"})
+    if re.fullmatch(r"what('?s| is) (this|that|playing)( song| track| tune)?|what song is (this|that|playing)|"
+                    r"who (sings|is singing|is) this( song)?|what('?s| is) this song called", t):
+        return Intent("music", {"action": "now_playing"})
+    m = re.fullmatch(r"(play|put on|stick on|chuck on)( me)? (.+?)( on spotify)?( please)?", t)
+    if m and m.group(3) not in ("it", "that", "music", "the music", "a game", "a song"):
+        return Intent("music", {"action": "play", "query": m.group(3)})
     return None
 
 

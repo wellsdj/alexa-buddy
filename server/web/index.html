@@ -9,7 +9,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
-<link rel="stylesheet" href="/static/style.css?v=chat2">
+<link rel="stylesheet" href="/static/style.css?v=chat3">
 </head>
 <body>
 <header class="top">
@@ -158,6 +158,21 @@
         <p class="note" id="eleven-quota"></p>
       </fieldset>
       <fieldset>
+        <legend>Spotify</legend>
+        <p class="note">Needs Spotify Premium. Music plays on your Spotify app or speaker; Buddy picks what and turns it down while it talks.</p>
+        <ol class="steps">
+          <li>Open <a href="https://developer.spotify.com/dashboard" target="_blank" rel="noopener">developer.spotify.com/dashboard</a>, log in and press <i>Create app</i>.</li>
+          <li>Name it <b>Buddy</b> (any description). Under <i>Redirect URIs</i> add exactly <code id="spotify-redirect">http://127.0.0.1:8000/spotify/callback</code>, tick <i>Web API</i>, then <i>Save</i>.</li>
+          <li>Copy the app's <b>Client ID</b> into the box below.</li>
+          <li>Press <b>Connect Spotify</b> and say yes on Spotify's page.</li>
+        </ol>
+        <label>Client ID <input data-setting="spotify_client_id" type="text" placeholder="32 letters and numbers" spellcheck="false"></label>
+        <span class="row"><a class="btn primary small" id="spotify-connect" href="/spotify/login" target="_blank" rel="noopener">Connect Spotify</a><button class="btn small" id="spotify-disconnect" type="button">Disconnect</button></span>
+        <p class="note" id="spotify-status">Not connected.</p>
+        <label>Play on <span class="note">optional: part of the device's name, e.g. “MacBook” or “iPhone”. Empty = whichever Spotify app is active.</span>
+          <input data-setting="spotify_device" type="text" placeholder="whichever is active"></label>
+      </fieldset>
+      <fieldset>
         <legend>You</legend>
         <label>Your name <input data-setting="user_name" type="text" placeholder="So Buddy can greet you"></label>
         <label>Assistant name <input data-setting="assistant_name" type="text"></label>
@@ -213,6 +228,6 @@
 </aside>
 
 <div class="toast" id="toast" role="status" hidden></div>
-<script src="/static/app.js?v=chat2"></script>
+<script src="/static/app.js?v=chat3"></script>
 </body>
 </html>

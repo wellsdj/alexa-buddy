@@ -36,6 +36,8 @@ DEFAULTS: dict[str, Any] = {
     "claude_smart_model": "claude-haiku-5-5",
     "tts_engine": "auto",  # auto | elevenlabs | piper | browser
     "elevenlabs_voice_id": "JBFqnCBsd6RMkjVDRZzb",  # the voice in use; "George": warm British male
+    "spotify_client_id": "",  # from your own app at developer.spotify.com (no secret needed)
+    "spotify_device": "",  # part of the name of the Spotify app/speaker to play on; empty = whichever is active
     "voices": [],  # up to 8 of {"name": ..., "id": ...}; "change your voice" cycles through them
     "elevenlabs_model": "eleven_flash_v2_5",
     "voice_speed": 1.0,

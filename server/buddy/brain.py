@@ -23,6 +23,7 @@ from .alarms import DAY_NAMES, AlarmStore, human_duration, ordinal, spoken_time
 from .config import Settings
 from .llm import LLMError
 from .memory import MemoryManager, MemoryStore
+from .spotify import SpotifyError as SpotifySetupError
 from .timeparse import find_clock, find_date, find_repeat, resolve_clock, words_to_digits
 from .weather import WMO, Weather
 
@@ -139,6 +140,14 @@ TOOLS = [
         "parameters": {"type": "object", "properties": {
             "level": {"type": "integer"}, "change": {"type": "integer"}}}}},
     {"type": "function", "function": {
+        "name": "music", "description": "Control Spotify. action: play (query = song, artist, album or playlist "
+                                        "to search for; for moods use a playlist-style query like 'upbeat bangers'), "
+                                        "pause, resume, next, previous, volume (volume_percent 0-100), now_playing.",
+        "parameters": {"type": "object", "properties": {
+            "action": {"type": "string", "enum": ["play", "pause", "resume", "next", "previous", "volume", "now_playing"]},
+            "query": {"type": "string"}, "kind": {"type": "string", "enum": ["track", "artist", "album", "playlist"]},
+            "volume_percent": {"type": "integer"}}, "required": ["action"]}}},
+    {"type": "function", "function": {
         "name": "switch_voice", "description": "Change the voice you speak with, among the user's saved voices. "
                                                "step 1 = next, -1 = previous; or a 1-based number; or a voice name.",
         "parameters": {"type": "object", "properties": {
@@ -152,7 +161,7 @@ TOOLS = [
         "parameters": {"type": "object", "properties": {"reason": {"type": "string"}}}}},
 ]
 ACTION_TOOLS = {"set_alarm", "set_timer", "set_reminder", "cancel_alarm", "remember", "forget",
-                "update_memory", "clear_memory", "set_volume", "switch_voice"}
+                "update_memory", "clear_memory", "set_volume", "switch_voice", "music"}
 
 SYSTEM = """You are {name}, {user_ref} voice assistant. You live in {user_ref} bedroom and you've known \
 {user_obj} for a while: you're a friend, not a gadget or a servant. Everything you say is spoken aloud.
@@ -171,7 +180,7 @@ Now: {now}. Home: {place}.
 What you remember about the user (numbers are ids for editing):
 {memories}
 Rules:
-- Use tools for alarms, timers, reminders, weather, memory, volume and changing your voice. Times are 24h HH:MM local.
+- Use tools for alarms, timers, reminders, weather, memory, volume, music (Spotify) and changing your voice. Times are 24h HH:MM local.
 - If a time or detail is missing or ambiguous, ask one short question.
 - "Remember ..." means use remember. To forget or change a memory, use forget or update_memory with its id.
 - Before clear_memory, ask the user to confirm; only call it with confirmed=true after they say yes.
@@ -300,6 +309,8 @@ class Brain:
             return Reply(text, intent="more_memory")
         if n == "voice":
             return self._switch_voice(a)
+        if n == "music":
+            return Reply(await self._music(a), intent=n)
         if n == "volume":
             level = a["level"] if "level" in a else self.volume + a.get("delta", 0)
             self.volume = max(0, min(10, level))
@@ -346,6 +357,30 @@ class Brain:
             al = self.alarms.add_alarm(a["time"], a.get("repeat") or None, a["text"], a.get("date"), kind="reminder")
             return Reply(self.alarms.confirm_text(al), intent=n)
         return None
+
+    async def _music(self, a: dict) -> str:
+        """Spotify. Returns what to say ("" for pause and skip: the music says it all)."""
+        sp = getattr(self, "spotify", None)
+        if sp is None or not sp.connected:
+            return "Spotify isn't connected yet. You can set it up in Controls, under Settings."
+        try:
+            act = a.get("action", "play")
+            if act == "play":
+                return await sp.play(a.get("query", ""), a.get("kind", ""))
+            if act == "resume":
+                await sp.play()
+                return ""
+            if act == "pause":
+                return await sp.pause()
+            if act in ("next", "previous"):
+                return await sp.skip(back=act == "previous")
+            if act == "volume":
+                return await sp.set_volume(a.get("volume_percent", 50))
+            if act == "now_playing":
+                return await sp.now_playing()
+            return "I'm not sure how to do that with Spotify."
+        except SpotifySetupError as e:
+            return str(e)
 
     def _switch_voice(self, a: dict) -> Reply:
         voices = [v for v in (self.settings["voices"] or []) if isinstance(v, dict) and (v.get("id") or "").strip()]
@@ -536,6 +571,9 @@ class Brain:
                 self.volume = max(0, min(10, level))
                 self.settings.update({"volume": self.volume})
                 return f"volume {self.volume}", f"Volume {self.volume}.", [{"type": "volume", "level": self.volume}]
+            if name == "music":
+                said = await self._music(a)
+                return said or "done", said, []
             if name == "switch_voice":
                 args = {k: a[k] for k in ("number", "name") if a.get(k)} or {"step": int(a.get("step") or 1)}
                 r = self._switch_voice(args)

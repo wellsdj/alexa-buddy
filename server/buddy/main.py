@@ -10,13 +10,14 @@ import time
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from .audio import pcm_to_wav
 from .config import DATA_DIR, SECRET_KEYS, WEB_DIR, Settings
 from .hub import Hub, Session
 from .memory import CATEGORIES
+from .spotify import SpotifyError
 from .tts import TTSUnavailable
 
 log = logging.getLogger("buddy")
@@ -66,6 +67,15 @@ class Advertiser:
                 self.zc.close()
             except Exception:  # noqa: BLE001
                 pass
+
+
+def _page(title: str, message: str) -> str:
+    import html
+    return ("<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>"
+            f"<title>{html.escape(title)}</title><body style='margin:0;min-height:100vh;display:grid;place-items:center;"
+            "background:#000;color:#fff;font:17px/1.5 -apple-system,system-ui,sans-serif'><div style='max-width:420px;"
+            f"padding:24px'><h1 style='font-size:28px;margin:0 0 10px'>{html.escape(title)}</h1>"
+            f"<p style='color:#bbb;margin:0'>{html.escape(message)}</p></div>")
 
 
 def create_app(settings: Settings | None = None, http=None, claude_http=None, stt=None) -> FastAPI:
@@ -136,6 +146,36 @@ def create_app(settings: Settings | None = None, http=None, claude_http=None, st
             hub.device_left(s)
             hub.record("disconnect", session=s.id, role=s.role)
             await hub.broadcast_ui({"type": "event", "kind": "sessions"})
+
+    # ---------- Spotify login ----------
+    def spotify_redirect() -> str:
+        return f"http://127.0.0.1:{PORT}/spotify/callback"  # add exactly this in your Spotify app
+
+    @app.get("/spotify/login")
+    async def spotify_login():
+        try:
+            return RedirectResponse(hub.spotify.login_url(spotify_redirect()))
+        except SpotifyError as e:
+            return HTMLResponse(_page("Spotify", str(e)), status_code=400)
+
+    @app.get("/spotify/callback")
+    async def spotify_callback(code: str = "", state: str = "", error: str = ""):
+        if error or not code:
+            return HTMLResponse(_page("Spotify", f"Spotify didn't connect ({error or 'no code'}). "
+                                                 "Close this tab and press Connect Spotify again."))
+        try:
+            await hub.spotify.finish_login(code, state, spotify_redirect())
+        except SpotifyError as e:
+            return HTMLResponse(_page("Spotify", str(e)), status_code=400)
+        await hub.broadcast_ui({"type": "event", "kind": "settings"})
+        who = hub.spotify.state.get("account")
+        return HTMLResponse(_page("Spotify connected", f"Connected{' as ' + who if who else ''}. "
+                                                       "You can close this tab and ask Buddy to play something."))
+
+    @app.post("/api/spotify/disconnect")
+    async def spotify_disconnect():
+        hub.spotify.disconnect()
+        return {"ok": True}
 
     # ---------- pages ----------
     @app.get("/")

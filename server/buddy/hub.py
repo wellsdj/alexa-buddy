@@ -43,6 +43,7 @@ from .config import Settings
 from .listening import ContextJudge
 from .llm import GroqLLM
 from .memory import MemoryManager, MemoryStore
+from .spotify import Spotify
 from .stt import LocalSTT, STTError
 from .tts import ElevenLabsTTS, TTSRouter, TTSUnavailable
 from .vad import CHUNK as VAD_CHUNK
@@ -111,6 +112,11 @@ class Session:
         if state == self.state and not force:
             return
         self.state = state
+        if self.role == "device":  # music down while Buddy listens and talks, back up after
+            if state in ("listening", "thinking", "speaking"):
+                self.hub._soon(self.hub.spotify.duck())
+            elif state == "idle":
+                self.hub._soon(self.hub.spotify.unduck())
         await self.send_json({"type": "state", "state": state})
         await self.hub.broadcast_ui({"type": "event", "kind": "state", "session": self.id,
                                      "role": self.role, "state": state}, exclude=self)
@@ -461,6 +467,8 @@ class Hub:
         self.memory = MemoryStore(d / "memory.json")
         self.memory_mgr = MemoryManager(self.memory, self.llm, settings)
         self.brain = Brain(settings, self.llm, self.alarms, self.memory, self.memory_mgr, self.weather)
+        self.spotify = Spotify(settings)
+        self.brain.spotify = self.spotify
         self.conv = Conversation()
         self.sessions: dict[str, Session] = {}
         self.fired_cache: dict[str, Alarm] = {}
@@ -819,4 +827,5 @@ class Hub:
             "tts": self.tts.status(),
             "memory": {"count": len(self.memory), "status": self.memory_mgr.last_status},
             "weather_error": self.weather.last_error,
+            "spotify": self.spotify.status(),
         }

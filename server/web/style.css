@@ -357,3 +357,9 @@ input[type="range"]::-moz-range-thumb { width: 20px; height: 20px; border-radius
 .voice-list li.active .v-use { background: var(--ink); color: #000; }
 .voice-list li.active .v-name, .voice-list li.active .v-id { box-shadow: inset 0 0 0 1.5px var(--ink); }
 .voice-list .v-id { font-family: var(--mono); font-size: 12.5px; }
+
+/* Spotify setup steps */
+.steps { margin: 0; padding-left: 20px; display: grid; gap: 6px; font-size: 13.5px; color: var(--muted); }
+.steps b, .steps code { color: var(--ink); }
+.steps code { font: 12px var(--mono); background: var(--s3); padding: 1px 6px; border-radius: 6px; word-break: break-all; }
+a.btn { text-decoration: none; }

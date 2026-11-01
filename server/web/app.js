@@ -222,7 +222,7 @@ function onEvent(m) {
     case "log": addLog(m.entry); if (m.entry.event === "turn") loadStatusSoon(); break;
     case "alarms": loadAlarms(); break;
     case "memory": loadMemory(); break;
-    case "settings": loadSettings(); break;
+    case "settings": loadSettings(); loadStatus(); break;
     case "sessions": case "device": case "state": loadStatusSoon(); break;
     case "ringing": loadStatusSoon(); break;
   }
@@ -498,6 +498,10 @@ async function loadStatus() {
     ...devices.map((d) => el("option", { value: d.id }, `desk unit (${d.name})`)));
   sel.value = [...sel.options].some((o) => o.value === cur) ? cur : "me";
   showKeys(st.keys);
+  const sp = st.spotify || {};
+  $("spotify-status").textContent = sp.connected ? `Connected${sp.account ? " as " + sp.account : ""}.`
+    : sp.client_id ? "Client ID saved. Press Connect Spotify." : "Not connected.";
+  $("spotify-disconnect").hidden = !sp.connected;
   const dl = $("model-list");
   dl.replaceChildren(...(st.llm.available || []).map((m) => el("option", { value: m })));
   $("model-note").textContent = st.llm.available
@@ -677,6 +681,11 @@ function init() {
       if (!results.length) list.replaceChildren(el("li", { class: "note" }, "No matches."));
     } catch (err) { list.replaceChildren(el("li", { class: "note" }, err.message)); }
   };
+  $("spotify-disconnect").onclick = async () => {
+    try { await api("/api/spotify/disconnect", { method: "POST" }); toast("Spotify disconnected"); loadStatus(); }
+    catch (err) { toast("Couldn't: " + err.message); }
+  };
+  $("spotify-redirect").textContent = `http://127.0.0.1:${location.port || 80}/spotify/callback`;
   $("voices-save").onclick = async () => {
     try { await saveVoices(); toast("Voices saved"); } catch (err) { toast("Couldn't save: " + err.message); }
   };
