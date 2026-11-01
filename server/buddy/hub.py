@@ -472,6 +472,7 @@ class Hub:
         self.spotify = Spotify(settings)
         self.brain.spotify = self.spotify
         self.music = MusicPlayer(settings, self)  # Spotify through Buddy's own speaker
+        self.spotify.music = self.music
         self.conv = Conversation()
         self.sessions: dict[str, Session] = {}
         self.fired_cache: dict[str, Alarm] = {}

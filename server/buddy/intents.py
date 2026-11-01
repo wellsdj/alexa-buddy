@@ -147,7 +147,7 @@ def _music(t: str) -> Intent | None:
                     r"who (sings|is singing|is) this( song)?|what('?s| is) this song called", t):
         return Intent("music", {"action": "now_playing"})
     m = re.fullmatch(r"(play|put on|stick on|chuck on)( me)? (.+?)( on spotify)?( please)?", t)
-    if m and m.group(3) not in ("it", "that", "music", "the music", "a game", "a song"):
+    if m and m.group(3) not in ("it", "that", "the music", "a game"):
         return Intent("music", {"action": "play", "query": m.group(3)})
     return None
 

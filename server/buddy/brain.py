@@ -40,11 +40,25 @@ NO = re.compile(r"^\W*(no|nah|nope|don'?t|quick(ly)?|just (tell|give|answer)|sho
                 r"not now|no thanks?)\b", re.I)
 # Said out loud while Buddy goes off to do something slow, so it never just goes quiet.
 WHILE_I = {
+    "retry": ["Hmm, couldn't find that straight off. Let me have a dig.", "Not finding it yet, give me a sec.",
+              "Hang on, let me try that another way."],
     "search": ["One sec, I'll look that up.", "Give me a sec, I'll check.", "Hang on, let me have a look.",
                "Two secs, I'll find out.", "Let me check that for you."],
     "think": ["Right, let me have a proper think.", "Okay, give me a moment to think this through.",
               "Ooh, good one. Let me have a think.", "Leave it with me a sec."],
 }
+
+
+# A quick try that came back empty-handed: worth a proper go (other wordings, the web, thinking).
+QUICK_FAIL = re.compile(r"\b(couldn'?t|can'?t|didn'?t|could not|cannot) (find|see|work out|get)\b|"
+                        r"hasn'?t started|not sure how|no results|nothing (came up|found)", re.I)
+# ...but not setup problems, which another try won't fix.
+SETUP_PROBLEM = re.compile(r"isn'?t (set up|connected)|premium|my speaker|update buddy|settings|api key|"
+                           r"spotify (open|isn'?t letting)|switched off", re.I)
+
+
+def quick_failed(text: str) -> bool:
+    return bool(text and QUICK_FAIL.search(text) and not SETUP_PROBLEM.search(text))
 
 
 async def say_while(ctx: dict, kind: str) -> None:
@@ -214,6 +228,8 @@ I'll check" out loud before searching, so don't start your answer with that.)
 private notes about earlier turns (for example a web search you did); use them, never read them out, and don't \
 apologise for or doubt earlier answers unless the user says they were wrong.
 - If something goes wrong, be relaxed and kind about it, say what you can do instead, and keep it short.
+- Be persistent but sensible: if a tool can't find something, try again a different way (another spelling, a \
+web search for the right name, thinking it through) before giving up. Simple things that worked need no extra effort.
 - Read what the user means, not just the words: wanting you to stop or go away entirely means go_quiet; wanting \
 you to drop one subject ("enough about that") means drop_topic, then carry on normally."""
 
@@ -258,6 +274,10 @@ class Brain:
         if reply is None:
             intent = intents.match(text, self.now(), {"ringing": ctx.get("ringing"), "pager": conv.pager is not None})
             reply = await self._intent(intent, conv, ctx) if intent else None
+            if reply is not None and quick_failed(reply.text):
+                # Don't give up after one quick try: tell them, then have a proper go.
+                await say_while(ctx, "retry")
+                reply = await self._llm(text, conv, ctx, note=reply.text)
         if reply is None:
             reply = await self._llm(text, conv, ctx)
         reply.text = speakable(reply.text, 1400 if reply.intent == "llm_deep" else 900)
@@ -494,12 +514,16 @@ class Brain:
         )
 
     async def _llm(self, text: str, conv: Conversation, ctx: dict, tier: str = "fast",
-                   allow_think: bool = True) -> Reply:
+                   allow_think: bool = True, note: str = "") -> Reply:
         if THINK_REQUEST.search(text):
             tier = "smart"
         if tier == "smart":
             await say_while(ctx, "think")
         system = await self.system_prompt()
+        if note:
+            system += (f"\nYour quick first try at this just failed: \"{note}\". Be persistent: try another wording "
+                       "or spelling, use web_search to pin down the right name if that would help, then use the tool "
+                       "again. If it still doesn't work after a couple of goes, say briefly and kindly what you tried.")
         if conv.dropped:
             system += ("\nTopics the user asked you to drop (don't bring them up again unless they do): "
                        + "; ".join(conv.dropped[-6:]) + ".")
@@ -534,7 +558,7 @@ class Brain:
         confirmations: list[str] = []
         model = ""
         intent = "llm_deep" if tier == "smart" else "llm"
-        for _ in range(4):
+        for _ in range(6):  # room to try again when a tool comes back empty
             res = await self.llm.chat(messages, tier=tier, tools=tools, max_tokens=900 if tier == "smart" else 500)
             model = res.model
             if not res.tool_calls:
@@ -641,6 +665,8 @@ class Brain:
                 return f"volume {self.volume}", f"Volume {self.volume}.", [{"type": "volume", "level": self.volume}]
             if name == "music":
                 said = await self._music(a)
+                if quick_failed(said):
+                    return said + " (Try a different search, or web_search to find the exact name.)", "", []
                 return said or "done", said, []
             if name == "switch_voice":
                 args = {k: a[k] for k in ("number", "name") if a.get(k)} or {"step": int(a.get("step") or 1)}

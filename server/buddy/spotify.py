@@ -27,7 +27,8 @@ log = logging.getLogger("buddy.spotify")
 AUTH = "https://accounts.spotify.com/authorize"
 TOKEN = "https://accounts.spotify.com/api/token"
 API = "https://api.spotify.com/v1"
-SCOPES = "user-read-playback-state user-modify-playback-state user-read-currently-playing user-read-private user-read-email"
+SCOPES = ("user-read-playback-state user-modify-playback-state user-read-currently-playing user-read-private "
+          "user-read-email user-top-read")
 
 
 class SpotifyError(Exception):
@@ -164,12 +165,15 @@ class Spotify:
         if not devs:
             return None
         want = (self.settings["spotify_device"] or "").strip().lower()
-        if not want and self.settings["music_on_buddy"]:
+        own = not want and self.settings["music_on_buddy"]
+        if own:
             want = (self.settings["assistant_name"] or "Buddy").strip().lower()  # Buddy's own speaker
         if want:
             for d in devs:
                 if want in (d.get("name") or "").lower():
                     return d
+            if own:
+                raise SpotifyError(self._speaker_missing())
         for d in devs:
             if d.get("is_active"):
                 return d
@@ -177,6 +181,18 @@ class Spotify:
             if (d.get("type") or "").lower() == "computer":
                 return d
         return devs[0]
+
+    def _speaker_missing(self) -> str:
+        """Buddy's own speaker isn't in Spotify's list: say why, rather than play on the TV."""
+        st = self.music.status() if getattr(self, "music", None) else {}
+        name = self.settings["assistant_name"] or "Buddy"
+        if not st.get("installed"):
+            return ("My speaker isn't set up yet: run Update Buddy on the Mac (it needs Homebrew from brew dot sh). "
+                    "Or turn off Play music through Buddy's speaker in the settings.")
+        if not st.get("running"):
+            return "My speaker's switched off at the moment. Restarting Buddy on the Mac should bring it back."
+        return (f"Spotify can't see my speaker yet. Just once: open Spotify, tap the speakers icon and pick {name}, "
+                "then ask me again.")
 
     async def _ready_device(self) -> dict:
         """Make sure a device is ready to play: choose it and hand playback to it if it isn't active."""
@@ -222,6 +238,8 @@ class Spotify:
         if not query:
             await self._with_device("PUT", "/me/player/play")
             return "" if await self._is_playing() else self._not_started()
+        if _norm(re.sub(r"^(me|us)\s+", "", query.lower())) in GENERIC:
+            return await self._play_my_music()
         kinds = [kind] if kind in ("track", "artist", "album", "playlist") else ["track", "artist", "playlist"]
         search = re.sub(r"^(some|a bit of|a little|a few|me)\s+", "", query.lower()) or query
         found = await self._api("GET", "/search", params={"q": search, "type": ",".join(kinds), "limit": 5})
@@ -255,6 +273,24 @@ class Spotify:
         if item_kind == "mix":
             return f"Here's some {item['name']}{where}."
         return f"Playing {item['name']}{where}."
+
+    async def _play_my_music(self) -> str:
+        """"Play some music": your own most-played songs, shuffled; else carry on what was last on."""
+        try:
+            top = await self._api("GET", "/me/top/tracks", params={"limit": 40, "time_range": "medium_term"})
+            uris = [t["uri"] for t in (top or {}).get("items", []) if t and t.get("uri")]
+        except SpotifyError:
+            uris = []  # older login without that permission: reconnect Spotify to get it
+        if uris:
+            import random
+            random.shuffle(uris)
+            await self._with_device("PUT", "/me/player/play", json={"uris": uris})
+            if await self._is_playing():
+                where = f" on {self.last_device}" if self.last_device else ""
+                return f"Here's a mix of your favourites{where}."
+            return self._not_started()
+        await self._with_device("PUT", "/me/player/play")
+        return "Carrying on where you left off." if await self._is_playing() else self._not_started()
 
     def _not_started(self) -> str:
         dev = self.last_device or "your Spotify app"
@@ -317,6 +353,10 @@ class Spotify:
                     await self._api("PUT", f"/me/player/volume?volume_percent={vol}")
             except SpotifyError as e:
                 log.info("couldn't turn the music back up: %s", e)
+
+
+GENERIC = {"music", "somemusic", "something", "anything", "asong", "somesongs", "songs", "tunes", "sometunes",
+           "somethinggood", "mymusic", "mysongs", "myfavourites", "myfavorites", "somethingnice", "atune"}
 
 
 def _norm(s: str) -> str:
