@@ -139,7 +139,15 @@ def create_app(settings: Settings | None = None, http=None, claude_http=None, st
     # ---------- pages ----------
     @app.get("/")
     async def index():
-        return FileResponse(WEB_DIR / "index.html")
+        return FileResponse(WEB_DIR / "index.html", headers={"Cache-Control": "no-cache"})
+
+    @app.middleware("http")
+    async def fresh_pages(request, call_next):
+        # Browsers check for a newer copy each time, so an update shows without a hard refresh.
+        response = await call_next(request)
+        if request.url.path.startswith("/static/"):
+            response.headers["Cache-Control"] = "no-cache"
+        return response
 
     app.mount("/static", StaticFiles(directory=WEB_DIR), name="static")
 

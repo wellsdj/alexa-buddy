@@ -39,18 +39,14 @@ buddy_env || { echo "Setup failed (see above). Check your internet and paste the
 
 # If Buddy is set to start by itself, restart it so the update takes effect.
 if [ -f "$HOME/Library/LaunchAgents/com.buddy.server.plist" ]; then
+  buddy_stop_old || true
   "$DEST/server/autostart.sh" on
   echo "Buddy has been updated and restarted in the background."
   exit 0
 fi
 
-PORT="${BUDDY_PORT:-8000}"
-if "$VENV_PY" -c "import socket,sys; sys.exit(0 if socket.socket().connect_ex(('127.0.0.1', $PORT)) == 0 else 1)"; then
-  echo
-  echo "Buddy is updated. It's still running the old version in another window:"
-  echo "close that Terminal window (or press Ctrl+C in it), then double-click \"Start Buddy\" on your Desktop."
-  exit 0
-fi
+# Otherwise stop any old Buddy that's still running, then start the new one.
+buddy_stop_old || exit 1
 
 echo
 echo "All set. Starting Buddy now..."

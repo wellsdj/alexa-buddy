@@ -6,16 +6,15 @@ source ./_env.sh
 buddy_env || { echo; echo "Setup failed (see above). Check your internet and run this again."; exit 1; }
 
 PORT="${BUDDY_PORT:-8000}"
-if "$VENV_PY" -c "import socket,sys; sys.exit(0 if socket.socket().connect_ex(('127.0.0.1', $PORT)) == 0 else 1)"; then
-  echo
-  echo "  Buddy is already running. Opening its web page: http://localhost:$PORT"
-  echo "  (To restart it, close the other Buddy window or press Ctrl+C in it, then start again.)"
-  if [ -z "$BUDDY_NO_BROWSER" ]; then
-    (open "http://localhost:$PORT" || xdg-open "http://localhost:$PORT") >/dev/null 2>&1
-  else
-    sleep 30  # started in the background: don't restart in a tight loop
+if [ -n "$BUDDY_NO_BROWSER" ]; then
+  # Started in the background at login: if a Buddy is already up, leave it be.
+  if "$VENV_PY" -c "import socket,sys; sys.exit(0 if socket.socket().connect_ex(('127.0.0.1', $PORT)) == 0 else 1)"; then
+    sleep 30  # don't restart in a tight loop
+    exit 0
   fi
-  exit 0
+else
+  # Double-clicked: always run the newest version, replacing an older one if it's running.
+  buddy_stop_old || exit 1
 fi
 if [ -z "$BUDDY_NO_BROWSER" ]; then
   ( sleep 4; (open "http://localhost:$PORT" || xdg-open "http://localhost:$PORT") >/dev/null 2>&1 ) &

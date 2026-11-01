@@ -68,3 +68,19 @@ buddy_env() {
   # The board button only needs esptool, not the ears or the backup voice.
   [ -n "$BUDDY_SKIP_MODELS" ] || "$VENV_PY" "$dir/setup_models.py" || return 1
 }
+
+# Stops any Buddy already running on this computer, so the newest version can start.
+# Returns 0 when the port is free afterwards.
+buddy_stop_old() {
+  local port="${BUDDY_PORT:-8000}" plist="$HOME/Library/LaunchAgents/com.buddy.server.plist"
+  _buddy_port_busy() { (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null; }
+  _buddy_port_busy || return 0
+  echo "Stopping the Buddy that's already running, so the newest version starts..."
+  [ -f "$plist" ] && launchctl unload "$plist" >/dev/null 2>&1
+  pkill -if 'python[0-9.]* -m buddy$' >/dev/null 2>&1
+  for _ in 1 2 3 4 5 6 7 8 9 10; do _buddy_port_busy || return 0; sleep 1; done
+  pkill -9 -if 'python[0-9.]* -m buddy$' >/dev/null 2>&1
+  sleep 1
+  _buddy_port_busy && { echo "Something else is using port $port. Restart the Mac, then try again."; return 1; }
+  return 0
+}
