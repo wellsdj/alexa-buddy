@@ -185,6 +185,13 @@ class MusicPlayer:
                     stream = None
                 self.playing = False
                 continue
+            if not self.logged_in and b"accounts.spotify.com" in data:
+                # librespot prints its login link on the same output as the sound: pick it out.
+                m = re.search(rb"https://accounts\.spotify\.com/\S+", data)
+                if m:
+                    self.login_url = m.group(0).decode(errors="ignore")
+                    log.info("music: Spotify login link for the speaker is ready")
+                continue
             self.bytes_in += len(data)
             devices = self.hub.devices()
             targets = [s for s in devices if s.state == "idle"]
