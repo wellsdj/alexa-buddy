@@ -4,7 +4,7 @@
 cd "$(dirname "$0")"
 FW="$(pwd)/prebuilt"
 source ../server/_env.sh
-buddy_env >/dev/null || { echo "Setup failed. Check your internet and try again."; exit 1; }
+BUDDY_SKIP_MODELS=1 buddy_env >/dev/null || { echo "Setup failed. Check your internet and try again."; exit 1; }
 
 find_port() {
   local p

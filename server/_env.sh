@@ -65,5 +65,6 @@ buddy_env() {
     fi
     echo "$want" > "$dir/.venv/.installed"
   fi
-  "$VENV_PY" "$dir/setup_models.py" || return 1
+  # The board button only needs esptool, not the ears or the backup voice.
+  [ -n "$BUDDY_SKIP_MODELS" ] || "$VENV_PY" "$dir/setup_models.py" || return 1
 }

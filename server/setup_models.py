@@ -4,6 +4,7 @@ The wake-word and speech-detection models already ship in models/.
 
     python setup_models.py
 """
+import fcntl
 import io
 import sys
 import tarfile
@@ -34,15 +35,32 @@ def install_ears() -> bool:
     if all((EARS / f).exists() for f in EARS_FILES):
         print("Ears already installed.")
         return True
-    print("Downloading Buddy's ears: speech-to-text that runs on this computer (about 240 MB, one-off)...")
     EARS.mkdir(parents=True, exist_ok=True)
+    # Only one download at a time, even if several Buddy buttons were double-clicked together.
+    lock = open(EARS / ".lock", "w")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        print("Another Buddy window is already downloading the ears; waiting for it to finish...")
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if all((EARS / f).exists() for f in EARS_FILES):
+            print("Ears installed.")
+            return True
+    print("Downloading Buddy's ears: speech-to-text that runs on this computer (about 240 MB, one-off)...")
     try:
         with tempfile.TemporaryFile() as tmp:
             with httpx.stream("GET", EARS_URL, follow_redirects=True, timeout=httpx.Timeout(60, read=300),
                               headers={"User-Agent": "buddy-setup"}) as r:
                 r.raise_for_status()
+                total = int(r.headers.get("content-length") or 0)
+                got = 0
                 for chunk in r.iter_bytes(1 << 20):
                     tmp.write(chunk)
+                    got += len(chunk)
+                    shown = f"{got * 100 // total}% " if total else ""
+                    print(f"\r  {shown}({got >> 20} of {total >> 20 or '~240'} MB)   ", end="", flush=True)
+                print()
+            print("  Unpacking...")
             tmp.seek(0)
             with tarfile.open(fileobj=tmp, mode="r:bz2") as tar:
                 for m in tar.getmembers():
