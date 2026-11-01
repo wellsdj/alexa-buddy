@@ -476,7 +476,10 @@ async function loadStatus() {
     ["Memory", `${st.memory.count} items`],
     ["Connected", st.sessions.map((s) => `${s.role}:${s.state}`).join(", ") || "–"],
   ];
-  if (devices[0]?.info?.rssi) stats.push(["Desk unit Wi-Fi", `${devices[0].info.rssi} dBm · heap ${Math.round((devices[0].info.heap || 0) / 1024)} KB`]);
+  stats.push(["Buddy's volume", `${S.settings.volume ?? "?"} of 10`]);
+  const dev = devices[0]?.info || {};
+  if (dev.rssi) stats.push(["Desk unit Wi-Fi", `${dev.rssi} dBm${dev.rssi < -75 ? " (weak)" : ""} · heap ${Math.round((dev.heap || 0) / 1024)} KB`]);
+  if (dev.dropped_spk != null) stats.push(["Desk unit audio gaps", `speaker ${dev.dropped_spk} · mic ${dev.dropped_mic ?? 0}`]);
   if (st.llm.last_error) stats.push(["Last model error", st.llm.last_error.slice(0, 140)]);
   if (st.weather_error) stats.push(["Weather error", st.weather_error.slice(0, 140)]);
   $("status-grid").replaceChildren(...stats.map(([k, v]) => el("div", { class: "stat" }, el("b", {}, k), el("span", {}, v))));

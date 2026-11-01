@@ -59,6 +59,8 @@ class Leveller:
 
     def __init__(self):
         self.gain = None  # decided from the first bit of real speech
+        self.peak_in = 0.0  # loudest sample in and out, for the Activity log
+        self.peak_out = 0.0
         self.carry = b""
         self.pending = np.zeros(0, dtype=np.float64)
 
@@ -99,4 +101,10 @@ class Leveller:
             return b""
         g = np.repeat(self._frame_gains(x), self.FRAME)
         y = np.clip(x * g, -self.CEILING, self.CEILING)
+        self.peak_in = max(self.peak_in, float(np.abs(x).max()))
+        self.peak_out = max(self.peak_out, float(np.abs(y).max()))
         return y.astype(np.int16).tobytes()
+
+
+def peak_db(peak: float) -> int:
+    return int(round(20 * np.log10(max(peak, 1.0) / 32768.0)))

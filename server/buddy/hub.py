@@ -34,7 +34,7 @@ from fastapi import WebSocket
 
 from . import intents
 from .alarms import Alarm, AlarmStore, DAY_NAMES, spoken_time
-from .audio import Leveller, rms_dbfs
+from .audio import Leveller, peak_db, rms_dbfs
 from .brain import Brain, Conversation, Reply
 from .claude import ClaudeLLM
 from .config import Settings
@@ -328,7 +328,10 @@ class Session:
             async for chunk in self.hub.tts.stream(text):
                 await send(leveller.process(chunk))
             await send(leveller.flush())
-            self.hub.record("voice", engine=self.hub.tts.last_engine)
+            self.hub.record("voice", engine=self.hub.tts.last_engine, to=self.role,
+                            volume=self.hub.brain.volume, peak_in_db=peak_db(leveller.peak_in),
+                            peak_out_db=peak_db(leveller.peak_out),
+                            dropped_on_board=self.info.get("dropped_spk"))
         except TTSUnavailable as e:
             log.warning("no TTS: %s", e)
             await self.send_json({"type": "say", "seq": seq, "text": text})
