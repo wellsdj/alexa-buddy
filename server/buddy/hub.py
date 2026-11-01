@@ -585,7 +585,7 @@ class Hub:
             if silent:
                 await s.set_state("idle")
                 return
-            await self.announce(s, str(e) if "Update Buddy" in str(e) else "Sorry, I couldn't hear that properly. Try again?")
+            await self.announce(s, str(e) if "Update Buddy" in str(e) else "Hmm, I didn't quite get that. Say it again for me?")
             return
         stt_ms = int((time.monotonic() - t0) * 1000)
         if silent == "wake":
@@ -619,7 +619,7 @@ class Hub:
                 self.record("nothing_heard", session=s.id, speech_s=round(speech_s, 2))
                 await s.set_state("idle")
                 return
-            await self.announce(s, "Sorry, I didn't catch that.")
+            await self.announce(s, "Sorry, I missed that one. Mind saying it again?")
             return
         if not intents.strip_wake(text):  # just "hey buddy" and a pause: wait for the question
             await s.start_listening(earcon=False, no_speech_s=6.0)
@@ -659,7 +659,7 @@ class Hub:
             reply: Reply = await work
         except Exception as e:  # noqa: BLE001
             log.exception("brain failed")
-            reply = Reply("Sorry, something went wrong on my side.", intent="error")
+            reply = Reply("Ah, sorry, something went a bit wrong on my end. Give it another go?", intent="error")
             self.record("error", where="brain", error=str(e))
         for act in reply.actions:
             await self.apply_action(s, act)

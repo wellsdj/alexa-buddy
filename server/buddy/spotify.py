@@ -145,9 +145,8 @@ class Spotify:
             if reason == "NO_ACTIVE_DEVICE" or r.status_code == 404:
                 raise SpotifyError("NO_DEVICE")
             if r.status_code == 403 and "PREMIUM" in (reason + msg).upper():
-                who = self.state.get("email") or self.state.get("account") or "this account"
-                raise SpotifyError(f"Spotify says {who} isn't Premium, so it won't let me control the music. "
-                                   "Check Controls, Settings, Spotify to see which account I'm logged in as.")
+                raise SpotifyError("Spotify isn't letting me in just yet. It says the account needs Premium, and "
+                                   "it can take a few hours to notice. Let's try again a bit later.")
             raise SpotifyError(f"Spotify error {r.status_code}: {msg or reason}")
         return r.json()
 
@@ -179,8 +178,8 @@ class Spotify:
                 raise
         device = await self._pick_device()
         if not device:
-            raise SpotifyError("I can't see any Spotify app that's switched on. Open Spotify on your phone "
-                               "or Mac, then ask me again.")
+            raise SpotifyError("I can't see Spotify open anywhere. Pop it open on your phone or Mac and ask me "
+                               "again, and I'll get it going.")
         sep = "&" if "?" in path else "?"
         return await self._api(method, f"{path}{sep}device_id={device}", **kw)
 

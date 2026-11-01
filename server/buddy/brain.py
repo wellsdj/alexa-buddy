@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import random
@@ -54,6 +55,11 @@ async def say_while(ctx: dict, kind: str) -> None:
         await say(random.choice(WHILE_I[kind]))
 
 
+# Ready-made replies that get reworded by Claude so they don't always sound the same. Not:
+# Claude's own answers (already natural), "say that again" (must repeat exactly), long lists, silence.
+REWORD = {"alarm", "alarm_in", "alarm_list", "alarm_cancel_all", "alarm_needs_time", "timer", "reminder", "snooze",
+          "volume", "weather", "thanks", "help", "time", "date", "voice", "music", "llm_tools", "llm_error"}
+
 THINK_OFFER = "That's a meaty one. It'll take a few more seconds, but want me to have a proper think about it?"
 
 
@@ -77,10 +83,11 @@ class Conversation:
     pending: dict | None = None
     clear_requested: float = 0.0
 
-    def add(self, role: str, content: str) -> None:
+    def add(self, role: str, content: str, note: str = "") -> None:
+        """note: private background for later turns (e.g. "I searched the web for ..."), never spoken."""
         if not content:
             return
-        self.history.append({"role": role, "content": content})
+        self.history.append({"role": role, "content": content, **({"note": note} if note else {})})
         self.history = self.history[-8:]
         self.transcript.append({"role": role, "content": content})
         self.last_active = time.time()
@@ -188,7 +195,11 @@ Rules:
 I'll check" out loud before searching, so don't start your answer with that.)
 - For long writing, planning or tricky reasoning, call think_harder (it asks the user first).
 - If you ask the user something, end with a question mark.
-- Never say you did something unless a tool confirmed it."""
+- Never say you did something unless a tool confirmed it.
+- Trust your earlier answers in this conversation: they were right. "(Background note ...)" lines are your own \
+private notes about earlier turns (for example a web search you did); use them, never read them out, and don't \
+apologise for or doubt earlier answers unless the user says they were wrong.
+- If something goes wrong, be relaxed and kind about it, say what you can do instead, and keep it short."""
 
 
 def speakable(text: str, limit: int = 900) -> str:
@@ -234,9 +245,14 @@ class Brain:
         if reply is None:
             reply = await self._llm(text, conv, ctx)
         reply.text = speakable(reply.text, 1400 if reply.intent == "llm_deep" else 900)
+        if reply.text and reply.intent in REWORD and self.settings["reword_replies"]:
+            reply.text = await self._reword(text, reply.text)
         conv.add("user", text)
         if reply.text:
-            conv.add("assistant", reply.text)
+            notes = [f'I searched the web for "{q}" and found: {r[:350]}' for q, r in ctx.get("searched", [])]
+            if reply.intent == "llm_deep":
+                notes.append("I thought this one through carefully.")
+            conv.add("assistant", reply.text, " ".join(notes))
             conv.last_reply = reply.text
         if reply.intent != "more_memory" and reply.intent != "memory_list":
             conv.pager = None
@@ -358,6 +374,29 @@ class Brain:
             return Reply(self.alarms.confirm_text(al), intent=n)
         return None
 
+    async def _reword(self, said_by_user: str, reply: str) -> str:
+        """Say a quick, ready-made reply in Buddy's own words so it doesn't sound the same every time.
+        Facts stay exact. Falls back to the original if Claude is slow or unavailable."""
+        user = self.settings["user_name"] or "the user"
+        system = (f"You are {self.settings['assistant_name']}, {user}'s voice assistant and friend, in their bedroom. "
+                  "Reword the reply below so it sounds natural, warm and a bit different each time, like a mate "
+                  "talking. Keep every fact exactly: times, dates, numbers, names, temperatures. Keep it about as "
+                  "short as the original (for quick tasks, a few words). If it's about a problem, be kind and "
+                  "relaxed about it and keep any instruction in it. British English. Spoken aloud: no lists, "
+                  "markdown or emojis. Reply with only the words to say.")
+        msgs = [{"role": "system", "content": system},
+                {"role": "user", "content": f'They said: "{said_by_user}"\nReply to reword: "{reply}"'}]
+        try:
+            res = await asyncio.wait_for(self.llm.chat(msgs, tier="fast", max_tokens=200), timeout=4.0)
+        except (asyncio.TimeoutError, LLMError, Exception) as e:  # noqa: BLE001 - never lose the reply
+            log.info("rewording skipped: %s", e)
+            return reply
+        out = (res.content or "").strip().strip('"').strip()
+        # Never let a reword drop a number (a time, a temperature) that was in the original.
+        if not out or any(n not in out for n in re.findall(r"\d+", reply)):
+            return reply
+        return out
+
     async def _music(self, a: dict) -> str:
         """Spotify. Returns what to say ("" for pause and skip: the music says it all)."""
         sp = getattr(self, "spotify", None)
@@ -446,7 +485,11 @@ class Brain:
         if tier == "smart":
             await say_while(ctx, "think")
         messages = [{"role": "system", "content": await self.system_prompt()}]
-        messages += conv.history[-6:]
+        for m in conv.history[-6:]:
+            content = m["content"]
+            if m.get("note"):
+                content = f"(Background note, not spoken: {m['note']})\n{content}"
+            messages.append({"role": m["role"], "content": content})
         messages.append({"role": "user", "content": text})
         tools = TOOLS if allow_think else [t for t in TOOLS if t["function"]["name"] != "think_harder"]
         try:
@@ -463,8 +506,8 @@ class Brain:
             if "didn't accept" in err:
                 return Reply("Claude didn't accept my key. Have a look at the key in the web page settings.",
                              intent="llm_error")
-            return Reply("Sorry, my brain's having a moment. The quick things like alarms, timers and weather "
-                         "still work though.", intent="llm_error")
+            return Reply("Ah, my brain's having a little wobble right now. Give it a minute and ask me again. "
+                         "Alarms, timers and the weather still work fine though.", intent="llm_error")
 
     async def _tool_loop(self, messages: list[dict], conv: Conversation, ctx: dict, tier: str,
                          tools: list[dict], request: str) -> Reply:
@@ -501,7 +544,7 @@ class Brain:
             if not info_needed and confirmations:
                 # Every call was an action with its own confirmation: skip a second model round trip.
                 return Reply(" ".join(confirmations), actions, model=model, intent="llm_tools")
-        return Reply(" ".join(confirmations) or "Sorry, I got a bit tangled up there.", actions,
+        return Reply(" ".join(confirmations) or "Oops, I got myself a bit tangled up there. Mind asking me that again?", actions,
                      model=model, intent="llm_tools")
 
     async def _run_tool(self, name: str, a: dict, conv: Conversation, ctx: dict) -> tuple[str, str, list]:
@@ -580,7 +623,9 @@ class Brain:
                 return r.text, r.text, []
             if name == "web_search":
                 await say_while(ctx, "search")
-                return await self.llm.web_search(a.get("query", "")), "", []
+                found = await self.llm.web_search(a.get("query", ""))
+                ctx.setdefault("searched", []).append((a.get("query", ""), found))
+                return found, "", []
             if name == "think_harder":
                 return "already using the larger model", "", []
         except (KeyError, ValueError, TypeError) as e:

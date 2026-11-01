@@ -453,20 +453,33 @@ function renderVoices() {
                       spellcheck: "false", oninput: () => (S.voicesDirty = true) }));
     }));
   }
-  for (const li of list.children) li.classList.toggle("active", !!current && li.querySelector(".v-id").value.trim() === current);
+  const rows = [...list.children];
+  const match = rows.findIndex((li) => !!current && li.querySelector(".v-id").value.trim() === current);
+  if (match >= 0) S.voiceActive = match;
+  rows.forEach((li, i) => li.classList.toggle("active", i === S.voiceActive));
 }
 async function saveVoices(extra = {}) {
-  const voices = voiceRows().filter((v) => v.id);
-  await api("/api/settings", { method: "POST", body: { voices, ...extra } });
+  const rows = voiceRows();
+  const voices = rows.filter((v) => v.id);
+  // Saving also switches Buddy to the highlighted voice, using whatever ID is in that row now
+  // (so editing the ID of the voice in use takes effect straight away).
+  let active = S.voiceActive ?? rows.findIndex((v) => v.id);
+  if (!rows[active]?.id) active = rows.findIndex((v) => v.id);
+  const body = { voices, ...extra };
+  if (!("elevenlabs_voice_id" in body) && active >= 0) body.elevenlabs_voice_id = rows[active].id;
+  await api("/api/settings", { method: "POST", body });
   S.voicesDirty = false;
+  S.voiceActive = active;
+  S.settings.voices = voices;
+  if (body.elevenlabs_voice_id) S.settings.elevenlabs_voice_id = body.elevenlabs_voice_id;
+  renderVoices();
 }
 async function useVoice(i) {
   const v = voiceRows()[i];
   if (!v.id) { toast("Paste a voice ID into that row first"); return; }
   try {
+    S.voiceActive = i;
     await saveVoices({ elevenlabs_voice_id: v.id });
-    S.settings.elevenlabs_voice_id = v.id;
-    renderVoices();
     toast(`Now using ${v.name || "voice " + (i + 1)}`);
   } catch (err) { toast("Couldn't save: " + err.message); }
 }
@@ -689,7 +702,11 @@ function init() {
   };
   $("spotify-redirect").textContent = `http://127.0.0.1:${location.port || 80}/spotify/callback`;
   $("voices-save").onclick = async () => {
-    try { await saveVoices(); toast("Voices saved"); } catch (err) { toast("Couldn't save: " + err.message); }
+    try {
+      await saveVoices();
+      const v = voiceRows()[S.voiceActive] || {};
+      toast(v.id ? `Saved. Now using ${v.name || "voice " + (S.voiceActive + 1)}` : "Voices saved");
+    } catch (err) { toast("Couldn't save: " + err.message); }
   };
   $("voice-preview").onclick = async () => {
     try {
