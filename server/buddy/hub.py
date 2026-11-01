@@ -24,6 +24,7 @@ import asyncio
 import collections
 import json
 import logging
+import random
 import time
 from dataclasses import asdict
 from datetime import datetime
@@ -52,6 +53,7 @@ from .weather import Weather
 log = logging.getLogger("buddy.hub")
 SR = 16000
 BYTES_PER_S = SR * 2
+STILL_WORKING = ["Hmm, one sec.", "Bear with me.", "Just a sec.", "Hang on a moment."]
 # Played once when the desk unit is switched on: 16 kHz mono 16-bit.
 _STARTUP_FILE = Path(__file__).resolve().parent.parent / "sounds" / "startup.pcm"
 STARTUP_SOUND = _STARTUP_FILE.read_bytes() if _STARTUP_FILE.exists() else b""
@@ -84,6 +86,7 @@ class Session:
         self.inbox: asyncio.Queue = asyncio.Queue(maxsize=400)
         self.worker: asyncio.Task | None = None
         self.speak_task: asyncio.Task | None = None
+        self.interim_task: asyncio.Task | None = None  # a "one sec, I'll check" line still playing
         self.seq = 0
         self.playback_done = asyncio.Event()
         self.ringing: str | None = None
@@ -309,7 +312,20 @@ class Session:
         asyncio.create_task(self.hub.process_audio(self, audio, speech_s, silent, mentioned))
 
     # ---------- speaking ----------
+    async def interim(self, text: str) -> None:
+        """Say a short "one sec" line while the real answer is still being worked on. Doesn't wait."""
+        if self.interim_task and not self.interim_task.done():
+            return
+        await self.hub.broadcast_ui({"type": "event", "kind": "transcript", "session": self.id,
+                                     "role": "assistant", "text": text, "intent": "one_sec"})
+        self.interim_task = asyncio.create_task(self._speak(text, False, after="thinking"))
+
     async def speak(self, text: str, then_listen: bool = False) -> None:
+        if self.interim_task and not self.interim_task.done():
+            try:  # let the "one sec" line finish rather than cutting it off
+                await asyncio.wait_for(asyncio.shield(self.interim_task), timeout=8.0)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                pass
         if self.speak_task and not self.speak_task.done():
             self.speak_task.cancel()
         self.speak_task = asyncio.create_task(self._speak(text, then_listen))
@@ -318,7 +334,7 @@ class Session:
         except asyncio.CancelledError:
             pass
 
-    async def _speak(self, text: str, then_listen: bool) -> None:
+    async def _speak(self, text: str, then_listen: bool, after: str = "idle") -> None:
         if not text:
             await self.set_state("idle")
             return
@@ -379,11 +395,12 @@ class Session:
         if then_listen and self.hands_free:
             await self.start_listening(earcon=True, no_speech_s=5.0)
         else:
-            await self.set_state("idle")
+            await self.set_state(after)  # "thinking" after a "one sec" line: the answer is on its way
 
     async def stop_speaking(self) -> None:
-        if self.speak_task and not self.speak_task.done():
-            self.speak_task.cancel()
+        for task in (self.speak_task, self.interim_task):
+            if task and not task.done():
+                task.cancel()
         await self.send_json({"type": "stop_audio", "seq": self.seq})
         self.seq = (self.seq + 1) % 256  # any frames still in flight now carry a stale seq
         await self.set_state("idle")
@@ -622,9 +639,16 @@ class Hub:
 
     async def respond(self, s: Session, text: str, stt_ms: int = 0) -> None:
         await self.broadcast_ui({"type": "event", "kind": "transcript", "session": s.id, "role": "user", "text": text})
-        ctx = {"ringing": s.ringing or next((d.ringing for d in self.devices() if d.ringing), None)}
+        ctx = {"ringing": s.ringing or next((d.ringing for d in self.devices() if d.ringing), None),
+               "say": s.interim}
+        work = asyncio.create_task(self.brain.handle(text, self.conv, ctx))
         try:
-            reply: Reply = await self.brain.handle(text, self.conv, ctx)
+            # Still nothing after a few seconds (and no "one sec" yet)? Say so, rather than leave a silence.
+            done, _ = await asyncio.wait({work}, timeout=3.5)
+            if not done and not ctx.get("said_while"):
+                ctx["said_while"] = True
+                await s.interim(random.choice(STILL_WORKING))
+            reply: Reply = await work
         except Exception as e:  # noqa: BLE001
             log.exception("brain failed")
             reply = Reply("Sorry, something went wrong on my side.", intent="error")

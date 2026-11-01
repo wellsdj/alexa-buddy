@@ -36,6 +36,23 @@ YES = re.compile(r"^\W*(yes|yeah|yep|yup|sure|please|go on|go for it|do it|ok(ay
                  r"go ahead|definitely|of course|think (about it|hard)|yes please)\b", re.I)
 NO = re.compile(r"^\W*(no|nah|nope|don'?t|quick(ly)?|just (tell|give|answer)|short (answer|version)|"
                 r"not now|no thanks?)\b", re.I)
+# Said out loud while Buddy goes off to do something slow, so it never just goes quiet.
+WHILE_I = {
+    "search": ["One sec, I'll look that up.", "Give me a sec, I'll check.", "Hang on, let me have a look.",
+               "Two secs, I'll find out.", "Let me check that for you."],
+    "think": ["Right, let me have a proper think.", "Okay, give me a moment to think this through.",
+              "Ooh, good one. Let me have a think.", "Leave it with me a sec."],
+}
+
+
+async def say_while(ctx: dict, kind: str) -> None:
+    """Speak a short "one sec" line once per turn, if the caller can (ctx["say"])."""
+    say = ctx.get("say")
+    if say and not ctx.get("said_while"):
+        ctx["said_while"] = True
+        await say(random.choice(WHILE_I[kind]))
+
+
 THINK_OFFER = "That's a meaty one. It'll take a few more seconds, but want me to have a proper think about it?"
 
 
@@ -158,7 +175,8 @@ Rules:
 - If a time or detail is missing or ambiguous, ask one short question.
 - "Remember ..." means use remember. To forget or change a memory, use forget or update_memory with its id.
 - Before clear_memory, ask the user to confirm; only call it with confirmed=true after they say yes.
-- For news, sport, prices, opening hours or anything recent, use web_search.
+- For news, sport, prices, opening hours or anything recent, use web_search. (You've already said "one sec, \
+I'll check" out loud before searching, so don't start your answer with that.)
 - For long writing, planning or tricky reasoning, call think_harder (it asks the user first).
 - If you ask the user something, end with a question mark.
 - Never say you did something unless a tool confirmed it."""
@@ -232,6 +250,7 @@ class Brain:
             return None
         if p.get("intent") == "think":
             if YES.search(text):
+                await say_while(ctx, "think")
                 return await self._llm(p["text"], conv, ctx, tier="smart")
             if NO.search(text):
                 return await self._llm(p["text"], conv, ctx, allow_think=False)
@@ -389,6 +408,8 @@ class Brain:
                    allow_think: bool = True) -> Reply:
         if THINK_REQUEST.search(text):
             tier = "smart"
+        if tier == "smart":
+            await say_while(ctx, "think")
         messages = [{"role": "system", "content": await self.system_prompt()}]
         messages += conv.history[-6:]
         messages.append({"role": "user", "content": text})
@@ -520,6 +541,7 @@ class Brain:
                 r = self._switch_voice(args)
                 return r.text, r.text, []
             if name == "web_search":
+                await say_while(ctx, "search")
                 return await self.llm.web_search(a.get("query", "")), "", []
             if name == "think_harder":
                 return "already using the larger model", "", []
