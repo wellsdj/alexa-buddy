@@ -9,7 +9,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
-<link rel="stylesheet" href="/static/style.css?v=chat3">
+<link rel="stylesheet" href="/static/style.css?v=chat4">
 </head>
 <body>
 <header class="top">
@@ -193,7 +193,6 @@
         <label>Pause that ends your sentence (ms) <input data-setting="end_of_speech_ms" type="number" min="400" max="2000" step="50"></label>
         <label>Keep listening after a reply
           <select data-setting="follow_up"><option value="off">Never</option><option value="questions">When Buddy asks a question</option><option value="always">Always</option></select></label>
-        <label class="check"><input data-setting="room_listening" type="checkbox"> While Buddy is on, listen to everything nearby and answer what's meant for it (say "off" to stop, "hey buddy" to start again)</label>
         <label class="check"><input data-setting="morning_briefing" type="checkbox"> Morning briefing after alarms</label>
       </fieldset>
       <fieldset>
@@ -228,6 +227,6 @@
 </aside>
 
 <div class="toast" id="toast" role="status" hidden></div>
-<script src="/static/app.js?v=chat3"></script>
+<script src="/static/app.js?v=chat4"></script>
 </body>
 </html>

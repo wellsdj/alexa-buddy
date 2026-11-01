@@ -8,6 +8,7 @@ doesn't allow streaming its audio to other gadgets), so Buddy tells that device 
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import json
@@ -41,6 +42,8 @@ class Spotify:
         self.state = self._load()
         self._verifier: dict[str, str] = {}  # login "state" -> PKCE verifier
         self.ducked_from: int | None = None  # music volume before Buddy turned it down to talk
+        self._duck_lock = asyncio.Lock()  # down and back up never overlap (or the music stays quiet)
+        self.last_device = ""
         self.last_error = ""
 
     # ---------- saved login ----------
@@ -68,7 +71,7 @@ class Spotify:
     def status(self) -> dict:
         return {"client_id": bool(self.client_id), "connected": self.connected,
                 "account": self.state.get("account", ""), "email": self.state.get("email", ""),
-                "plan": self.state.get("plan", ""), "last_error": self.last_error}
+                "plan": self.state.get("plan", ""), "last_error": self.last_error, "device": self.last_device}
 
     def disconnect(self) -> None:
         self.state = {}
@@ -154,42 +157,69 @@ class Spotify:
     async def devices(self) -> list[dict]:
         return ((await self._api("GET", "/me/player/devices")) or {}).get("devices", [])
 
-    async def _pick_device(self) -> str | None:
-        """The preferred device (by name, from settings), else the active one, else the first."""
-        devs = await self.devices()
+    async def _pick_device(self) -> dict | None:
+        """The preferred device (by name, from settings), else the active one, else a computer,
+        else the first. Skips devices Spotify says can't be controlled."""
+        devs = [d for d in await self.devices() if not d.get("is_restricted")]
         if not devs:
             return None
         want = (self.settings["spotify_device"] or "").strip().lower()
         if want:
             for d in devs:
                 if want in (d.get("name") or "").lower():
-                    return d["id"]
+                    return d
         for d in devs:
             if d.get("is_active"):
-                return d["id"]
-        return devs[0]["id"]
+                return d
+        for d in devs:
+            if (d.get("type") or "").lower() == "computer":
+                return d
+        return devs[0]
+
+    async def _ready_device(self) -> dict:
+        """Make sure a device is ready to play: choose it and hand playback to it if it isn't active."""
+        d = await self._pick_device()
+        if not d:
+            raise SpotifyError("I can't see Spotify open anywhere. Pop it open on your phone or Mac and ask me "
+                               "again, and I'll get it going.")
+        if not d.get("is_active"):
+            try:
+                await self._api("PUT", "/me/player", json={"device_ids": [d["id"]], "play": False})
+            except SpotifyError as e:
+                log.info("couldn't hand playback to %s: %s", d.get("name"), e)
+        self.last_device = d.get("name", "")
+        return d
 
     async def _with_device(self, method: str, path: str, **kw):
-        """Run a player command; if no device is active, wake one up and try again."""
+        """Run a player command on the chosen device (picking and waking one if needed)."""
+        d = await self._ready_device()
+        sep = "&" if "?" in path else "?"
         try:
-            return await self._api(method, path, **kw)
+            return await self._api(method, f"{path}{sep}device_id={d['id']}", **kw)
         except SpotifyError as e:
             if str(e) != "NO_DEVICE":
                 raise
-        device = await self._pick_device()
-        if not device:
-            raise SpotifyError("I can't see Spotify open anywhere. Pop it open on your phone or Mac and ask me "
-                               "again, and I'll get it going.")
-        sep = "&" if "?" in path else "?"
-        return await self._api(method, f"{path}{sep}device_id={device}", **kw)
+            raise SpotifyError(f"Spotify on {d.get('name', 'that device')} isn't answering. Give the app a tap "
+                               "to wake it up, then ask me again.") from e
+
+    async def _is_playing(self, tries: int = 4) -> bool:
+        for _ in range(tries):
+            await asyncio.sleep(0.8)
+            try:
+                st = await self._api("GET", "/me/player")
+            except SpotifyError:
+                continue
+            if st and st.get("is_playing"):
+                return True
+        return False
 
     # ---------- what Buddy can do ----------
     async def play(self, query: str = "", kind: str = "") -> str:
-        """Play something by name, or just resume. Returns what to say."""
+        """Play something by name, or just resume. Checks it really started. Returns what to say."""
         query = (query or "").strip()
         if not query:
             await self._with_device("PUT", "/me/player/play")
-            return "Back on."
+            return "" if await self._is_playing() else self._not_started()
         kinds = [kind] if kind in ("track", "artist", "album", "playlist") else ["track", "artist", "playlist"]
         search = re.sub(r"^(some|a bit of|a little|a few|me)\s+", "", query.lower()) or query
         found = await self._api("GET", "/search", params={"q": search, "type": ",".join(kinds), "limit": 5})
@@ -198,13 +228,36 @@ class Spotify:
             return f"I couldn't find {query} on Spotify."
         item_kind, item = pick
         body = {"uris": [item["uri"]]} if item_kind == "track" else {"context_uri": item["uri"]}
-        await self._with_device("PUT", "/me/player/play", json=body)
+        try:
+            await self._with_device("PUT", "/me/player/play", json=body)
+            started = await self._is_playing()
+        except SpotifyError as e:
+            if item_kind == "track" or "anywhere" in str(e) or "answering" in str(e):
+                raise
+            started = False
+        if not started and item_kind != "track":
+            # Some playlists (Spotify's own, for example) won't play for apps like Buddy:
+            # play the top songs for the same search instead.
+            tracks = await self._api("GET", "/search", params={"q": search, "type": "track", "limit": 20})
+            uris = [t["uri"] for t in ((tracks or {}).get("tracks") or {}).get("items") or [] if t and t.get("uri")]
+            if uris:
+                await self._with_device("PUT", "/me/player/play", json={"uris": uris})
+                started = await self._is_playing()
+                item_kind, item = "mix", {"name": query}
+        if not started:
+            return self._not_started()
+        where = f" on {self.last_device}" if self.last_device else ""
         if item_kind == "track":
             artists = ", ".join(a["name"] for a in item.get("artists", [])[:2])
-            return f"Playing {item['name']} by {artists}." if artists else f"Playing {item['name']}."
-        if item_kind == "artist":
-            return f"Playing {item['name']}."
-        return f"Playing {item['name']}."
+            return f"Playing {item['name']} by {artists}{where}." if artists else f"Playing {item['name']}{where}."
+        if item_kind == "mix":
+            return f"Here's some {item['name']}{where}."
+        return f"Playing {item['name']}{where}."
+
+    def _not_started(self) -> str:
+        dev = self.last_device or "your Spotify app"
+        return (f"I asked Spotify to play on {dev}, but it hasn't started. Give the Spotify app a tap so it "
+                "wakes up, then ask me again.")
 
     async def pause(self) -> str:
         await self._with_device("PUT", "/me/player/pause")
@@ -229,29 +282,30 @@ class Spotify:
 
     # ---------- turning the music down while Buddy talks ----------
     async def duck(self) -> None:
-        if not self.connected or self.ducked_from is not None or getattr(self, "_ducking", False):
+        if not self.connected or self.ducked_from is not None:
             return
-        self._ducking = True
-        try:
-            st = await self._api("GET", "/me/player")
-            dev = (st or {}).get("device") or {}
-            vol = dev.get("volume_percent")
-            if st and st.get("is_playing") and vol is not None and vol > 20 and dev.get("supports_volume", True):
-                self.ducked_from = vol
-                await self._api("PUT", "/me/player/volume?volume_percent=20")
-        except SpotifyError as e:
-            log.info("couldn't turn the music down: %s", e)
-        finally:
-            self._ducking = False
+        async with self._duck_lock:
+            if self.ducked_from is not None:
+                return
+            try:
+                st = await self._api("GET", "/me/player")
+                dev = (st or {}).get("device") or {}
+                vol = dev.get("volume_percent")
+                if st and st.get("is_playing") and vol is not None and vol > 20 and dev.get("supports_volume", True):
+                    self.ducked_from = vol
+                    await self._api("PUT", "/me/player/volume?volume_percent=20")
+            except SpotifyError as e:
+                log.info("couldn't turn the music down: %s", e)
 
     async def unduck(self) -> None:
-        vol, self.ducked_from = self.ducked_from, None
-        if vol is None:
-            return
-        try:
-            await self._api("PUT", f"/me/player/volume?volume_percent={vol}")
-        except SpotifyError as e:
-            log.info("couldn't turn the music back up: %s", e)
+        async with self._duck_lock:  # waits for a turn-down still in progress
+            vol, self.ducked_from = self.ducked_from, None
+            if vol is None:
+                return
+            try:
+                await self._api("PUT", f"/me/player/volume?volume_percent={vol}")
+            except SpotifyError as e:
+                log.info("couldn't turn the music back up: %s", e)
 
 
 def _norm(s: str) -> str:

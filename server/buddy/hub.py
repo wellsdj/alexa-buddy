@@ -566,7 +566,7 @@ class Hub:
 
     # ---------- the pipeline ----------
     def room_listening_active(self) -> bool:
-        return self.awake and bool(self.settings["room_listening"]) and self.stt.available()
+        return self.awake and bool(self.settings["room_listening_on"]) and self.stt.available()
 
     def set_awake(self, on: bool) -> None:
         if on != self.awake:

@@ -220,7 +220,7 @@ def test_off_stops_room_listening_until_hey_buddy(settings, apis, claude):
 
 
 def test_mid_sentence_hey_buddy_with_room_listening_off_is_judged_in_context(settings, apis, claude):
-    settings.update({"room_listening": False})
+    settings.update({"room_listening_on": False})
     rng = np.random.default_rng(7)
     apis.transcripts = ["So I walked in and went hey buddy to my mate, and he just ignored me."]
     apis.chat_script = [judge(False)]

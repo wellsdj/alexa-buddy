@@ -82,6 +82,7 @@ class Conversation:
     pager: int | None = None
     pending: dict | None = None
     clear_requested: float = 0.0
+    dropped: list[str] = field(default_factory=list)  # topics the user asked Buddy to leave alone
 
     def add(self, role: str, content: str, note: str = "") -> None:
         """note: private background for later turns (e.g. "I searched the web for ..."), never spoken."""
@@ -155,6 +156,16 @@ TOOLS = [
             "query": {"type": "string"}, "kind": {"type": "string", "enum": ["track", "artist", "album", "playlist"]},
             "volume_percent": {"type": "integer"}}, "required": ["action"]}}},
     {"type": "function", "function": {
+        "name": "go_quiet", "description": "The user wants you to stop, shut up, go away or turn off ENTIRELY "
+                                           "(e.g. 'alright, that's me off to bed', 'leave it, I don't need you'). "
+                                           "You go quiet straight away without saying anything.",
+        "parameters": {"type": "object", "properties": {}}}},
+    {"type": "function", "function": {
+        "name": "drop_topic", "description": "The user wants you to stop talking about ONE topic but carry on "
+                                             "otherwise (e.g. 'enough about the weather', 'stop going on about my "
+                                             "diet'). Remembered for the rest of the conversation.",
+        "parameters": {"type": "object", "properties": {"topic": {"type": "string"}}, "required": ["topic"]}}},
+    {"type": "function", "function": {
         "name": "switch_voice", "description": "Change the voice you speak with, among the user's saved voices. "
                                                "step 1 = next, -1 = previous; or a 1-based number; or a voice name.",
         "parameters": {"type": "object", "properties": {
@@ -199,7 +210,9 @@ I'll check" out loud before searching, so don't start your answer with that.)
 - Trust your earlier answers in this conversation: they were right. "(Background note ...)" lines are your own \
 private notes about earlier turns (for example a web search you did); use them, never read them out, and don't \
 apologise for or doubt earlier answers unless the user says they were wrong.
-- If something goes wrong, be relaxed and kind about it, say what you can do instead, and keep it short."""
+- If something goes wrong, be relaxed and kind about it, say what you can do instead, and keep it short.
+- Read what the user means, not just the words: wanting you to stop or go away entirely means go_quiet; wanting \
+you to drop one subject ("enough about that") means drop_topic, then carry on normally."""
 
 
 def speakable(text: str, limit: int = 900) -> str:
@@ -407,8 +420,7 @@ class Brain:
             if act == "play":
                 return await sp.play(a.get("query", ""), a.get("kind", ""))
             if act == "resume":
-                await sp.play()
-                return ""
+                return await sp.play()
             if act == "pause":
                 return await sp.pause()
             if act in ("next", "previous"):
@@ -484,7 +496,11 @@ class Brain:
             tier = "smart"
         if tier == "smart":
             await say_while(ctx, "think")
-        messages = [{"role": "system", "content": await self.system_prompt()}]
+        system = await self.system_prompt()
+        if conv.dropped:
+            system += ("\nTopics the user asked you to drop (don't bring them up again unless they do): "
+                       + "; ".join(conv.dropped[-6:]) + ".")
+        messages = [{"role": "system", "content": system}]
         for m in conv.history[-6:]:
             content = m["content"]
             if m.get("note"):
@@ -534,7 +550,15 @@ class Brain:
                     args = json.loads(call["function"].get("arguments") or "{}")
                 except json.JSONDecodeError:
                     args = {}
-                result, confirm, acts = await self._run_tool(name, args, conv, ctx)
+                if name == "go_quiet":  # turn off without a word, like "off"
+                    return Reply("", actions + [{"type": "stop"}, {"type": "sleep"}], model=model, intent="off")
+                if name == "drop_topic":
+                    topic = str(args.get("topic", "")).strip()[:80]
+                    if topic and topic not in conv.dropped:
+                        conv.dropped.append(topic)
+                result, confirm, acts = await self._run_tool(name, args, conv, ctx) if name != "drop_topic" else (
+                    f"Noted: leave '{args.get('topic', '')}' alone from now on. Acknowledge in a few words and move on.",
+                    "", [])
                 actions += acts
                 if confirm:
                     confirmations.append(confirm)

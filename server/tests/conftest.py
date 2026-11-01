@@ -19,6 +19,7 @@ def settings(tmp_path):
     s.set_secret("ANTHROPIC_API_KEY", "sk-ant-test")
     s.set_secret("GROQ_API_KEY", "gsk_test")
     s.set_secret("ELEVENLABS_API_KEY", "el_test")
+    s.update({"room_listening_on": True, "reword_replies": False})  # the room tests; exact replies in asserts
     return s
 
 

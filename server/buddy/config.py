@@ -31,7 +31,7 @@ DEFAULTS: dict[str, Any] = {
     "fast_model": "openai/gpt-oss-20b",
     "smart_model": "openai/gpt-oss-120b",
     "fallback_models": ["qwen/qwen3.6-27b", "openai/gpt-oss-120b", "openai/gpt-oss-20b"],
-    "room_listening": True,  # while on, hear everything nearby and answer what's meant for Buddy
+    "room_listening_on": False,  # off: Buddy only wakes for "hey buddy" (True: also answers room talk meant for it)
     "claude_fast_model": "claude-haiku-5-5",
     "claude_smart_model": "claude-haiku-5-5",
     "tts_engine": "auto",  # auto | elevenlabs | piper | browser
