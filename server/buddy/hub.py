@@ -27,6 +27,7 @@ import logging
 import time
 from dataclasses import asdict
 from datetime import datetime
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import numpy as np
@@ -51,6 +52,9 @@ from .weather import Weather
 log = logging.getLogger("buddy.hub")
 SR = 16000
 BYTES_PER_S = SR * 2
+# The "I'm listening" sound: 16 kHz mono 16-bit. Delete the file to get the board's beep back.
+_WAKE_FILE = Path(__file__).resolve().parent.parent / "sounds" / "wake.pcm"
+WAKE_SOUND = _WAKE_FILE.read_bytes() if _WAKE_FILE.exists() else b""
 
 
 class Session:
@@ -75,6 +79,7 @@ class Session:
         self.mentioned = False  # the wake word fired somewhere inside the sentence being captured
         self.captured = 0  # samples heard since this capture started (not counting the pre-roll)
         self.quiet_until = 0.0  # don't take Buddy's own voice for someone talking
+        self.chime_until = 0.0  # the listening sound is still playing
         self.ptt = False
         self.follow = False
         self.inbox: asyncio.Queue = asyncio.Queue(maxsize=400)
@@ -109,6 +114,19 @@ class Session:
                                      "role": self.role, "state": state}, exclude=self)
 
     async def earcon(self, name: str) -> None:
+        if name == "end":
+            return  # heard you, now thinking: no sound
+        if name == "wake" and WAKE_SOUND:
+            # Your own "I'm listening" sound, streamed like speech (so it follows Buddy's volume).
+            self.seq = (self.seq + 1) % 256
+            seq = self.seq
+            await self.send_json({"type": "audio_start", "seq": seq, "rate": SR, "text": ""})
+            for i in range(0, len(WAKE_SOUND), 3200):
+                await self.send_audio(seq, WAKE_SOUND[i:i + 3200])
+            await self.send_json({"type": "audio_end", "seq": seq, "bytes": len(WAKE_SOUND)})
+            # Its echo in the mic isn't someone talking (plus a little for the trip there and back).
+            self.chime_until = time.time() + len(WAKE_SOUND) / BYTES_PER_S + 0.5
+            return
         await self.send_json({"type": "earcon", "name": name})
 
     # ---------- audio in ----------
@@ -185,6 +203,10 @@ class Session:
                     await self._promote(wake)  # "hey buddy" started the sentence: wake for real
             if self.ptt:
                 return
+            if now < self.chime_until and not self.endpointer.started:
+                # The listening sound is playing: neither speech nor silence yet. What's said over
+                # it is still recorded, and counts once the sound has finished.
+                probs = [min(max(p, self.endpointer.off), self.endpointer.on - 0.01) for p in probs]
             result = self.endpointer.update(probs)
             if result:
                 await self._finish_capture(result)
@@ -311,14 +333,23 @@ class Session:
         await self.send_json({"type": "audio_start", "seq": seq, "rate": SR, "text": text})
         sent = 0
         t0 = time.monotonic()
-        lead = 0.6
+        # The board holds 1.5 s of sound. Keep it about 0.8 s ahead: enough to ride out Wi-Fi
+        # hiccups, never so much that it overflows and drops pieces mid-word.
+        lead = 0.8
         leveller = Leveller()  # same loudness whichever voice spoke
+        held = bytearray()  # the first half second, collected before playing starts
+        started_at = None  # the clock starts when the first sound is sent, not before the voice arrives
 
-        async def send(pcm: bytes) -> None:
-            nonlocal sent
+        async def send(pcm: bytes, final: bool = False) -> None:
+            nonlocal sent, started_at
+            if started_at is None:
+                held.extend(pcm)
+                if len(held) < BYTES_PER_S // 2 and not final:
+                    return  # wait for half a second, so a slow start doesn't stutter
+                pcm, started_at = bytes(held), time.monotonic()
             for i in range(0, len(pcm), 3200):  # 100 ms frames
                 part = pcm[i:i + 3200]
-                ahead = sent / BYTES_PER_S - (time.monotonic() - t0)
+                ahead = sent / BYTES_PER_S - (time.monotonic() - started_at)
                 if ahead > lead:
                     await asyncio.sleep(ahead - lead)
                 await self.send_audio(seq, part)
@@ -327,7 +358,8 @@ class Session:
         try:
             async for chunk in self.hub.tts.stream(text):
                 await send(leveller.process(chunk))
-            await send(leveller.flush())
+            await send(leveller.flush(), final=True)
+            t0 = started_at or t0
             self.hub.record("voice", engine=self.hub.tts.last_engine, to=self.role,
                             volume=self.hub.brain.volume, peak_in_db=peak_db(leveller.peak_in),
                             peak_out_db=peak_db(leveller.peak_out),
@@ -546,6 +578,10 @@ class Hub:
             await self._accept(s, text, stt_ms)
             return
         if not text.strip():
+            if speech_s < 1.0:  # a cough, a short noise, or Buddy's own echo: just go quiet
+                self.record("nothing_heard", session=s.id, speech_s=round(speech_s, 2))
+                await s.set_state("idle")
+                return
             await self.announce(s, "Sorry, I didn't catch that.")
             return
         if not intents.strip_wake(text):  # just "hey buddy" and a pause: wait for the question

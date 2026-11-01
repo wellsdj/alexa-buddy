@@ -25,3 +25,24 @@ def test_quiet_and_loud_voices_come_out_the_same():
 def test_never_clips():
     y = _level(_talk(0))
     assert np.abs(y).max() <= 32768 * 10 ** (-1 / 20)
+
+
+def test_volume_glides_instead_of_jumping():
+    # Loud then quiet speech makes the leveller change gain; it must never step suddenly
+    # (a step in gain on a voice sounds like crackle).
+    raw = np.frombuffer(_talk(-3, 1.5) + _talk(-30, 1.5), dtype=np.int16).astype(float)
+    y = _level(raw.astype(np.int16).tobytes()).astype(float)
+    keep = np.abs(raw) > 2000
+    gain = y[keep] / raw[keep]
+    assert np.max(np.abs(np.diff(gain))) < 0.06
+
+
+def test_pure_tone_stays_clean():
+    t = np.arange(16000 * 2) / 16000
+    raw = (32767 * 0.9 * np.sin(2 * np.pi * 1000 * t)).astype(np.int16).tobytes()
+    y = _level(raw).astype(float)[8000:-4000]
+    spectrum = np.abs(np.fft.rfft(y * np.hanning(len(y))))
+    freqs = np.fft.rfftfreq(len(y), 1 / 16000)
+    tone = spectrum[np.abs(freqs - 1000) < 20].max()
+    rest = np.sqrt(np.sum(spectrum[(freqs > 50) & (np.abs(freqs - 1000) > 30)] ** 2))
+    assert rest / tone < 0.005  # under 0.5% distortion

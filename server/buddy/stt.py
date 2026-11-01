@@ -25,7 +25,7 @@ NOT_INSTALLED = "Buddy's ears aren't downloaded yet. Double-click Update Buddy, 
 
 # Speech models invent these on near-silent audio; drop them unless the VAD heard real speech.
 HALLUCINATIONS = {
-    "", "you", "thank you", "thanks", "thanks for watching", "bye",
+    "", "you", "thank you", "thanks", "thanks for watching",
     "thank you for watching", "so", "uh", "um", "hmm", ".", "...", "you.",
 }
 
@@ -92,7 +92,7 @@ class LocalSTT:
 
 def clean_transcript(text: str, speech_seconds: float) -> str:
     norm = re.sub(r"[^a-z' ]", "", text.lower()).strip()
-    if speech_seconds < 0.2:
+    if speech_seconds < 0.1:  # short words like "off" are only ~0.2 s of speech
         return ""
     if norm in HALLUCINATIONS and speech_seconds < 0.45:
         return ""

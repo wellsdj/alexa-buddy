@@ -239,7 +239,10 @@ class Brain:
         now = self.now()
         n = it.name
         if n == "off":
-            return Reply("Okay, I'm off. Say hey buddy when you need me.", [{"type": "sleep"}], intent=n)
+            acts = [{"type": "stop"}, {"type": "sleep"}]  # quietly: no words, just off
+            if ctx.get("ringing"):
+                acts.append({"type": "alarm_stop"})
+            return Reply("", acts, intent=n)
         if n == "stop":
             acts = [{"type": "stop"}]
             if ctx.get("ringing"):

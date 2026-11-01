@@ -146,10 +146,17 @@ def test_off_puts_buddy_to_sleep(settings, apis, claude):
     settings.update({"follow_up": "always"})
     brain = make_brain(settings, apis, claude)
     r = run(brain.handle("hey buddy, off", Conversation()))
-    assert r.actions == [{"type": "sleep"}] and "hey buddy" in r.text.lower() and not r.follow_up
-    assert run(brain.handle("turn yourself off", Conversation())).intent == "off"
-    assert run(brain.handle("go to sleep", Conversation())).intent == "off"
+    assert {"type": "sleep"} in r.actions and r.text == "" and not r.follow_up  # off quietly
+    for said in ("turn yourself off", "go to sleep", "go away", "shut up", "be quiet please",
+                 "okay you can turn off now thanks", "that's all, thanks buddy", "bye", "stop listening"):
+        assert run(brain.handle(said, Conversation())).intent == "off", said
     assert claude.requests == []
+
+
+def test_off_words_dont_catch_other_requests(settings, apis, claude):
+    brain = make_brain(settings, apis, claude)
+    for said in ("turn off my alarm", "turn off the lights", "off the top of your head, what's 12 times 12"):
+        assert run(brain.handle(said, Conversation())).intent != "off", said
 
 
 def test_memory_tools_and_clear_needs_confirmation(settings, apis, claude):

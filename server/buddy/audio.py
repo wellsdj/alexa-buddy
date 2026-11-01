@@ -55,10 +55,12 @@ class Leveller:
     MAX_BOOST = 2.0
     MIN_GAIN = 0.1
     CEILING = 32768 * 10 ** (-1 / 20)
+    KNEE = 32768 * 10 ** (-6 / 20)  # above this, peaks are rounded off smoothly
     FRAME = 320  # 20 ms
 
     def __init__(self):
         self.gain = None  # decided from the first bit of real speech
+        self.last_g = None  # gain at the end of the previous frame, so changes glide, never jump
         self.peak_in = 0.0  # loudest sample in and out, for the Activity log
         self.peak_out = 0.0
         self.carry = b""
@@ -99,8 +101,20 @@ class Leveller:
     def _apply(self, x: np.ndarray) -> bytes:
         if not len(x):
             return b""
-        g = np.repeat(self._frame_gains(x), self.FRAME)
-        y = np.clip(x * g, -self.CEILING, self.CEILING)
+        # Glide from one frame's gain to the next across the frame: a sudden step in gain
+        # sounds like crackle on a voice.
+        frame_g = self._frame_gains(x)
+        start = np.concatenate([[frame_g[0] if self.last_g is None else self.last_g], frame_g[:-1]])
+        ramp = np.arange(1, self.FRAME + 1) / self.FRAME
+        g = (start[:, None] + (frame_g - start)[:, None] * ramp[None, :]).ravel()
+        self.last_g = float(frame_g[-1])
+        y = x * g
+        # Gentle limiter instead of hard clipping, for the rare peak that would go over.
+        over = np.abs(y) > self.KNEE
+        if np.any(over):
+            a = np.abs(y[over]) - self.KNEE
+            room = self.CEILING - self.KNEE
+            y[over] = np.sign(y[over]) * (self.KNEE + room * np.tanh(a / room))
         self.peak_in = max(self.peak_in, float(np.abs(x).max()))
         self.peak_out = max(self.peak_out, float(np.abs(y).max()))
         return y.astype(np.int16).tobytes()

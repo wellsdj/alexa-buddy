@@ -28,6 +28,29 @@ def has_wake(text: str) -> bool:
     return bool(WAKE_PREFIX.match(text or ""))
 
 
+# "Off" and friends: Buddy goes quiet and stops listening to the room until the next "hey buddy".
+_OFF_CORE = (r"(turn|switch|power|shut) (yourself |it )?(off|down)|(you can )?(turn|switch) off|off|"
+             r"power down|go (to sleep|away|quiet)|sleep|shut up|be quiet|quiet|silence|hush|shush|"
+             r"stop (listening|talking|it)|leave me alone|that'?s (all|it|enough)|enough|i'?m (done|good|fine)|"
+             r"we'?re done|(good)?bye|see you( later)?|later|you can go|off you go|that'?ll do|done")
+_OFF = re.compile(
+    r"((ok|okay|alright|all right|right|yeah|yes|cool|great|fine|thanks|thank you|cheers|buddy|please|"
+    r"now|just|you can|can you|could you|and|so|well|oh|um|uh)[ ,]*)*"
+    r"(" + _OFF_CORE + r")"
+    r"([ ,]*(now|then|please|thanks|thank you|cheers|buddy|for now|mate|for a bit|for a while|bye|"
+    r"goodbye|off|already))*")
+
+
+def is_off(text: str) -> bool:
+    """Short "go away" type sentences, in lots of wordings. Never things like "turn off my alarm"."""
+    t = _norm(text) if text else ""
+    t = re.sub(r"[,.!?]", " ", t)
+    t = re.sub(r"\s+", " ", t).strip()
+    if not t or len(t.split()) > 8 or re.search(r"\b(alarm|timer|reminder|light|tv|music|radio|heating)s?\b", t):
+        return False
+    return bool(_OFF.fullmatch(t))
+
+
 def _norm(text: str) -> str:
     t = text.lower().strip()
     t = re.sub(r"[“”\"]", "", t)
@@ -43,19 +66,16 @@ def match(text: str, now: datetime, context: dict | None = None) -> Intent | Non
     if not t:
         return None
 
-    if re.fullmatch(r"(stop|cancel|never ?mind|nevermind|shut up|be quiet|quiet|silence|"
-                    r"that'?s all|nothing|forget it|no thanks?|nope|go away|stop talking|enough)", t):
+    if context.get("ringing") and re.search(r"\b(stop|off|i'?m up|awake|dismiss|cancel)\b", t):
         return Intent("stop")
     if re.fullmatch(r"(snooze|snooze( it| the alarm)?( for \w+ minutes?)?|five more minutes|"
                     r"(give me|just)? ?(a )?few more minutes)", t):
         d = find_duration(words_to_digits(t))
         return Intent("snooze", {"minutes": (d[0] // 60) if d else None})
-    if context.get("ringing") and re.search(r"\b(stop|off|i'?m up|awake|dismiss|cancel)\b", t):
-        return Intent("stop")
-    # "Off" puts Buddy to sleep: it stops listening to the room until someone says "hey buddy".
-    if re.fullmatch(r"((turn|switch|power) )?(yourself )?off( now)?|power down|go to sleep|sleep( now)?|"
-                    r"you can (go to sleep|turn off|switch off)", t):
+    if is_off(t):
         return Intent("off")
+    if re.fullmatch(r"(stop|cancel|never ?mind|nevermind|nothing|forget it|no thanks?|nope|no)", t):
+        return Intent("stop")
 
     if re.fullmatch(r"(thanks|thank you|cheers|ta|thank you (buddy|so much|very much)|nice one|thanks (mate|buddy))", t):
         return Intent("thanks")
