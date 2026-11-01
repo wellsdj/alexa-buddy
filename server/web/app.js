@@ -10,11 +10,11 @@ const S = {
 };
 const STATE_TEXT = {
   offline: ["Offline", "Can't reach the Buddy server. It retries automatically."],
-  idle: ["Ready", "Say “hey buddy” with hands-free on, hold the talk button, or type below."],
+  idle: ["Ready", "Say “hey buddy” with hands-free on, hold the mic, or type."],
   listening: ["Listening…", "Go ahead, I'm listening."],
   thinking: ["Thinking…", "Working on it."],
-  speaking: ["Speaking", "Click the orb or press Stop to interrupt."],
-  ringing: ["Ringing!", "Stop or snooze below, or say “hey buddy, stop”."],
+  speaking: ["Speaking", "Press stop to interrupt."],
+  ringing: ["Ringing", "Stop or snooze above, or say “hey buddy, stop”."],
 };
 
 // ---------------------------------------------------------------- helpers
@@ -254,7 +254,7 @@ function addChat(m) {
   const li = el("li", { class: `${m.role}${m.session && m.session !== S.sessionId ? " from-device" : ""}` }, m.text, meta);
   chat.append(li);
   while (chat.children.length > 120) chat.firstChild.remove();
-  chat.scrollTop = chat.scrollHeight;
+  requestAnimationFrame(() => (chat.scrollTop = chat.scrollHeight));
 }
 
 async function setHandsFree(on) {
@@ -502,7 +502,24 @@ function refreshAll() { loadSettings(); loadStatus(); loadAlarms(); loadMemory()
 
 // ---------------------------------------------------------------- wiring
 function init() {
-  $("chat").append(el("li", { class: "empty" }, "Nothing yet. Try: “what's the weather?”, “set a timer for 5 minutes”, “remember that I take my coffee black”."));
+  const ask = (t) => { Audio_.ensure(); send({ type: "text", text: t }); };
+  const hour = new Date().getHours();
+  const hello = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
+  $("chat").append(el("li", { class: "empty" },
+    el("h1", {}, `${hello}.`), el("p", {}, "What can I do for you?"),
+    el("div", { class: "suggest" }, ["What's the weather?", "Set a timer for 10 minutes", "Wake me up at 7 on weekdays", "What do you remember about me?"]
+      .map((t) => el("button", { type: "button", onclick: () => ask(t) }, t)))));
+  const drawer = (open) => {
+    $("drawer").classList.toggle("open", open);
+    $("drawer").setAttribute("aria-hidden", String(!open));
+    $("menu").setAttribute("aria-expanded", String(open));
+    $("scrim").hidden = !open;
+    document.body.classList.toggle("drawer-open", open);
+  };
+  $("menu").onclick = () => drawer(!$("drawer").classList.contains("open"));
+  $("drawer-close").onclick = () => drawer(false);
+  $("scrim").onclick = () => drawer(false);
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") drawer(false); });
   document.addEventListener("pointerdown", () => Audio_.ensure(), { once: true });
   $("orb").onclick = () => { send({ type: "stop_speaking" }); Audio_.stop(); };
   $("stop").onclick = () => { send({ type: "stop_speaking" }); Audio_.stop(); };

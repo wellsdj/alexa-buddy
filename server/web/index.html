@@ -2,96 +2,92 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Buddy Console</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='13' fill='%23FFB23F'/%3E%3Ccircle cx='16' cy='16' r='6' fill='%23101216'/%3E%3C/svg%3E">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Buddy</title>
+<meta name="theme-color" content="#000000">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23000'/%3E%3Ccircle cx='16' cy='16' r='5' fill='%23fff'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
-<link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="/static/style.css?v=chat1">
 </head>
 <body>
-<header class="topbar">
-  <div class="brand"><span class="brand-dot" aria-hidden="true"></span><span id="assistant-name">Buddy</span><span class="brand-sub">console</span></div>
-  <div class="conn">
+<header class="top">
+  <div class="brand">
+    <span id="assistant-name">Buddy</span>
+    <span class="status"><button class="dot" id="orb" data-state="offline" aria-label="Stop Buddy talking" title="Stop Buddy talking"></button><span id="state-label">Connecting…</span></span>
+  </div>
+  <button class="icon-round" id="menu" aria-label="Open controls" aria-controls="drawer" aria-expanded="false">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>
+  </button>
+</header>
+
+<main class="thread" aria-label="Conversation">
+  <div class="thread-inner">
+    <div class="setup-box" id="setup-box" hidden>
+        <div class="setup-head"><div><h2>Let's get Buddy ready</h2><p class="note">Paste a key or two and you're done. They stay on this computer.</p></div></div>
+        <div class="setup-step" id="setup-claude">
+          <p><b>1. Claude key (needed: Buddy's brain).</b> Open <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">console.anthropic.com</a>,
+            sign in, add some credit under <i>Billing</i>, click <i>Create Key</i>, then copy the key and paste it here:</p>
+          <span class="row"><input type="password" id="setup-claude-key" placeholder="sk-ant-…" autocomplete="off"><button class="btn primary small" data-save-key="ANTHROPIC_API_KEY" data-input="setup-claude-key">Save</button></span>
+        </div>
+        <div class="setup-step" id="setup-eleven">
+          <p><b>2. ElevenLabs key (free plan, for the nice voice).</b> Open <a href="https://elevenlabs.io/app/developers/api-keys" target="_blank" rel="noopener">elevenlabs.io → API keys</a>,
+            sign up, click <i>Create Key</i> (if it asks about access, turn on <i>Text to Speech</i>), then copy and paste it here:</p>
+          <span class="row"><input type="password" id="setup-eleven-key" placeholder="sk_…" autocomplete="off"><button class="btn primary small" data-save-key="ELEVENLABS_API_KEY" data-input="setup-eleven-key">Save</button></span>
+          <p class="note">Skip this and Buddy uses a free offline voice instead. <a href="#" id="setup-skip-eleven">Skip</a></p>
+        </div>
+        <div class="setup-step" id="setup-groq">
+          <p><b>3. Groq key (free, optional: helps Buddy tell when you're talking to it).</b> Open <a href="https://console.groq.com/keys" target="_blank" rel="noopener">console.groq.com/keys</a>,
+            sign in (Google is fine), click <i>Create API Key</i>, then copy the key and paste it here:</p>
+          <span class="row"><input type="password" id="setup-groq-key" placeholder="gsk_…" autocomplete="off"><button class="btn primary small" data-save-key="GROQ_API_KEY" data-input="setup-groq-key">Save</button></span>
+          <p class="note">Skip this and Buddy uses simple phrase rules instead. <a href="#" id="setup-skip-groq">Skip</a></p>
+        </div>
+      </div>
+      <ol class="chat" id="chat" aria-live="polite"></ol>
+  </div>
+</main>
+
+<footer class="dock">
+  <div class="ring-banner" id="ring-banner" hidden>
+    <span class="ring-bell" aria-hidden="true"></span>
+    <span id="ring-text">Alarm</span>
+    <button class="btn" id="ring-snooze">Snooze</button>
+    <button class="btn primary" id="ring-stop">Stop</button>
+  </div>
+  <form class="composer" id="ask-form" autocomplete="off">
+    <button type="button" class="chip-toggle" id="handsfree" aria-pressed="false" title="Hands-free: say “hey buddy”">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10v4M8 6v12M12 3v18M16 7v10M20 10v4"/></svg><span>Hands-free</span>
+    </button>
+    <input id="ask" type="text" placeholder="Message Buddy" aria-label="Message">
+    <button type="button" class="round ghost" id="stop" aria-label="Stop talking" title="Stop"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="2"/></svg></button>
+    <button type="button" class="round ghost" id="ptt" aria-label="Hold to talk" title="Hold to talk (or hold Space)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z"/><path d="M19 11a7 7 0 0 1-14 0M12 18v3"/></svg></button>
+    <button type="submit" class="round primary send" aria-label="Send"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"/></svg></button>
+  </form>
+  <p class="hint" id="state-hint">Say “hey buddy” with hands-free on, hold the mic, or type.</p>
+</footer>
+
+<div class="scrim" id="scrim" hidden></div>
+<aside class="drawer" id="drawer" aria-label="Controls" aria-hidden="true">
+  <div class="drawer-head">
+    <h2>Controls</h2>
+    <button class="icon-round" id="drawer-close" aria-label="Close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+  </div>
+  <div class="conn" aria-label="Connections">
     <span class="pill" id="pill-server" data-ok="false">Server</span>
     <span class="pill" id="pill-device" data-ok="false" title="ESP32 desk unit">Desk unit</span>
     <span class="pill" id="pill-keys" data-ok="false">Keys</span>
   </div>
-</header>
-
-<main class="layout">
-  <section class="talk card" aria-label="Talk to Buddy">
-    <div class="setup-box" id="setup-box" hidden>
-      <h2>A few quick steps and Buddy is ready</h2>
-      <div class="setup-step" id="setup-claude">
-        <p><b>1. Claude key (needed: Buddy's brain).</b> Open <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">console.anthropic.com</a>,
-          sign in, add some credit under <i>Billing</i>, click <i>Create Key</i>, then copy the key and paste it here:</p>
-        <span class="row"><input type="password" id="setup-claude-key" placeholder="sk-ant-…" autocomplete="off"><button class="btn primary small" data-save-key="ANTHROPIC_API_KEY" data-input="setup-claude-key">Save</button></span>
-      </div>
-      <div class="setup-step" id="setup-eleven">
-        <p><b>2. ElevenLabs key (free plan, for the nice voice).</b> Open <a href="https://elevenlabs.io/app/developers/api-keys" target="_blank" rel="noopener">elevenlabs.io → API keys</a>,
-          sign up, click <i>Create Key</i> (if it asks about access, turn on <i>Text to Speech</i>), then copy and paste it here:</p>
-        <span class="row"><input type="password" id="setup-eleven-key" placeholder="sk_…" autocomplete="off"><button class="btn primary small" data-save-key="ELEVENLABS_API_KEY" data-input="setup-eleven-key">Save</button></span>
-        <p class="note">Skip this and Buddy uses a free offline voice instead. <a href="#" id="setup-skip-eleven">Skip</a></p>
-      </div>
-      <div class="setup-step" id="setup-groq">
-        <p><b>3. Groq key (free, optional: helps Buddy tell when you're talking to it).</b> Open <a href="https://console.groq.com/keys" target="_blank" rel="noopener">console.groq.com/keys</a>,
-          sign in (Google is fine), click <i>Create API Key</i>, then copy the key and paste it here:</p>
-        <span class="row"><input type="password" id="setup-groq-key" placeholder="gsk_…" autocomplete="off"><button class="btn primary small" data-save-key="GROQ_API_KEY" data-input="setup-groq-key">Save</button></span>
-        <p class="note">Skip this and Buddy uses simple phrase rules instead. <a href="#" id="setup-skip-groq">Skip</a></p>
-      </div>
-    </div>
-    <div class="stage">
-      <button class="orb" id="orb" data-state="offline" aria-label="Buddy status" title="Click to stop Buddy talking">
-        <span class="orb-ring"></span><span class="orb-core"></span>
-      </button>
-      <div class="stage-text">
-        <p class="state-label" id="state-label">Connecting…</p>
-        <p class="state-hint" id="state-hint">Say “hey buddy” with hands-free on, hold the talk button, or type below.</p>
-      </div>
-    </div>
-
-    <div class="meters" aria-label="Microphone">
-      <div class="meter"><span class="meter-name">Mic level</span><div class="bar"><i id="level-bar"></i></div><span class="meter-val" id="level-val">–</span></div>
-      <div class="meter"><span class="meter-name">“Hey buddy”</span><div class="bar"><i id="wake-bar"></i><b id="wake-thr"></b></div><span class="meter-val" id="wake-val">–</span></div>
-      <label class="source"><span>Meters show</span>
-        <select id="meter-source"><option value="me">this browser</option></select>
-      </label>
-    </div>
-
-    <div class="controls">
-      <button class="btn toggle" id="handsfree" aria-pressed="false">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-2.08A7 7 0 0 0 19 12h-2Z"/></svg>
-        <span>Hands-free</span>
-      </button>
-      <button class="btn primary" id="ptt">Hold to talk <kbd>Space</kbd></button>
-      <button class="btn ghost" id="stop">Stop</button>
-    </div>
-
-    <form class="ask" id="ask-form" autocomplete="off">
-      <input id="ask" type="text" placeholder="Type to Buddy… e.g. set a timer for 10 minutes" aria-label="Message">
-      <button class="btn" type="submit">Send</button>
-    </form>
-
-    <ol class="chat" id="chat" aria-live="polite"></ol>
-    <div class="ring-banner" id="ring-banner" hidden>
-      <span id="ring-text">Alarm</span>
-      <button class="btn" id="ring-snooze">Snooze</button>
-      <button class="btn primary" id="ring-stop">Stop</button>
-    </div>
-  </section>
-
-  <section class="side card">
-    <nav class="tabs" role="tablist">
-      <button role="tab" data-tab="alarms" aria-selected="true">Alarms</button>
-      <button role="tab" data-tab="memory">Memory</button>
-      <button role="tab" data-tab="weather">Weather</button>
-      <button role="tab" data-tab="settings">Settings</button>
-      <button role="tab" data-tab="activity">Activity</button>
-    </nav>
-
+  <nav class="tabs" role="tablist" aria-label="Sections">
+    <button role="tab" data-tab="alarms" aria-selected="true">Alarms</button>
+    <button role="tab" data-tab="memory" aria-selected="false">Memory</button>
+    <button role="tab" data-tab="weather" aria-selected="false">Weather</button>
+    <button role="tab" data-tab="settings" aria-selected="false">Settings</button>
+    <button role="tab" data-tab="activity" aria-selected="false">Activity</button>
+  </nav>
+  <div class="drawer-body">
     <div class="panel" id="panel-alarms" role="tabpanel">
+      <header class="panel-head"><h2>Alarms &amp; timers</h2><p>Everything Buddy will ring for. The desk unit keeps a copy, so they ring even if the laptop sleeps.</p></header>
       <form class="add-alarm" id="alarm-form">
         <select id="alarm-kind" aria-label="Type">
           <option value="alarm">Alarm</option><option value="timer">Timer</option><option value="reminder">Reminder</option>
@@ -110,6 +106,7 @@
     </div>
 
     <div class="panel" id="panel-memory" role="tabpanel" hidden>
+      <header class="panel-head"><h2>Memory</h2><p>What Buddy knows about you. Pinned things are never tidied away.</p></header>
       <form class="add-memory" id="memory-form">
         <input id="memory-text" type="text" placeholder="Something to remember, e.g. my sister is called Emma" aria-label="New memory">
         <button class="btn primary" type="submit">Remember</button>
@@ -123,6 +120,7 @@
     </div>
 
     <div class="panel" id="panel-weather" role="tabpanel" hidden>
+      <header class="panel-head"><h2>Weather</h2><p>Live from Open-Meteo for your home.</p></header>
       <p class="weather-spoken" id="weather-spoken">Loading…</p>
       <div class="days" id="weather-days"></div>
       <div class="rain" id="weather-rain" aria-label="Chance of rain, next 24 hours"></div>
@@ -130,6 +128,7 @@
     </div>
 
     <div class="panel settings" id="panel-settings" role="tabpanel" hidden>
+      <header class="panel-head"><h2>Settings</h2><p>Keys, voice, listening and brains.</p></header>
       <fieldset>
         <legend>API keys</legend>
         <label>Claude <span class="note">Buddy's brain (pay as you go)</span> <span class="keystate" id="key-claude"></span>
@@ -191,12 +190,19 @@
     </div>
 
     <div class="panel" id="panel-activity" role="tabpanel" hidden>
+      <header class="panel-head"><h2>Activity</h2><p>What Buddy is doing right now, and everything it heard.</p></header>
+      <section class="mic-box" aria-label="Microphone">
+        <div class="meter"><span class="meter-name">Mic</span><div class="bar"><i id="level-bar"></i></div><span class="meter-val" id="level-val">–</span></div>
+        <div class="meter"><span class="meter-name">“Hey buddy”</span><div class="bar"><i id="wake-bar"></i><b id="wake-thr"></b></div><span class="meter-val" id="wake-val">–</span></div>
+        <label class="source"><span>Meters show</span><select id="meter-source"><option value="me">this browser</option></select></label>
+      </section>
       <div class="status-grid" id="status-grid"></div>
       <ul class="log" id="log"></ul>
     </div>
-  </section>
-</main>
+  </div>
+</aside>
+
 <div class="toast" id="toast" role="status" hidden></div>
-<script src="/static/app.js"></script>
+<script src="/static/app.js?v=chat1"></script>
 </body>
 </html>
