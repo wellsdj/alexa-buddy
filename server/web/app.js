@@ -397,6 +397,7 @@ async function loadSettings() {
     if (input.type === "checkbox") input.checked = !!v;
     else input.value = Array.isArray(v) ? v.join(", ") : v ?? "";
   }
+  renderVoices();
   $("thr-out").textContent = Number(S.settings.wake_threshold).toFixed(2);
   $("vthr-out").textContent = Number(S.settings.wake_verify_threshold).toFixed(2);
   $("speed-out").textContent = Number(S.settings.voice_speed).toFixed(2) + "×";
@@ -430,6 +431,46 @@ function showKeys(keys) {
     : voice ? (keys.GROQ_API_KEY.set ? "All keys set" : "No Groq key: phrase rules decide when you're talking to Buddy")
     : "No ElevenLabs key: offline voice will be used";
 }
+// ---------------------------------------------------------------- voices
+function voiceRows() {
+  return [...document.querySelectorAll("#voice-list li")].map((li) => ({
+    name: li.querySelector(".v-name").value.trim(), id: li.querySelector(".v-id").value.trim() }));
+}
+function renderVoices() {
+  const list = $("voice-list");
+  const current = S.settings.elevenlabs_voice_id;
+  if (!S.voicesDirty || !list.children.length) {
+    let saved = (S.settings.voices || []).slice(0, 8);
+    if (!saved.some((v) => v.id)) saved = [{ name: "George", id: current }];
+    list.replaceChildren(...Array.from({ length: 8 }, (_, i) => {
+      const v = saved[i] || { name: "", id: "" };
+      return el("li", {},
+        el("button", { type: "button", class: "v-use", title: "Use this voice", "aria-label": `Use voice ${i + 1}`,
+                       onclick: () => useVoice(i) }, String(i + 1)),
+        el("input", { class: "v-name", type: "text", placeholder: "Name", value: v.name, "aria-label": `Voice ${i + 1} name`,
+                      oninput: () => (S.voicesDirty = true) }),
+        el("input", { class: "v-id", type: "text", placeholder: "Voice ID", value: v.id, "aria-label": `Voice ${i + 1} ID`,
+                      spellcheck: "false", oninput: () => (S.voicesDirty = true) }));
+    }));
+  }
+  for (const li of list.children) li.classList.toggle("active", !!current && li.querySelector(".v-id").value.trim() === current);
+}
+async function saveVoices(extra = {}) {
+  const voices = voiceRows().filter((v) => v.id);
+  await api("/api/settings", { method: "POST", body: { voices, ...extra } });
+  S.voicesDirty = false;
+}
+async function useVoice(i) {
+  const v = voiceRows()[i];
+  if (!v.id) { toast("Paste a voice ID into that row first"); return; }
+  try {
+    await saveVoices({ elevenlabs_voice_id: v.id });
+    S.settings.elevenlabs_voice_id = v.id;
+    renderVoices();
+    toast(`Now using ${v.name || "voice " + (i + 1)}`);
+  } catch (err) { toast("Couldn't save: " + err.message); }
+}
+
 async function saveSetting(input) {
   const key = input.dataset.setting;
   const value = input.type === "checkbox" ? input.checked : input.value;
@@ -635,6 +676,9 @@ function init() {
       } }, r.label))));
       if (!results.length) list.replaceChildren(el("li", { class: "note" }, "No matches."));
     } catch (err) { list.replaceChildren(el("li", { class: "note" }, err.message)); }
+  };
+  $("voices-save").onclick = async () => {
+    try { await saveVoices(); toast("Voices saved"); } catch (err) { toast("Couldn't save: " + err.message); }
   };
   $("voice-preview").onclick = async () => {
     try {

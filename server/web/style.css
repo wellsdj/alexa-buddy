@@ -345,3 +345,15 @@ input[type="range"]::-moz-range-thumb { width: 20px; height: 20px; border-radius
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+/* voices */
+.voice-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.voice-list li { display: grid; grid-template-columns: 40px minmax(0, 0.8fr) minmax(0, 1.4fr); gap: 6px; align-items: center; }
+.voice-list .v-use {
+  width: 40px; height: 44px; border: 0; border-radius: 12px; cursor: pointer;
+  background: var(--s2); color: var(--muted); font-weight: 700; font-size: 14px; transition: background 0.15s, color 0.15s;
+}
+.voice-list .v-use:hover { background: var(--s3); color: var(--ink); }
+.voice-list li.active .v-use { background: var(--ink); color: #000; }
+.voice-list li.active .v-name, .voice-list li.active .v-id { box-shadow: inset 0 0 0 1.5px var(--ink); }
+.voice-list .v-id { font-family: var(--mono); font-size: 12.5px; }

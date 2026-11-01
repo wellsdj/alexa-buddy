@@ -9,7 +9,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
-<link rel="stylesheet" href="/static/style.css?v=chat1">
+<link rel="stylesheet" href="/static/style.css?v=chat2">
 </head>
 <body>
 <header class="top">
@@ -82,6 +82,7 @@
     <button role="tab" data-tab="alarms" aria-selected="true">Alarms</button>
     <button role="tab" data-tab="memory" aria-selected="false">Memory</button>
     <button role="tab" data-tab="weather" aria-selected="false">Weather</button>
+    <button role="tab" data-tab="voices" aria-selected="false">Voices</button>
     <button role="tab" data-tab="settings" aria-selected="false">Settings</button>
     <button role="tab" data-tab="activity" aria-selected="false">Activity</button>
   </nav>
@@ -127,8 +128,25 @@
       <p class="note" id="weather-place"></p>
     </div>
 
+    <div class="panel settings" id="panel-voices" role="tabpanel" hidden>
+      <header class="panel-head"><h2>Voices</h2><p>Up to 8 ElevenLabs voices. Tap one to use it, or say “change your voice”, “next voice”, “use voice 3” or “use the George voice”.</p></header>
+      <fieldset>
+        <legend>Your voices</legend>
+        <ol class="voice-list" id="voice-list"></ol>
+        <p class="note">Find voice IDs in ElevenLabs: Voices, then the voice's menu, then <i>Copy voice ID</i>.</p>
+        <span class="row"><button class="btn primary small" id="voices-save" type="button">Save voices</button><button class="btn small" id="voice-preview">Preview voice</button></span>
+        <span class="note" id="voice-engine"></span>
+      </fieldset>
+      <fieldset>
+        <legend>How Buddy speaks</legend>
+        <label>Engine
+          <select data-setting="tts_engine"><option value="auto">Auto (ElevenLabs, then offline Piper)</option><option value="elevenlabs">ElevenLabs</option><option value="piper">Piper (offline, free)</option><option value="browser">Browser voice (this page only)</option></select></label>
+        <label>Speed <input data-setting="voice_speed" type="range" min="0.7" max="1.2" step="0.05"><output id="speed-out"></output></label>
+      </fieldset>
+    </div>
+
     <div class="panel settings" id="panel-settings" role="tabpanel" hidden>
-      <header class="panel-head"><h2>Settings</h2><p>Keys, voice, listening and brains.</p></header>
+      <header class="panel-head"><h2>Settings</h2><p>Keys, listening and brains.</p></header>
       <fieldset>
         <legend>API keys</legend>
         <label>Claude <span class="note">Buddy's brain (pay as you go)</span> <span class="keystate" id="key-claude"></span>
@@ -164,14 +182,6 @@
         <label class="check"><input data-setting="morning_briefing" type="checkbox"> Morning briefing after alarms</label>
       </fieldset>
       <fieldset>
-        <legend>Voice</legend>
-        <label>Engine
-          <select data-setting="tts_engine"><option value="auto">Auto (ElevenLabs, then offline Piper)</option><option value="elevenlabs">ElevenLabs</option><option value="piper">Piper (offline, free)</option><option value="browser">Browser voice (this page only)</option></select></label>
-        <label>ElevenLabs voice ID <input data-setting="elevenlabs_voice_id" type="text"></label>
-        <label>Speed <input data-setting="voice_speed" type="range" min="0.7" max="1.2" step="0.05"><output id="speed-out"></output></label>
-        <button class="btn small" id="voice-preview">Preview voice</button> <span class="note" id="voice-engine"></span>
-      </fieldset>
-      <fieldset>
         <legend>Brains</legend>
         <label>Everyday model (Claude) <input data-setting="claude_fast_model" type="text" list="claude-models"></label>
         <label>Deep-thinking model (Claude) <span class="note">used only after Buddy asks and you say yes</span>
@@ -203,6 +213,6 @@
 </aside>
 
 <div class="toast" id="toast" role="status" hidden></div>
-<script src="/static/app.js?v=chat1"></script>
+<script src="/static/app.js?v=chat2"></script>
 </body>
 </html>

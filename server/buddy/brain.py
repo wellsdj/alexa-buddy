@@ -122,6 +122,11 @@ TOOLS = [
         "parameters": {"type": "object", "properties": {
             "level": {"type": "integer"}, "change": {"type": "integer"}}}}},
     {"type": "function", "function": {
+        "name": "switch_voice", "description": "Change the voice you speak with, among the user's saved voices. "
+                                               "step 1 = next, -1 = previous; or a 1-based number; or a voice name.",
+        "parameters": {"type": "object", "properties": {
+            "step": {"type": "integer"}, "number": {"type": "integer"}, "name": {"type": "string"}}}}},
+    {"type": "function", "function": {
         "name": "web_search", "description": "Search the web for current or factual info (news, sport, prices, opening times, events).",
         "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}},
     {"type": "function", "function": {
@@ -130,7 +135,7 @@ TOOLS = [
         "parameters": {"type": "object", "properties": {"reason": {"type": "string"}}}}},
 ]
 ACTION_TOOLS = {"set_alarm", "set_timer", "set_reminder", "cancel_alarm", "remember", "forget",
-                "update_memory", "clear_memory", "set_volume"}
+                "update_memory", "clear_memory", "set_volume", "switch_voice"}
 
 SYSTEM = """You are {name}, {user_ref} voice assistant. You live in {user_ref} bedroom and you've known \
 {user_obj} for a while: you're a friend, not a gadget or a servant. Everything you say is spoken aloud.
@@ -149,7 +154,7 @@ Now: {now}. Home: {place}.
 What you remember about the user (numbers are ids for editing):
 {memories}
 Rules:
-- Use tools for alarms, timers, reminders, weather, memory and volume. Times are 24h HH:MM local.
+- Use tools for alarms, timers, reminders, weather, memory, volume and changing your voice. Times are 24h HH:MM local.
 - If a time or detail is missing or ambiguous, ask one short question.
 - "Remember ..." means use remember. To forget or change a memory, use forget or update_memory with its id.
 - Before clear_memory, ask the user to confirm; only call it with confirmed=true after they say yes.
@@ -274,6 +279,8 @@ class Brain:
             text, nxt = self.memory.spoken_list(conv.pager)
             conv.pager = nxt
             return Reply(text, intent="more_memory")
+        if n == "voice":
+            return self._switch_voice(a)
         if n == "volume":
             level = a["level"] if "level" in a else self.volume + a.get("delta", 0)
             self.volume = max(0, min(10, level))
@@ -320,6 +327,29 @@ class Brain:
             al = self.alarms.add_alarm(a["time"], a.get("repeat") or None, a["text"], a.get("date"), kind="reminder")
             return Reply(self.alarms.confirm_text(al), intent=n)
         return None
+
+    def _switch_voice(self, a: dict) -> Reply:
+        voices = [v for v in (self.settings["voices"] or []) if isinstance(v, dict) and (v.get("id") or "").strip()]
+        if len(voices) < 2 and not a.get("name"):
+            return Reply("You've only got one voice set up. Add more in Controls, under Voices.", intent="voice")
+        current = next((i for i, v in enumerate(voices) if v["id"].strip() == self.settings["elevenlabs_voice_id"]), -1)
+        if "number" in a:
+            if not 1 <= a["number"] <= len(voices):
+                return Reply(f"I've only got {len(voices)} voices.", intent="voice")
+            i = a["number"] - 1
+        elif "name" in a:
+            want = a["name"].lower().strip()
+            i = next((j for j, v in enumerate(voices) if (v.get("name") or "").lower().strip() == want), None)
+            if i is None:
+                i = next((j for j, v in enumerate(voices) if want in (v.get("name") or "").lower()), None)
+            if i is None:
+                return Reply(f"I haven't got a voice called {a['name']}.", intent="voice")
+        else:
+            i = (current + a.get("step", 1)) % len(voices)
+        v = voices[i]
+        self.settings.update({"elevenlabs_voice_id": v["id"].strip()})
+        name = (v.get("name") or "").strip()
+        return Reply(f"How's this? This is {name}." if name else f"How's this? This is voice {i + 1}.", intent="voice")
 
     def _list_alarms_spoken(self, kind: str | None = None) -> str:
         now = time.time()
@@ -485,6 +515,10 @@ class Brain:
                 self.volume = max(0, min(10, level))
                 self.settings.update({"volume": self.volume})
                 return f"volume {self.volume}", f"Volume {self.volume}.", [{"type": "volume", "level": self.volume}]
+            if name == "switch_voice":
+                args = {k: a[k] for k in ("number", "name") if a.get(k)} or {"step": int(a.get("step") or 1)}
+                r = self._switch_voice(args)
+                return r.text, r.text, []
             if name == "web_search":
                 return await self.llm.web_search(a.get("query", "")), "", []
             if name == "think_harder":

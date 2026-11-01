@@ -35,7 +35,8 @@ DEFAULTS: dict[str, Any] = {
     "claude_fast_model": "claude-haiku-5-5",
     "claude_smart_model": "claude-haiku-5-5",
     "tts_engine": "auto",  # auto | elevenlabs | piper | browser
-    "elevenlabs_voice_id": "JBFqnCBsd6RMkjVDRZzb",  # "George": warm British male, a premade voice
+    "elevenlabs_voice_id": "JBFqnCBsd6RMkjVDRZzb",  # the voice in use; "George": warm British male
+    "voices": [],  # up to 8 of {"name": ..., "id": ...}; "change your voice" cycles through them
     "elevenlabs_model": "eleven_flash_v2_5",
     "voice_speed": 1.0,
     "piper_voice": "",  # path to a Piper .onnx voice; empty = first one found in data/voices
@@ -102,6 +103,9 @@ class Settings:
                     v = float(v)
                 elif isinstance(default, int):
                     v = int(v)
+                elif k == "voices":
+                    v = [{"name": str(x.get("name", "")).strip()[:40], "id": str(x.get("id", "")).strip()[:64]}
+                         for x in (v or []) if isinstance(x, dict)][:8]
                 elif isinstance(default, list) and isinstance(v, str):
                     v = [s.strip() for s in v.split(",") if s.strip()]
                 self._values[k] = v

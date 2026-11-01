@@ -77,6 +77,10 @@ def match(text: str, now: datetime, context: dict | None = None) -> Intent | Non
     if re.fullmatch(r"(stop|cancel|never ?mind|nevermind|nothing|forget it|no thanks?|nope|no)", t):
         return Intent("stop")
 
+    voice = _voice(t)
+    if voice:
+        return voice
+
     if re.fullmatch(r"(thanks|thank you|cheers|ta|thank you (buddy|so much|very much)|nice one|thanks (mate|buddy))", t):
         return Intent("thanks")
     if re.fullmatch(r"(say that again|repeat( that)?|what did you (just )?say|pardon|sorry|come again|"
@@ -119,6 +123,27 @@ def match(text: str, now: datetime, context: dict | None = None) -> Intent | Non
         hit = fn(t, now)
         if hit:
             return hit
+    return None
+
+
+def _voice(t: str) -> Intent | None:
+    """Switching between the voices saved in Controls > Voices."""
+    t = re.sub(r"^(buddy|ok|okay|hey)[ ,]+", "", t)
+    if re.fullmatch(r"(go back to |use |switch to |change to )?(your |the )?(previous|last|old|other) voice( again)?|"
+                    r"(go )?back to (your |the )?(previous|last|old|other) voice", t):
+        return Intent("voice", {"step": -1})
+    m = re.fullmatch(r"(use|switch to|change to|go to|try) voice (number )?(\w+)", t)
+    if m:
+        n = words_to_digits(m.group(3))
+        if n.isdigit():
+            return Intent("voice", {"number": int(n)})
+    if re.fullmatch(r"((can you |could you |please )?(change|switch|swap|cycle|rotate|try) (your |the |a |to (a |the )?)?"
+                    r"(different |new |next |another )?voices?( please| again| now)?|(next|another|different|new) voice( please)?|"
+                    r"(use|try) (a |another |the next )?(different |other |new )voice( please)?|change it up)", t):
+        return Intent("voice", {"step": 1})
+    m = re.fullmatch(r"(use|switch to|change to|go to|try) (the )?(.+?)(?:'s)? voice", t)
+    if m and m.group(3) not in ("a", "your", "my", "different", "another", "new", "next", "other"):
+        return Intent("voice", {"name": m.group(3)})
     return None
 
 
