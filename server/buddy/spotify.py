@@ -26,7 +26,7 @@ log = logging.getLogger("buddy.spotify")
 AUTH = "https://accounts.spotify.com/authorize"
 TOKEN = "https://accounts.spotify.com/api/token"
 API = "https://api.spotify.com/v1"
-SCOPES = "user-read-playback-state user-modify-playback-state user-read-currently-playing"
+SCOPES = "user-read-playback-state user-modify-playback-state user-read-currently-playing user-read-private user-read-email"
 
 
 class SpotifyError(Exception):
@@ -67,7 +67,8 @@ class Spotify:
 
     def status(self) -> dict:
         return {"client_id": bool(self.client_id), "connected": self.connected,
-                "account": self.state.get("account", ""), "last_error": self.last_error}
+                "account": self.state.get("account", ""), "email": self.state.get("email", ""),
+                "plan": self.state.get("plan", ""), "last_error": self.last_error}
 
     def disconnect(self) -> None:
         self.state = {}
@@ -96,8 +97,10 @@ class Spotify:
             raise SpotifyError(f"Spotify said no ({r.status_code}): {r.text[:200]}")
         self._store_token(r.json())
         try:
-            me = await self._api("GET", "/me")
-            self.state["account"] = (me or {}).get("display_name") or (me or {}).get("id", "")
+            me = await self._api("GET", "/me") or {}
+            self.state["account"] = me.get("display_name") or me.get("id", "")
+            self.state["email"] = me.get("email", "")
+            self.state["plan"] = me.get("product", "")  # what Spotify says: "premium", "free", ...
             self._save()
         except SpotifyError:
             pass
@@ -142,7 +145,9 @@ class Spotify:
             if reason == "NO_ACTIVE_DEVICE" or r.status_code == 404:
                 raise SpotifyError("NO_DEVICE")
             if r.status_code == 403 and "PREMIUM" in (reason + msg).upper():
-                raise SpotifyError("Spotify only lets me control the music on a Premium account.")
+                who = self.state.get("email") or self.state.get("account") or "this account"
+                raise SpotifyError(f"Spotify says {who} isn't Premium, so it won't let me control the music. "
+                                   "Check Controls, Settings, Spotify to see which account I'm logged in as.")
             raise SpotifyError(f"Spotify error {r.status_code}: {msg or reason}")
         return r.json()
 

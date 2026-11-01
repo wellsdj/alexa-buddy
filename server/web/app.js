@@ -499,7 +499,9 @@ async function loadStatus() {
   sel.value = [...sel.options].some((o) => o.value === cur) ? cur : "me";
   showKeys(st.keys);
   const sp = st.spotify || {};
-  $("spotify-status").textContent = sp.connected ? `Connected${sp.account ? " as " + sp.account : ""}.`
+  $("spotify-status").textContent = sp.connected
+    ? `Connected as ${sp.account || "?"}${sp.email ? " (" + sp.email + ")" : ""}. Spotify says this account is: ${sp.plan || "unknown, press Connect again"}.`
+      + (sp.last_error ? ` Last Spotify error: ${sp.last_error}.` : "")
     : sp.client_id ? "Client ID saved. Press Connect Spotify." : "Not connected.";
   $("spotify-disconnect").hidden = !sp.connected;
   const dl = $("model-list");
