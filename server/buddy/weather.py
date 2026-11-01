@@ -6,6 +6,7 @@ high and low, and whether it will rain and roughly when.
 from __future__ import annotations
 
 import logging
+import re
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -33,6 +34,59 @@ WMO = {
 }
 WET_CODES = {51, 53, 55, 56, 57, 61, 63, 65, 66, 67, 80, 81, 82, 95, 96, 99}
 LIKELY, POSSIBLE, WET_MM = 50, 30, 0.3
+
+
+DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+HOME_WORDS = {"", "home", "here", "my house", "my place", "richmond", "outside"}
+NUMBERS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9,
+           "ten": 10}
+
+
+def day_indices(when: str, now: datetime) -> list[int] | None:
+    """Which forecast days (0 = today) a phrase means. None = further ahead than 10 days."""
+    t = (when or "").lower()
+    m = re.search(r"(\d{4})-(\d{2})-(\d{2})", t)
+    if m:
+        ahead = (datetime(int(m[1]), int(m[2]), int(m[3])).date() - now.date()).days
+        return [ahead] if 0 <= ahead <= 10 else None
+    m = re.search(r"\b(?:next|coming|following) (\d+|\w+) days\b|\b(\d+|\w+)[- ]day (?:forecast|outlook)", t)
+    if m:
+        n = m.group(1) or m.group(2)
+        n = int(n) if n.isdigit() else NUMBERS.get(n, 7)
+        if n > 10:
+            return None
+        return list(range(0, n + 1))
+    if re.search(r"\b(fortnight|ten days|10 days|two weeks)\b", t):
+        return list(range(0, 11))
+    m = re.search(r"\bin (\d+|\w+) days?\b", t)
+    if m:
+        n = int(m.group(1)) if m.group(1).isdigit() else NUMBERS.get(m.group(1))
+        if n is not None:
+            return [n] if n <= 10 else None
+    m = re.search(r"\bin (a|one|\d+|two|three|four) weeks?\b", t)
+    if m:
+        n = {"a": 1, "one": 1, "two": 2, "three": 3, "four": 4}.get(m.group(1)) or int(m.group(1))
+        return [7] if n == 1 else None
+    if re.search(r"\b(week|week ahead|7 days|seven days)\b", t):
+        return list(range(0, 7))
+    if "weekend" in t:
+        if now.weekday() == 6:  # Sunday: "the weekend" is today, "next weekend" the coming one
+            return [6, 7] if "next weekend" in t else [0]
+        sat = (5 - now.weekday()) % 7
+        if "next weekend" in t and now.weekday() >= 5:
+            sat += 7
+        return [i for i in (sat, sat + 1) if i <= 10] or None
+    if "day after tomorrow" in t:
+        return [2]
+    if "tomorrow" in t:
+        return [1]
+    for i, name in enumerate(DAYS):
+        if re.search(rf"\b{name.lower()}\b", t):
+            ahead = (i - now.weekday()) % 7
+            if ahead == 0 and re.search(rf"\bnext {name.lower()}\b", t):
+                ahead = 7
+            return [ahead]
+    return [0]
 
 
 def hour_label(h: int) -> str:
@@ -96,22 +150,27 @@ class Weather:
         self.settings = settings
         self.client = client or httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=5.0))
         self._cache: tuple[float, tuple, dict] | None = None
+        self._places: dict[tuple, tuple[float, dict]] = {}  # (lat, lon, tz) -> (fetched at, forecast)
         self.last_error = ""
 
     def _where(self) -> tuple:
         s = self.settings
         return (round(float(s["latitude"]), 4), round(float(s["longitude"]), 4), s["timezone"])
 
-    async def fetch(self, force: bool = False) -> dict | None:
-        where = self._where()
-        if not force and self._cache and self._cache[1] == where and time.time() - self._cache[0] < 600:
-            return self._cache[2]
+    async def fetch(self, force: bool = False, where: tuple | None = None) -> dict | None:
+        """Forecast for home, or for where=(lat, lon, timezone). Today plus 10 days."""
+        home = where is None
+        where = where or self._where()
+        hit = self._places.get(where)
+        if not force and hit and time.time() - hit[0] < 600:
+            return hit[1]
         params = {
             "latitude": where[0], "longitude": where[1], "timezone": where[2],
             "current": "temperature_2m,apparent_temperature,weather_code,precipitation,wind_speed_10m,relative_humidity_2m",
             "hourly": "temperature_2m,precipitation_probability,precipitation,weather_code",
-            "daily": "weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,precipitation_sum,sunrise,sunset",
-            "forecast_days": 7,
+            "daily": "weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,precipitation_sum,"
+                     "sunrise,sunset,wind_speed_10m_max",
+            "forecast_days": 11,
             "wind_speed_unit": "mph",
             "temperature_unit": self.settings["temperature_unit"],
         }
@@ -119,14 +178,17 @@ class Weather:
             r = await self.client.get(FORECAST_URL, params=params)
             r.raise_for_status()
             data = r.json()
-            self._cache = (time.time(), where, data)
-            self.last_error = ""
+            self._places[where] = (time.time(), data)
+            if home:
+                self._cache = (time.time(), where, data)
+                self.last_error = ""
             return data
         except (httpx.HTTPError, ValueError) as e:
-            self.last_error = str(e)
+            if home:
+                self.last_error = str(e)
             log.warning("weather fetch failed: %s", e)
             # A stale forecast beats no forecast.
-            return self._cache[2] if self._cache else None
+            return hit[1] if hit else None
 
     async def geocode(self, name: str) -> list[dict]:
         r = await self.client.get(GEOCODE_URL, params={"name": name, "count": 8, "language": "en", "format": "json"})
@@ -166,13 +228,14 @@ class Weather:
             "windows": rain_windows(hours, probs, mm),
         }
 
-    def summarize(self, data: dict, day: str = "today", now: datetime | None = None) -> dict:
-        tz = ZoneInfo(self.settings["timezone"])
+    def summarize(self, data: dict, day: str = "today", now: datetime | None = None, place: str | None = None,
+                  tz: str | None = None, idx: int | None = None) -> dict:
+        tz = ZoneInfo(tz or self.settings["timezone"])
         now = now or datetime.now(tz)
         cur = data.get("current", {})
-        idx = {"today": 0, "tomorrow": 1}.get(day, 0)
+        idx = {"today": 0, "tomorrow": 1}.get(day, 0) if idx is None else idx
         d = self._day(data, idx, now)
-        place = self.settings["location_name"].split(",")[0]
+        place = place or self.settings["location_name"].split(",")[0]
         unit = "degrees"
         parts = []
         if idx == 0 and cur:
@@ -187,7 +250,8 @@ class Weather:
             parts.append(line + ".")
             parts.append(f"Today's high is {d['high']} and the low is {d['low']}.")
         else:
-            parts.append(f"Tomorrow in {place}: {d['condition']}, with a high of {d['high']} and a low of {d['low']}.")
+            when = "Tomorrow" if idx == 1 else DAYS[datetime.strptime(d["date"], "%Y-%m-%d").weekday()]
+            parts.append(f"{when} in {place}: {d['condition']}, with a high of {d['high']} and a low of {d['low']}.")
         raining_now = idx == 0 and (cur.get("weather_code") in WET_CODES or (cur.get("precipitation") or 0) > 0.1)
         wins = d["windows"]
         if raining_now:
@@ -211,7 +275,7 @@ class Weather:
             "today": {k: v for k, v in d.items() if k != "windows"} | {
                 "rain_windows": [w.__dict__ for w in wins]},
             "current": cur,
-            "place": self.settings["location_name"],
+            "place": place,
         }
 
     async def spoken(self, day: str = "today") -> str:
@@ -219,6 +283,43 @@ class Weather:
         if not data:
             return "I can't reach the weather service right now."
         return self.summarize(data, day)["spoken"]
+
+    async def report(self, place: str = "", when: str = "today") -> str:
+        """What the weather apps show, said out loud: any place (empty = home), any day up to 10 days
+        ahead ("friday", "the weekend", "in 5 days", "this week", "next 10 days", "2026-11-08")."""
+        where, label, tzname = None, None, self.settings["timezone"]
+        if place and place.strip().lower() not in HOME_WORDS:
+            try:
+                found = await self.geocode(place.strip())
+            except (httpx.HTTPError, ValueError):
+                found = []
+            if not found:
+                return f"I couldn't find a place called {place}."
+            f = found[0]
+            where = (round(float(f["latitude"]), 4), round(float(f["longitude"]), 4), f["timezone"])
+            label, tzname = f["label"].split(",")[0], f["timezone"]
+        data = await self.fetch(where=where)
+        if not data:
+            return "I can't reach the weather service right now."
+        now = datetime.now(ZoneInfo(tzname))
+        days = day_indices(when, now)
+        if days is None:
+            return "I can only see the weather up to 10 days ahead."
+        label = label or self.settings["location_name"].split(",")[0]
+        if len(days) == 1:
+            return self.summarize(data, now=now, place=label, tz=tzname, idx=days[0])["spoken"]
+        d = data["daily"]
+        bits = []
+        for i in days:
+            if i >= len(d["time"]):
+                break
+            name = "today" if i == 0 else "tomorrow" if i == 1 else DAYS[datetime.strptime(d["time"][i], "%Y-%m-%d").weekday()]
+            rain = d["precipitation_probability_max"][i] or 0
+            bit = f"{name} {WMO.get(d['weather_code'][i], 'mixed')}, {round(d['temperature_2m_max'][i])} and {round(d['temperature_2m_min'][i])}"
+            if rain >= 40:
+                bit += f", {rain} percent chance of rain"
+            bits.append(bit)
+        return f"In {label}: " + "; ".join(bits) + "."
 
     async def context_line(self) -> str:
         """Compact snapshot for the system prompt so Buddy always knows the weather."""

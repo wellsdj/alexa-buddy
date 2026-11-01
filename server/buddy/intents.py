@@ -194,14 +194,15 @@ def _weather(t: str) -> Intent | None:
                          r"sunny|snow|cold out|warm out|coat|jacket)\b", t)
     if not weathery:
         return None
-    # Somewhere other than home? Let the model (with web search) handle it.
-    if re.search(r"\b(in|at|for) (?!the\b|my\b|richmond\b|here\b|today\b|tomorrow\b|tonight\b|"
-                 r"the morning|the afternoon|the evening|\d)[a-z]{3,}", t):
-        return None
-    if re.search(r"\b(week|weekend|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b", t):
-        return None
-    day = "tomorrow" if "tomorrow" in t else "today"
-    return Intent("weather", {"day": day})
+    # Any place ("in Paris", "for Manchester") and any day up to 10 days ahead.
+    m = re.search(r"\b(?:in|for|at|over) (?!the (?:morning|afternoon|evening|week|weekend)\b|the next\b|my\b|here\b|"
+                  r"today\b|tomorrow\b|tonight\b|this\b|next\b|a\b|\d)([a-z][a-z'. -]*?)"
+                  r"(?= (?:today|tomorrow|tonight|this|next|on|over|for|at|in \d|in (?:a|one|two|three|four|five|six|"
+                  r"seven|eight|nine|ten) days?|the weekend|the week)\b|$)", t)
+    place = m.group(1).strip() if m else ""
+    if place in ("the", "it", "there", "general", "a bit", "a while") or len(place) < 3:
+        place = ""
+    return Intent("weather", {"place": place, "when": t})
 
 
 def _timer(t: str, now: datetime) -> Intent | None:

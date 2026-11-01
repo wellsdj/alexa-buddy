@@ -87,6 +87,7 @@ class Session:
         self.inbox: asyncio.Queue = asyncio.Queue(maxsize=400)
         self.worker: asyncio.Task | None = None
         self.speak_task: asyncio.Task | None = None
+        self.relistened = False  # already gave them a second go after not making out their words
         self.interim_task: asyncio.Task | None = None  # a "one sec, I'll check" line still playing
         self.seq = 0
         self.playback_done = asyncio.Event()
@@ -614,19 +615,48 @@ class Hub:
                 return
             await self._accept(s, text, stt_ms)
             return
+        if not text.strip() and speech_s >= 0.3:
+            text = await self._second_listen(audio, speech_s)  # louder, trimmed: often enough
         if not text.strip():
-            if speech_s < 1.0:  # a cough, a short noise, or Buddy's own echo: just go quiet
-                self.record("nothing_heard", session=s.id, speech_s=round(speech_s, 2))
-                await s.set_state("idle")
+            self.record("nothing_heard", session=s.id, speech_s=round(speech_s, 2))
+            if speech_s >= 0.6 and not s.relistened:
+                # Someone said something we couldn't make out: no apology, just keep listening
+                # (the light stays on) so they can say it again without "hey buddy".
+                s.relistened = True
+                await s.start_listening(earcon=False, no_speech_s=6.0)
                 return
-            await self.announce(s, "Sorry, I missed that one. Mind saying it again?")
+            s.relistened = False
+            await s.set_state("idle")
             return
+        s.relistened = False
         if not intents.strip_wake(text):  # just "hey buddy" and a pause: wait for the question
             await s.start_listening(earcon=False, no_speech_s=6.0)
             return
         await self.respond(s, text, stt_ms=stt_ms)
 
-    async def _accept(self, s: Session, text: str, stt_ms: int) -> None:
+    async def _second_listen(self, audio: np.ndarray, speech_s: float) -> str:
+        """Speech was heard but no words came out: try again with the quiet start and end trimmed
+        off and the level brought up, which is often all the ears needed."""
+        x = audio.astype(np.float64)
+        frame = SR // 50  # 20 ms
+        n = len(x) // frame
+        if n < 5:
+            return ""
+        rms = np.sqrt(np.mean(x[: n * frame].reshape(n, frame) ** 2, axis=1))
+        loud = np.where(rms > max(30.0, rms.max() * 0.08))[0]
+        if not len(loud):
+            return ""
+        a, b = max(0, loud[0] - 10) * frame, min(n, loud[-1] + 15) * frame  # keep 0.2 s before, 0.3 s after
+        x = x[a:b]
+        level = np.sqrt(np.mean(x ** 2)) or 1.0
+        x = np.clip(x * min(8.0, (32768 * 10 ** (-20 / 20)) / level), -32000, 32000).astype(np.int16)
+        try:
+            text = await self.stt.transcribe(x, "", max(speech_s, 0.5))
+        except STTError:
+            return ""
+        if text.strip():
+            self.record("heard_on_second_try", heard=text)
+        return text
         """Something heard silently turned out to be for Buddy: light up and answer it."""
         self.set_awake(True)
         await s.earcon("wake")

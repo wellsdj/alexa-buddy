@@ -123,9 +123,12 @@ TOOLS = [
             "ids": {"type": "array", "items": {"type": "string"}},
             "all_of_kind": {"type": "string", "description": "alarm, timer, reminder or all"}}}}},
     {"type": "function", "function": {
-        "name": "get_weather", "description": "Forecast for the user's home: today, tomorrow or the week ahead.",
+        "name": "get_weather", "description": "Weather forecast for any place (default: the user's home), for any "
+                                              "day up to 10 days ahead, or a range of days.",
         "parameters": {"type": "object", "properties": {
-            "day": {"type": "string", "enum": ["today", "tomorrow", "week"]}}}}},
+            "place": {"type": "string", "description": "town or city, e.g. 'Paris' or 'Manchester'; empty = home"},
+            "when": {"type": "string", "description": "e.g. 'today', 'tomorrow', 'friday', 'the weekend', "
+                                                      "'in 5 days', 'this week', 'next 10 days', or YYYY-MM-DD"}}}}},
     {"type": "function", "function": {
         "name": "remember", "description": "Save a lasting fact or preference about the user.",
         "parameters": {"type": "object", "properties": {
@@ -366,7 +369,7 @@ class Brain:
                 return Reply(f"You don't have any {what}s set.", intent=n)
             return Reply(f"Done, I've cancelled {count} {what}{'s' if count != 1 else ''}.", intent=n)
         if n == "weather":
-            return Reply(await self.weather.spoken(a.get("day", "today")), intent=n)
+            return Reply(await self.weather.report(a.get("place", ""), a.get("when", a.get("day", "today"))), intent=n)
         if n == "timer":
             al = self.alarms.add_timer(a["seconds"], a.get("label", ""))
             return Reply(self.alarms.confirm_text(al), intent=n)
@@ -609,10 +612,8 @@ class Brain:
                 c = "Cancelled " + " and ".join(self.alarms.describe(g) for g in gone) + "."
                 return "cancelled", c, []
             if name == "get_weather":
-                day = a.get("day", "today")
-                if day == "week":
-                    return await self._week_weather(), "", []
-                return await self.weather.spoken(day), "", []
+                when = a.get("when") or a.get("day") or "today"
+                return await self.weather.report(a.get("place", ""), when), "", []
             if name == "remember":
                 m, created = self.memory.add(a["text"], a.get("category", "other"), pinned=True, source="user")
                 return f"saved as #{m.id}", "Got it, I'll remember that." if created else "I already knew that, I've updated it.", []
