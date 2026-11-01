@@ -1,6 +1,6 @@
 """Is this sentence for Buddy?
 
-While Buddy is on it transcribes everything said near the desk unit (on this computer), and
+While Buddy is on it transcribes everything said near the desk unit (transcribed on this computer), and
 asks Groq's free model whether each sentence is meant for Buddy, given what was said just
 before. So "let me ask you a question" works without a wake word, while "my buddy Dave said..."
 or a chat between other people is ignored. Without a Groq key, or when Groq is busy, simple
@@ -26,7 +26,7 @@ DIRECT = re.compile(
     r"^\W*((hey|ok|okay|hi)\W+)?buddy\b|\blet me ask you\b|\b(a )?(quick )?question for you\b|"
     r"\bcan i ask you\b|\bare you (there|listening|awake)\b", re.I)
 
-JUDGE = """You decide whether a sentence heard by a desk voice assistant called {name} was said TO it.
+JUDGE = """You decide whether a sentence heard by a bedroom voice assistant called {name} was said TO it.
 People nearby also talk to each other, watch TV and play music, and may say "buddy" in other ways.
 Reply with JSON only: {{"for_assistant": true}} or {{"for_assistant": false}}.
 True only when the speaker is clearly talking to the assistant, for example:

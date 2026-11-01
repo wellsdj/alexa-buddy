@@ -133,6 +133,7 @@ def create_app(settings: Settings | None = None, http=None, claude_http=None, st
             log.info("socket closed: %s", e)
         finally:
             hub.remove(s)
+            hub.device_left(s)
             hub.record("disconnect", session=s.id, role=s.role)
             await hub.broadcast_ui({"type": "event", "kind": "sessions"})
 

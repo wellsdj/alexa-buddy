@@ -21,12 +21,21 @@ CLIPS = Path(os.environ.get("BUDDY_TEST_CLIPS", "/nonexistent"))
 pytestmark = pytest.mark.skipif(not CLIPS.exists(), reason="set BUDDY_TEST_CLIPS to a folder of test clips")
 
 
+CUES: list[str] = []  # the cues Buddy asked for this test ("wake" = it lit up), even though they're silent
+
+
 @pytest.fixture(autouse=True)
-def plain_beep(monkeypatch):
-    """Most tests wait for "Buddy starts speaking"; the custom listening sound would look like
-    that, so they use the board's own beep. test_listening_sound covers the sound itself."""
+def watch_cues(monkeypatch):
     import buddy.hub
-    monkeypatch.setattr(buddy.hub, "WAKE_SOUND", b"")
+    CUES.clear()
+    original = buddy.hub.Session.earcon
+
+    async def spy(self, name):
+        CUES.append(name)
+        await original(self, name)
+
+    monkeypatch.setattr(buddy.hub.Session, "earcon", spy)
+    monkeypatch.setattr(buddy.hub, "STARTUP_SOUND", b"")  # tested on its own below
 
 
 def clip(name: str) -> np.ndarray:
@@ -60,8 +69,8 @@ def test_hey_buddy_then_question_is_answered(settings, apis):
         stream(ws, audio)
         _, seen = recv_until(ws, lambda m: m.get("type") == "audio_start")
         kinds = [(m.get("type"), m.get("name") or m.get("state")) for m in seen if "type" in m]
-        assert ("earcon", "wake") in kinds and ("state", "listening") in kinds
-        assert ("state", "thinking") in kinds and ("earcon", "end") not in kinds  # no "heard you" beep
+        assert "wake" in CUES and ("state", "listening") in kinds and ("state", "thinking") in kinds
+        assert not any(k[0] == "earcon" for k in kinds)  # no beeps at all: the light shows it
         start = [m for m in seen if m.get("type") == "audio_start"][0]
         assert start["text"].startswith("Right now in Richmond")
         assert apis.stt_requests and apis.stt_requests[0]["has_wav"]
@@ -80,7 +89,7 @@ def test_similar_phrase_does_not_wake(settings, apis):
         ws.send_text(json.dumps({"type": "text", "text": "what time is it"}))  # a marker to stop reading at
         start, seen = recv_until(ws, lambda m: m.get("type") == "audio_start")
         assert start["text"].startswith("It's ")
-        assert not any(m.get("type") == "earcon" and m.get("name") == "wake" for m in seen)
+        assert "wake" not in CUES
 
 
 def test_borderline_wake_is_confirmed_by_transcript(settings, apis):
@@ -122,7 +131,8 @@ def wait_for_log(hub, event: str, timeout: float = 10.0) -> dict:
 
 
 def wake_earcons(seen) -> int:
-    return sum(1 for m in seen if m.get("type") == "earcon" and m.get("name") == "wake")
+    assert not any(m.get("type") == "earcon" for m in seen)  # never an actual beep
+    return CUES.count("wake")
 
 
 def test_question_without_wake_word_is_answered_in_context(settings, apis, claude):
@@ -205,8 +215,8 @@ def test_off_stops_room_listening_until_hey_buddy(settings, apis, claude):
         # 3) "Hey buddy" out of nowhere turns it back on.
         apis.transcripts = ["Hey buddy."]
         stream(ws, said("pos_hey_buddy__en-us-lessac-medium__0.9.wav", rng, before=1.5))
-        _, seen = recv_until(ws, lambda m: m.get("type") == "earcon" and m.get("name") == "wake")
-        assert hub.awake
+        recv_until(ws, lambda m: m.get("type") == "state" and m.get("state") == "listening")
+        assert hub.awake and "wake" in CUES
 
 
 def test_mid_sentence_hey_buddy_with_room_listening_off_is_judged_in_context(settings, apis, claude):
@@ -242,21 +252,20 @@ def test_hey_buddy_then_a_pause_waits_for_the_question(settings, apis, claude):
         assert start["text"].startswith("It's ")
 
 
-def test_listening_sound_plays_and_question_straight_after_still_works(settings, apis, monkeypatch):
+def test_startup_sound_plays_once_when_switched_on_not_on_reconnects(settings, apis, monkeypatch):
     import buddy.hub
-    monkeypatch.setattr(buddy.hub, "WAKE_SOUND", (np.ones(16000, dtype=np.int16) * 1000).tobytes())
-    rng = np.random.default_rng(0)
-    apis.transcripts = ["Hey buddy, what's the weather like?"]
+    monkeypatch.setattr(buddy.hub, "STARTUP_SOUND", (np.ones(16000, dtype=np.int16) * 1000).tobytes())
     app = create_app(settings, apis.client(), None, apis.stt())
-    audio = np.concatenate([room(1, rng), (clip("pos_hey_buddy_q__en-us-lessac-medium__0.9.wav") * 0.6).astype(np.int16),
-                            room(2.5, rng)])
-    with TestClient(app) as client, device(client) as ws:
-        ws.send_text(json.dumps({"type": "hello"}))
-        recv_until(ws, lambda m: m.get("type") == "alarms")
-        stream(ws, audio)
-        sound, seen = recv_until(ws, lambda m: m.get("type") == "audio_start")
-        assert sound["text"] == ""  # the listening sound, streamed as audio
-        assert not any(m.get("type") == "earcon" for m in seen)
-        reply, seen = recv_until(ws, lambda m: m.get("type") == "audio_start" and m.get("text"))
-        assert reply["text"].startswith("Right now in Richmond")
-        assert not any(m.get("type") == "earcon" for m in seen)  # and no beep before thinking
+
+    def connect(hello):
+        with device(client) as ws:
+            ws.send_text(json.dumps({"type": "hello", **hello}))
+            _, seen = recv_until(ws, lambda m: m.get("type") == "alarms")
+            ws.send_text(json.dumps({"type": "text", "text": "what time is it"}))
+            reply, more = recv_until(ws, lambda m: m.get("type") == "audio_start" and m.get("text"))
+            return [m for m in seen + more if m.get("type") == "audio_start" and not m.get("text")]
+
+    with TestClient(app) as client:
+        assert len(connect({"uptime": 3})) == 1  # just plugged in
+        assert connect({"uptime": 900}) == []  # a Wi-Fi blip an hour later: no sound
+        assert len(connect({})) == 0  # older board software, back within a minute: no sound

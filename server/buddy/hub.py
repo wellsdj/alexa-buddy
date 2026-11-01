@@ -52,9 +52,9 @@ from .weather import Weather
 log = logging.getLogger("buddy.hub")
 SR = 16000
 BYTES_PER_S = SR * 2
-# The "I'm listening" sound: 16 kHz mono 16-bit. Delete the file to get the board's beep back.
-_WAKE_FILE = Path(__file__).resolve().parent.parent / "sounds" / "wake.pcm"
-WAKE_SOUND = _WAKE_FILE.read_bytes() if _WAKE_FILE.exists() else b""
+# Played once when the desk unit is switched on: 16 kHz mono 16-bit.
+_STARTUP_FILE = Path(__file__).resolve().parent.parent / "sounds" / "startup.pcm"
+STARTUP_SOUND = _STARTUP_FILE.read_bytes() if _STARTUP_FILE.exists() else b""
 
 
 class Session:
@@ -79,7 +79,6 @@ class Session:
         self.mentioned = False  # the wake word fired somewhere inside the sentence being captured
         self.captured = 0  # samples heard since this capture started (not counting the pre-roll)
         self.quiet_until = 0.0  # don't take Buddy's own voice for someone talking
-        self.chime_until = 0.0  # the listening sound is still playing
         self.ptt = False
         self.follow = False
         self.inbox: asyncio.Queue = asyncio.Queue(maxsize=400)
@@ -114,20 +113,21 @@ class Session:
                                      "role": self.role, "state": state}, exclude=self)
 
     async def earcon(self, name: str) -> None:
-        if name == "end":
-            return  # heard you, now thinking: no sound
-        if name == "wake" and WAKE_SOUND:
-            # Your own "I'm listening" sound, streamed like speech (so it follows Buddy's volume).
-            self.seq = (self.seq + 1) % 256
-            seq = self.seq
-            await self.send_json({"type": "audio_start", "seq": seq, "rate": SR, "text": ""})
-            for i in range(0, len(WAKE_SOUND), 3200):
-                await self.send_audio(seq, WAKE_SOUND[i:i + 3200])
-            await self.send_json({"type": "audio_end", "seq": seq, "bytes": len(WAKE_SOUND)})
-            # Its echo in the mic isn't someone talking (plus a little for the trip there and back).
-            self.chime_until = time.time() + len(WAKE_SOUND) / BYTES_PER_S + 0.5
+        # No beeps when Buddy listens, finishes hearing you or can't hear you: the light shows it.
+        # Only alarm and reminder chimes still sound.
+        if name in ("chime",):
+            await self.send_json({"type": "earcon", "name": name})
+
+    async def play_startup_sound(self) -> None:
+        """The "I'm on" sound, streamed like speech so it follows Buddy's volume."""
+        if not STARTUP_SOUND:
             return
-        await self.send_json({"type": "earcon", "name": name})
+        self.seq = (self.seq + 1) % 256
+        seq = self.seq
+        await self.send_json({"type": "audio_start", "seq": seq, "rate": SR, "text": ""})
+        for i in range(0, len(STARTUP_SOUND), 3200):
+            await self.send_audio(seq, STARTUP_SOUND[i:i + 3200])
+        await self.send_json({"type": "audio_end", "seq": seq, "bytes": len(STARTUP_SOUND)})
 
     # ---------- audio in ----------
     def feed(self, pcm_bytes: bytes) -> None:
@@ -203,10 +203,6 @@ class Session:
                     await self._promote(wake)  # "hey buddy" started the sentence: wake for real
             if self.ptt:
                 return
-            if now < self.chime_until and not self.endpointer.started:
-                # The listening sound is playing: neither speech nor silence yet. What's said over
-                # it is still recorded, and counts once the sound has finished.
-                probs = [min(max(p, self.endpointer.off), self.endpointer.on - 0.01) for p in probs]
             result = self.endpointer.update(probs)
             if result:
                 await self._finish_capture(result)
@@ -440,6 +436,7 @@ class Hub:
         self.judge = ContextJudge(settings, self.listener)
         self.stt = stt or LocalSTT(settings)
         self.awake = True  # "off" sets this to False until the next "hey buddy"
+        self.device_gone_at: dict[str, float] = {}  # desk unit name -> when it last disconnected
         self.last_spoke_at = 0.0
         self.tts = TTSRouter(settings, ElevenLabsTTS(settings, http))
         self.weather = Weather(settings, http)
@@ -518,7 +515,22 @@ class Hub:
                            "mic_shift": int(self.settings["device_mic_shift"])})
         if s.role == "device":
             await self.push_schedule(s)
+            if self.just_switched_on(s):
+                await s.play_startup_sound()
         self.record("connect", session=s.id, role=s.role, info=s.info)
+
+    def just_switched_on(self, s: Session) -> bool:
+        """Plugged in, rather than a quick Wi-Fi reconnect. Newer board software says how long
+        it's been on; older software doesn't, so then it counts as on if it was gone a minute."""
+        uptime = s.info.get("uptime")
+        if uptime is not None:
+            return float(uptime) < 60
+        gone = self.device_gone_at.get(s.name)
+        return gone is None or time.time() - gone > 60
+
+    def device_left(self, s: Session) -> None:
+        if s.role == "device":
+            self.device_gone_at[s.name] = time.time()
 
     async def push_schedule(self, only: Session | None = None) -> None:
         msg = {"type": "alarms", "server_time": int(time.time()), "fires": self.alarms.device_schedule()}

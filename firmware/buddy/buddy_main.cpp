@@ -22,7 +22,7 @@
 
 #include "config.h"
 
-#define FW_VERSION "1.0.0"
+#define FW_VERSION "1.1.0"
 #define SAMPLE_RATE 16000
 #define MIC_FRAMES 320               // 20 ms per I2S read
 #define SEND_BYTES 1280              // 40 ms of 16-bit audio per WebSocket frame
@@ -403,7 +403,7 @@ static void handleJson(uint8_t *payload, size_t len) {
   if (!strcmp(type, "hello_ack")) {
     if (doc["volume"].is<int>()) volumeLevel = constrain(doc["volume"].as<int>(), 0, 10);
     if (doc["mic_shift"].is<int>()) micShift = constrain(doc["mic_shift"].as<int>(), 8, 18);
-    earcon("hello");
+    // No tune here: the server plays the "I'm on" sound once, when the unit is switched on.
   } else if (!strcmp(type, "state")) {
     serverState = doc["state"] | "idle";
   } else if (!strcmp(type, "earcon")) {
@@ -462,6 +462,7 @@ static void sendHello() {
   doc["rssi"] = WiFi.RSSI();
   doc["heap"] = ESP.getFreeHeap();
   doc["muted"] = micMuted;
+  doc["uptime"] = millis() / 1000;  // lets the server tell switching on from a Wi-Fi reconnect
   sendJson(doc);
   if (micMuted) {
     JsonDocument m;
@@ -570,7 +571,6 @@ static void setMuted(bool muted) {
   doc["type"] = "audio_mode";
   doc["on"] = !muted;
   sendJson(doc);
-  earcon(muted ? "nospeech" : "wake");
   Serial.printf("[mic] %s\n", muted ? "muted" : "unmuted");
 }
 
@@ -606,7 +606,6 @@ static void handleButton() {
       JsonDocument doc;
       doc["type"] = "button";
       sendJson(doc);
-      if (!wsConnected) earcon("error");
     }
   }
 }
