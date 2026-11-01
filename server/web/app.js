@@ -517,6 +517,11 @@ async function loadStatus() {
       + (sp.last_error ? ` Last Spotify error: ${sp.last_error}.` : "")
     : sp.client_id ? "Client ID saved. Press Connect Spotify." : "Not connected.";
   $("spotify-disconnect").hidden = !sp.connected;
+  const mu = st.music || {};
+  $("music-status").textContent = !mu.enabled ? ""
+    : !mu.installed ? "Needs librespot: run Update Buddy (it installs it if Homebrew is on this Mac, from brew.sh)."
+    : mu.running ? `Ready: “${mu.name}” is a Spotify speaker${mu.playing ? ", playing now" : ""}. First time only: in the Spotify app, tap the speaker icon and pick “${mu.name}”.`
+    : `Not running${mu.error ? ": " + mu.error : ""}.`;
   const dl = $("model-list");
   dl.replaceChildren(...(st.llm.available || []).map((m) => el("option", { value: m })));
   $("model-note").textContent = st.llm.available

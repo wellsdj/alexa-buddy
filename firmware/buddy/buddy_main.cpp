@@ -22,12 +22,13 @@
 
 #include "config.h"
 
-#define FW_VERSION "1.1.0"
+#define FW_VERSION "1.2.0"
 #define SAMPLE_RATE 16000
 #define MIC_FRAMES 320               // 20 ms per I2S read
 #define SEND_BYTES 1280              // 40 ms of 16-bit audio per WebSocket frame
 #define MIC_BUFFER_BYTES (16 * 1024) // 0.5 s
-#define SPK_BUFFER_BYTES (48 * 1024) // 1.5 s; the server stays ~0.6 s ahead
+#define SPK_BUFFER_BYTES (96 * 1024) // 3 s of speech, 1.5 s of music; the server stays ~0.6 s ahead
+#define SPK_BUFFER_MIN (48 * 1024)  // if memory is short
 #define MAX_FIRES 64
 
 // ------------------------------------------------------------------ state
@@ -47,6 +48,8 @@ static volatile int acceptSeq = -1;
 static volatile uint32_t seqBytes = 0;
 static volatile bool streamEnded = false;
 static volatile bool flushSpeaker = false;
+static volatile uint32_t spkRate = SAMPLE_RATE;   // speaker rate now: 16 kHz speech, 32 kHz music
+static volatile uint32_t wantRate = SAMPLE_RATE;  // rate the next stream needs
 static volatile bool playbackDone = false;
 static volatile uint8_t volumeLevel = 6;
 static volatile int micShift = MIC_SHIFT_DEFAULT;
@@ -165,9 +168,10 @@ static int renderTone(int16_t *out, int maxSamples, float &gainOut) {
     pos = 0;
     return 0;
   }
-  uint32_t total = (uint32_t)n.ms * SAMPLE_RATE / 1000;
+  const uint32_t rate = spkRate;
+  uint32_t total = (uint32_t)n.ms * rate / 1000;
   int count = min<int>(maxSamples, total - pos);
-  const uint32_t attack = SAMPLE_RATE / 250, release = SAMPLE_RATE / 40;
+  const uint32_t attack = rate / 250, release = rate / 40;
   for (int i = 0; i < count; i++, pos++) {
     float env = 1.0f;
     if (pos < attack) env = (float)pos / attack;
@@ -175,7 +179,7 @@ static int renderTone(int16_t *out, int maxSamples, float &gainOut) {
     float s = 0;
     if (n.freq) {
       s = sinf(phase) * 0.8f + sinf(phase * 2.0f) * 0.12f;  // a touch of warmth
-      phase += 2.0f * PI * n.freq / SAMPLE_RATE;
+      phase += 2.0f * PI * n.freq / rate;
       if (phase > 2.0f * PI) phase -= 2.0f * PI;
     }
     out[i] = (int16_t)(s * env * 26000.0f);
@@ -202,6 +206,14 @@ static void playTask(void *) {
   static int16_t stereo[512];
   bool playing = false;
   for (;;) {
+    if (wantRate != spkRate) {
+      // A stream at another rate (music vs speech): switch the speaker clock between buffers.
+      i2s_channel_disable(txChan);
+      i2s_std_clk_config_t clk = I2S_STD_CLK_DEFAULT_CONFIG(wantRate);
+      i2s_channel_reconfig_std_clock(txChan, &clk);
+      i2s_channel_enable(txChan);
+      spkRate = wantRate;
+    }
     if (flushSpeaker) {
       xStreamBufferReset(spkStream);
       flushSpeaker = false;
@@ -410,6 +422,8 @@ static void handleJson(uint8_t *payload, size_t len) {
     earcon(doc["name"] | "");
   } else if (!strcmp(type, "audio_start")) {
     acceptSeq = -1;
+    uint32_t r = doc["rate"] | SAMPLE_RATE;
+    if (r == 16000 || r == 22050 || r == 24000 || r == 32000 || r == 44100) wantRate = r;
     flushSpeakerNow();
     acceptSeq = doc["seq"] | -1;
     seqBytes = 0;
@@ -646,6 +660,13 @@ void setup() {
 
   micStream = xStreamBufferCreate(MIC_BUFFER_BYTES, SEND_BYTES);
   spkStream = xStreamBufferCreate(SPK_BUFFER_BYTES, 1);
+  if (spkStream && ESP.getFreeHeap() < 200000) {  // Wi-Fi starts after this and needs plenty of room
+    vStreamBufferDelete(spkStream);
+    spkStream = nullptr;
+  }
+  if (!spkStream) spkStream = xStreamBufferCreate(SPK_BUFFER_MIN, 1);
+  Serial.printf("[audio] speaker buffer %u KB, free heap %u KB\n",
+                (unsigned)(xStreamBufferSpacesAvailable(spkStream) / 1024), (unsigned)(ESP.getFreeHeap() / 1024));
   setupI2S();
   xTaskCreatePinnedToCore(micTask, "mic", 6144, nullptr, 6, nullptr, 0);
   xTaskCreatePinnedToCore(playTask, "play", 6144, nullptr, 6, nullptr, 1);

@@ -16,3 +16,5 @@ piper-tts>=1.3
 # Puts the program onto the ESP32-S3 (firmware/flash.sh).
 esptool>=5.0,<6
 # For running the tests: pip install pytest pytest-timeout
+# Music through Buddy's speaker: high-quality, streaming sample-rate conversion.
+soxr>=0.3

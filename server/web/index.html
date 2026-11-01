@@ -9,7 +9,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
-<link rel="stylesheet" href="/static/style.css?v=chat4">
+<link rel="stylesheet" href="/static/style.css?v=chat5">
 </head>
 <body>
 <header class="top">
@@ -169,7 +169,9 @@
         <label>Client ID <input data-setting="spotify_client_id" type="text" placeholder="32 letters and numbers" spellcheck="false"></label>
         <span class="row"><a class="btn primary small" id="spotify-connect" href="/spotify/login" target="_blank" rel="noopener">Connect Spotify</a><button class="btn small" id="spotify-disconnect" type="button">Disconnect</button></span>
         <p class="note" id="spotify-status">Not connected.</p>
-        <label>Play on <span class="note">optional: part of the device's name, e.g. “MacBook” or “iPhone”. Empty = whichever Spotify app is active.</span>
+        <label class="check"><input data-setting="music_on_buddy" type="checkbox"> Play music through Buddy's own speaker (the radio)</label>
+        <p class="note" id="music-status"></p>
+        <label>Play on instead <span class="note">optional: part of another device's name, e.g. “MacBook” or “iPhone”. Empty = Buddy's speaker (or whichever Spotify app is active).</span>
           <input data-setting="spotify_device" type="text" placeholder="whichever is active"></label>
       </fieldset>
       <fieldset>
@@ -227,6 +229,6 @@
 </aside>
 
 <div class="toast" id="toast" role="status" hidden></div>
-<script src="/static/app.js?v=chat4"></script>
+<script src="/static/app.js?v=chat5"></script>
 </body>
 </html>

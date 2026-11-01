@@ -164,6 +164,8 @@ class Spotify:
         if not devs:
             return None
         want = (self.settings["spotify_device"] or "").strip().lower()
+        if not want and self.settings["music_on_buddy"]:
+            want = (self.settings["assistant_name"] or "Buddy").strip().lower()  # Buddy's own speaker
         if want:
             for d in devs:
                 if want in (d.get("name") or "").lower():
@@ -260,6 +262,7 @@ class Spotify:
                 "wakes up, then ask me again.")
 
     async def pause(self) -> str:
+        self.ducked_from = None  # an asked-for pause stays paused (don't resume after Buddy talks)
         await self._with_device("PUT", "/me/player/pause")
         return ""
 
@@ -291,7 +294,12 @@ class Spotify:
                 st = await self._api("GET", "/me/player")
                 dev = (st or {}).get("device") or {}
                 vol = dev.get("volume_percent")
-                if st and st.get("is_playing") and vol is not None and vol > 20 and dev.get("supports_volume", True):
+                own = (self.settings["assistant_name"] or "Buddy").strip().lower()
+                if st and st.get("is_playing") and (dev.get("name") or "").strip().lower() == own:
+                    # Music on Buddy's own speaker: pause it (Buddy can't talk over itself), resume after.
+                    self.ducked_from = -1
+                    await self._api("PUT", "/me/player/pause")
+                elif st and st.get("is_playing") and vol is not None and vol > 20 and dev.get("supports_volume", True):
                     self.ducked_from = vol
                     await self._api("PUT", "/me/player/volume?volume_percent=20")
             except SpotifyError as e:
@@ -303,7 +311,10 @@ class Spotify:
             if vol is None:
                 return
             try:
-                await self._api("PUT", f"/me/player/volume?volume_percent={vol}")
+                if vol == -1:
+                    await self._api("PUT", "/me/player/play")  # carry on where it paused
+                else:
+                    await self._api("PUT", f"/me/player/volume?volume_percent={vol}")
             except SpotifyError as e:
                 log.info("couldn't turn the music back up: %s", e)
 

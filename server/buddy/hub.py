@@ -43,6 +43,7 @@ from .config import Settings
 from .listening import ContextJudge
 from .llm import GroqLLM
 from .memory import MemoryManager, MemoryStore
+from .music import MusicPlayer
 from .spotify import Spotify
 from .stt import LocalSTT, STTError
 from .tts import ElevenLabsTTS, TTSRouter, TTSUnavailable
@@ -470,6 +471,7 @@ class Hub:
         self.brain = Brain(settings, self.llm, self.alarms, self.memory, self.memory_mgr, self.weather)
         self.spotify = Spotify(settings)
         self.brain.spotify = self.spotify
+        self.music = MusicPlayer(settings, self)  # Spotify through Buddy's own speaker
         self.conv = Conversation()
         self.sessions: dict[str, Session] = {}
         self.fired_cache: dict[str, Alarm] = {}
@@ -489,6 +491,8 @@ class Hub:
     def _settings_changed(self, changes: dict) -> None:
         if "timezone" in changes:
             self.alarms.set_timezone(changes["timezone"])
+        if {"music_on_buddy", "assistant_name"} & changes.keys():
+            self._soon(self.music.restart())
         if "volume" in changes:
             self.brain.volume = int(changes["volume"])
             self._soon(self.broadcast({"type": "volume", "level": int(changes["volume"])}, role="device"))
@@ -498,6 +502,7 @@ class Hub:
 
     # ---------- lifecycle ----------
     async def start(self) -> None:
+        asyncio.create_task(self.music.start())
         self.tasks.append(asyncio.create_task(self._scheduler()))
         self.tasks.append(asyncio.create_task(self._housekeeping()))
         asyncio.create_task(self.listener.discover())
@@ -507,6 +512,7 @@ class Hub:
         asyncio.create_task(self.weather.fetch())
 
     async def stop(self) -> None:
+        await self.music.stop()
         for t in self.tasks:
             t.cancel()
 
@@ -858,4 +864,5 @@ class Hub:
             "memory": {"count": len(self.memory), "status": self.memory_mgr.last_status},
             "weather_error": self.weather.last_error,
             "spotify": self.spotify.status(),
+            "music": self.music.status(),
         }

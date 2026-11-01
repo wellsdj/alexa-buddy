@@ -37,6 +37,7 @@ DEFAULTS: dict[str, Any] = {
     "tts_engine": "auto",  # auto | elevenlabs | piper | browser
     "elevenlabs_voice_id": "JBFqnCBsd6RMkjVDRZzb",  # the voice in use; "George": warm British male
     "spotify_client_id": "",  # from your own app at developer.spotify.com (no secret needed)
+    "music_on_buddy": True,  # Spotify plays through Buddy's own speaker (librespot), not your phone or Mac
     "spotify_device": "",  # part of the name of the Spotify app/speaker to play on; empty = whichever is active
     "reword_replies": True,  # quick replies (timers, weather...) said in Claude's own words, not word-for-word
     "voices": [],  # up to 8 of {"name": ..., "id": ...}; "change your voice" cycles through them

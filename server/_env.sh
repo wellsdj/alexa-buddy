@@ -67,6 +67,25 @@ buddy_env() {
   fi
   # The board button only needs esptool, not the ears or the backup voice.
   [ -n "$BUDDY_SKIP_MODELS" ] || "$VENV_PY" "$dir/setup_models.py" || return 1
+  [ -n "$BUDDY_SKIP_MODELS" ] || _buddy_librespot
+}
+
+# librespot: lets Spotify play through Buddy's own speaker. Optional; installed with Homebrew.
+_buddy_librespot() {
+  [ "$(uname)" = "Darwin" ] || return 0
+  if command -v librespot >/dev/null 2>&1 || [ -x /opt/homebrew/bin/librespot ] || [ -x /usr/local/bin/librespot ]; then
+    return 0
+  fi
+  local brew
+  brew="$(command -v brew || ls /opt/homebrew/bin/brew /usr/local/bin/brew 2>/dev/null | head -1)"
+  if [ -z "$brew" ]; then
+    echo "Note: to play Spotify through Buddy's speaker, install Homebrew (brew.sh), then run Update Buddy again."
+    return 0
+  fi
+  echo "Installing librespot so Spotify can play through Buddy's speaker (one-off, a few minutes)..."
+  "$brew" install librespot >/dev/null 2>&1 && echo "librespot installed." \
+    || echo "Couldn't install librespot right now; music will play on your Spotify app instead."
+  return 0
 }
 
 # Stops any Buddy already running on this computer, so the newest version can start.
