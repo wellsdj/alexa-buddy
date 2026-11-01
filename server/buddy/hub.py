@@ -34,7 +34,7 @@ from fastapi import WebSocket
 
 from . import intents
 from .alarms import Alarm, AlarmStore, DAY_NAMES, spoken_time
-from .audio import rms_dbfs
+from .audio import Leveller, rms_dbfs
 from .brain import Brain, Conversation, Reply
 from .claude import ClaudeLLM
 from .config import Settings
@@ -312,15 +312,23 @@ class Session:
         sent = 0
         t0 = time.monotonic()
         lead = 0.6
+        leveller = Leveller()  # same loudness whichever voice spoke
+
+        async def send(pcm: bytes) -> None:
+            nonlocal sent
+            for i in range(0, len(pcm), 3200):  # 100 ms frames
+                part = pcm[i:i + 3200]
+                ahead = sent / BYTES_PER_S - (time.monotonic() - t0)
+                if ahead > lead:
+                    await asyncio.sleep(ahead - lead)
+                await self.send_audio(seq, part)
+                sent += len(part)
+
         try:
             async for chunk in self.hub.tts.stream(text):
-                for i in range(0, len(chunk), 3200):  # 100 ms frames
-                    part = chunk[i:i + 3200]
-                    ahead = sent / BYTES_PER_S - (time.monotonic() - t0)
-                    if ahead > lead:
-                        await asyncio.sleep(ahead - lead)
-                    await self.send_audio(seq, part)
-                    sent += len(part)
+                await send(leveller.process(chunk))
+            await send(leveller.flush())
+            self.hub.record("voice", engine=self.hub.tts.last_engine)
         except TTSUnavailable as e:
             log.warning("no TTS: %s", e)
             await self.send_json({"type": "say", "seq": seq, "text": text})

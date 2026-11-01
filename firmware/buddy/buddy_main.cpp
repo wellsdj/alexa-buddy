@@ -492,7 +492,10 @@ static void wsEvent(WStype_t type, uint8_t *payload, size_t len) {
       if (len > 1 && payload[0] == acceptSeq) {
         size_t bytes = (len - 1) & ~1u;
         seqBytes += bytes;
-        if (xStreamBufferSend(spkStream, payload + 1, bytes, 0) < bytes) droppedSpk++;
+        // All or nothing: a half-written piece would shift every later sample by a byte,
+        // which turns the voice into loud static until the next answer.
+        if (xStreamBufferSpacesAvailable(spkStream) >= bytes) xStreamBufferSend(spkStream, payload + 1, bytes, 0);
+        else droppedSpk++;
       }
       break;
     case WStype_TEXT:
