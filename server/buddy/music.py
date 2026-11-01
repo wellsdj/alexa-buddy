@@ -70,6 +70,14 @@ class MusicPlayer:
         self.playing = False  # sound is coming out right now
         self.error = ""
         self.binary = find_librespot()
+        # Where the sound got to, for the Activity tab: in from librespot, out to the board.
+        self.bytes_in = 0
+        self.bytes_out = 0
+        self.busy_drops = 0  # bits dropped because Buddy was listening or talking
+        self.no_unit_drops = 0  # bits dropped because no desk unit was connected
+        self.rate = 0
+        from collections import deque
+        self.log_tail: deque = deque(maxlen=6)
 
     @property
     def name(self) -> str:
@@ -78,7 +86,10 @@ class MusicPlayer:
     def status(self) -> dict:
         return {"enabled": bool(self.settings["music_on_buddy"]), "installed": bool(self.binary),
                 "running": self.proc is not None and self.proc.returncode is None,
-                "playing": self.playing, "name": self.name, "error": self.error}
+                "playing": self.playing, "name": self.name, "error": self.error,
+                "kb_in": self.bytes_in // 1024, "kb_out": self.bytes_out // 1024, "rate": self.rate,
+                "busy_drops": self.busy_drops, "no_unit_drops": self.no_unit_drops,
+                "librespot_log": list(self.log_tail)}
 
     async def start(self) -> None:
         if not self.settings["music_on_buddy"]:
@@ -124,7 +135,8 @@ class MusicPlayer:
         assert self.proc and self.proc.stderr
         async for line in self.proc.stderr:
             text = line.decode(errors="ignore").strip()
-            if text and ("error" in text.lower() or "warn" in text.lower()):
+            if text:
+                self.log_tail.append(text[-200:])
                 log.info("librespot: %s", text[:300])
 
     async def _pump(self) -> None:
@@ -152,8 +164,14 @@ class MusicPlayer:
                     stream = None
                 self.playing = False
                 continue
-            targets = [s for s in self.hub.devices() if s.state == "idle"]
+            self.bytes_in += len(data)
+            devices = self.hub.devices()
+            targets = [s for s in devices if s.state == "idle"]
             if not targets:
+                if devices:
+                    self.busy_drops += 1
+                else:
+                    self.no_unit_drops += 1
                 # Buddy is listening or talking (the music should be paused), or no desk unit:
                 # drop this bit rather than talk over each other.
                 if stream:
@@ -175,6 +193,7 @@ class MusicPlayer:
             for s in sessions:
                 for i in range(0, len(pcm), 3200):
                     await s.send_audio(seqs[s.id], pcm[i:i + 3200])
+            self.bytes_out += len(pcm)
             stream = (sessions, seqs, rs, started, sent + len(pcm), rate)
             self.playing = True
 
@@ -186,6 +205,8 @@ class MusicPlayer:
             s.seq = (s.seq + 1) % 256
             seqs[s.id] = s.seq
             await s.send_json({"type": "audio_start", "seq": s.seq, "rate": rate, "text": "", "music": True})
+        self.rate = rate
+        log.info("music: streaming to %d desk unit(s) at %d Hz", len(sessions), rate)
         return (sessions, seqs, Resampler(rate), time.monotonic(), 0, rate)
 
     async def _end(self, stream) -> None:
