@@ -264,8 +264,11 @@ class Spotify:
         if not started and item_kind != "track":
             # Some playlists (Spotify's own, for example) won't play for apps like Buddy:
             # play the top songs for the same search instead.
-            tracks = await self._api("GET", "/search", params={"q": search, "type": "track", "limit": 20})
-            uris = [t["uri"] for t in ((tracks or {}).get("tracks") or {}).get("items") or [] if t and t.get("uri")]
+            uris = []
+            for offset in (0, 10):  # Spotify allows 10 search results at a time (since Feb 2026)
+                tracks = await self._api("GET", "/search", params={"q": search, "type": "track", "limit": 10,
+                                                                   "offset": offset})
+                uris += [t["uri"] for t in ((tracks or {}).get("tracks") or {}).get("items") or [] if t and t.get("uri")]
             if uris:
                 await self._with_device("PUT", "/me/player/play", json={"uris": uris})
                 started = await self._is_playing()
@@ -283,8 +286,11 @@ class Spotify:
     async def _play_my_music(self) -> str:
         """"Play some music": your own most-played songs, shuffled; else carry on what was last on."""
         try:
-            top = await self._api("GET", "/me/top/tracks", params={"limit": 40, "time_range": "medium_term"})
-            uris = [t["uri"] for t in (top or {}).get("items", []) if t and t.get("uri")]
+            uris = []
+            for offset in (0, 10, 20):  # small pages: Spotify's limits for apps like Buddy are tight now
+                top = await self._api("GET", "/me/top/tracks", params={"limit": 10, "offset": offset,
+                                                                       "time_range": "medium_term"})
+                uris += [t["uri"] for t in (top or {}).get("items", []) if t and t.get("uri")]
         except SpotifyError:
             uris = []  # older login without that permission: reconnect Spotify to get it
         if uris:
