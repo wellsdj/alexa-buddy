@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import shutil
 import time
 
@@ -70,6 +71,8 @@ class MusicPlayer:
         self.playing = False  # sound is coming out right now
         self.error = ""
         self.binary = find_librespot()
+        self.login_url = ""  # Spotify login page for librespot, while it waits to be logged in
+        self._oauth_unsupported = False  # older librespot without --enable-oauth
         # Where the sound got to, for the Activity tab: in from librespot, out to the board.
         self.bytes_in = 0
         self.bytes_out = 0
@@ -89,7 +92,12 @@ class MusicPlayer:
                 "playing": self.playing, "name": self.name, "error": self.error,
                 "kb_in": self.bytes_in // 1024, "kb_out": self.bytes_out // 1024, "rate": self.rate,
                 "busy_drops": self.busy_drops, "no_unit_drops": self.no_unit_drops,
-                "librespot_log": list(self.log_tail)}
+                "librespot_log": list(self.log_tail), "logged_in": self.logged_in,
+                "login_url": "" if self.logged_in else self.login_url}
+
+    @property
+    def logged_in(self) -> bool:
+        return (self.settings.data_dir / "librespot" / "credentials.json").exists()
 
     async def start(self) -> None:
         if not self.settings["music_on_buddy"]:
@@ -104,6 +112,11 @@ class MusicPlayer:
         args = [self.binary, "--name", self.name, "--backend", "pipe", "--format", "S16",
                 "--bitrate", "320", "--device-type", "speaker", "--initial-volume", "80",
                 "--enable-volume-normalisation", "--cache", str(cache), "--disable-audio-cache"]
+        # Not logged in yet: use Spotify's own login page (works everywhere; finding the speaker
+        # from the Spotify app doesn't always work on a Mac). Once done, the login is kept in the cache.
+        self.login_url = ""
+        if not (cache / "credentials.json").exists() and not self._oauth_unsupported:
+            args.append("--enable-oauth")
         try:
             self.proc = await asyncio.create_subprocess_exec(
                 *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
@@ -138,6 +151,14 @@ class MusicPlayer:
             if text:
                 self.log_tail.append(text[-200:])
                 log.info("librespot: %s", text[:300])
+                m = re.search(r"https://accounts\.spotify\.com/\S+", text)
+                if m:
+                    self.login_url = m.group(0)
+                if "credentials" in text.lower() and ("saved" in text.lower() or "authenticated" in text.lower()):
+                    self.login_url = ""
+                if "enable-oauth" in text and ("unexpected" in text.lower() or "unrecognized" in text.lower()):
+                    self._oauth_unsupported = True
+                    asyncio.create_task(self.restart())  # older librespot: start without it
 
     async def _pump(self) -> None:
         """Read librespot's audio at real time and send it on. A gap of half a second (paused,

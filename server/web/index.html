@@ -9,7 +9,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
-<link rel="stylesheet" href="/static/style.css?v=chat5">
+<link rel="stylesheet" href="/static/style.css?v=chat6">
 </head>
 <body>
 <header class="top">
@@ -171,6 +171,7 @@
         <p class="note" id="spotify-status">Not connected.</p>
         <label class="check"><input data-setting="music_on_buddy" type="checkbox"> Play music through Buddy's own speaker (the radio)</label>
         <p class="note" id="music-status"></p>
+        <span class="row" id="music-login-row" hidden><a class="btn primary small" id="music-login" href="#" target="_blank" rel="noopener">Log in Buddy's speaker</a></span>
         <label>Play on instead <span class="note">optional: part of another device's name, e.g. “MacBook” or “iPhone”. Empty = Buddy's speaker (or whichever Spotify app is active).</span>
           <input data-setting="spotify_device" type="text" placeholder="whichever is active"></label>
       </fieldset>
@@ -229,6 +230,6 @@
 </aside>
 
 <div class="toast" id="toast" role="status" hidden></div>
-<script src="/static/app.js?v=chat5"></script>
+<script src="/static/app.js?v=chat6"></script>
 </body>
 </html>

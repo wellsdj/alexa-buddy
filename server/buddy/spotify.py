@@ -191,6 +191,9 @@ class Spotify:
                     "Or turn off Play music through Buddy's speaker in the settings.")
         if not st.get("running"):
             return "My speaker's switched off at the moment. Restarting Buddy on the Mac should bring it back."
+        if not st.get("logged_in"):
+            return ("My speaker needs logging in to Spotify, just once. Open Controls, then Settings, then Spotify, "
+                    "and press Log in Buddy's speaker.")
         return (f"Spotify can't see my speaker yet. Just once: open Spotify, tap the speakers icon and pick {name}, "
                 "then ask me again.")
 
