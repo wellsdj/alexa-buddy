@@ -121,8 +121,11 @@ class Spotify:
             raise SpotifyError("Spotify isn't connected yet. Connect it in Buddy's settings.")
         if self.state.get("access_token") and time.time() < self.state.get("expires_at", 0):
             return self.state["access_token"]
-        r = await self.client.post(TOKEN, data={"grant_type": "refresh_token", "client_id": self.client_id,
-                                                "refresh_token": self.state["refresh_token"]})
+        try:
+            r = await self.client.post(TOKEN, data={"grant_type": "refresh_token", "client_id": self.client_id,
+                                                    "refresh_token": self.state["refresh_token"]})
+        except httpx.HTTPError as e:
+            raise SpotifyError(f"couldn't reach Spotify: {e}") from e
         if r.status_code != 200:
             if r.status_code in (400, 401):
                 self.state.pop("refresh_token", None)
@@ -146,7 +149,7 @@ class Spotify:
             except ValueError:
                 reason, msg = "", r.text[:200]
             self.last_error = f"{r.status_code} {reason or msg}"
-            if reason == "NO_ACTIVE_DEVICE" or r.status_code == 404:
+            if reason == "NO_ACTIVE_DEVICE" or (r.status_code == 404 and path.startswith("/me/player")):
                 raise SpotifyError("NO_DEVICE")
             if r.status_code == 403 and "PREMIUM" in (reason + msg).upper():
                 raise SpotifyError("Spotify isn't letting me in just yet. It says the account needs Premium, and "

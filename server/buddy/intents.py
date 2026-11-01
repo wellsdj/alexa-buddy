@@ -35,7 +35,8 @@ _OFF_CORE = (r"(turn|switch|power|shut) (yourself |it )?(off|down)|(you can )?(t
              r"we'?re done|(good)?bye|see you( later)?|later|you can go|off you go|that'?ll do|done")
 _OFF = re.compile(
     r"((ok|okay|alright|all right|right|yeah|yes|cool|great|fine|thanks|thank you|cheers|buddy|please|"
-    r"now|just|you can|can you|could you|and|so|well|oh|um|uh)[ ,]*)*"
+    r"now|just|you can|can you|could you|and|so|well|oh|um|uh|never ?mind|actually|anyway|"
+    r"anybody|everybody|nobody|body|bud)[ ,]*)*"
     r"(" + _OFF_CORE + r")"
     r"([ ,]*(now|then|please|thanks|thank you|cheers|buddy|for now|mate|for a bit|for a while|bye|"
     r"goodbye|off|already))*")

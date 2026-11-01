@@ -454,7 +454,13 @@ class Brain:
                 return await sp.now_playing()
             return "I'm not sure how to do that with Spotify."
         except SpotifySetupError as e:
+            if str(e) == "NO_DEVICE":
+                return "Spotify says there's nothing to play on just now. Give the Spotify app a tap and try again."
             return str(e)
+        except Exception as e:  # noqa: BLE001 - say what happened instead of a vague "something went wrong"
+            log.exception("Spotify request failed")
+            sp.last_error = f"{type(e).__name__}: {e}"[:200]
+            return f"Spotify tripped up there ({type(e).__name__}). Want me to have another go?"
 
     def _switch_voice(self, a: dict) -> Reply:
         voices = [v for v in (self.settings["voices"] or []) if isinstance(v, dict) and (v.get("id") or "").strip()]
