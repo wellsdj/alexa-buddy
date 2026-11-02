@@ -25,6 +25,7 @@ import collections
 import json
 import logging
 import random
+import re
 import time
 from dataclasses import asdict
 from datetime import datetime
@@ -98,6 +99,11 @@ class Session:
         self.mt_last_partial = 0.0
         self.mt_peak = 0.0
         self.mt_clipped = 0
+        self.speaking_text = ""  # the answer being spoken now
+        self.speak_started: float | None = None
+        self.speak_total_s = 0.0
+        self.interrupted_text = ""  # the answer they cut into (its echo may open their next words)
+        self.interrupted_at = 0.0
         self.relistened = False  # already gave them a second go after not making out their words
         self.interim_task: asyncio.Task | None = None  # a "one sec, I'll check" line still playing
         self.seq = 0
@@ -409,6 +415,8 @@ class Session:
         self.playback_done.clear()
         await self.set_state("speaking")
         await self.send_json({"type": "audio_start", "seq": seq, "rate": SR, "text": text})
+        if after == "idle":  # a real answer (not a "one sec"): remember it, in case they cut in
+            self.speaking_text, self.speak_started, self.speak_total_s = text, None, 0.0
         sent = 0
         t0 = time.monotonic()
         # The board holds 1.5 s of sound. Keep it about 0.8 s ahead: enough to ride out Wi-Fi
@@ -425,6 +433,8 @@ class Session:
                 if len(held) < BYTES_PER_S // 2 and not final:
                     return  # wait for half a second, so a slow start doesn't stutter
                 pcm, started_at = bytes(held), time.monotonic()
+                if self.speaking_text == text:
+                    self.speak_started = started_at
             for i in range(0, len(pcm), 3200):  # 100 ms frames
                 part = pcm[i:i + 3200]
                 ahead = sent / BYTES_PER_S - (time.monotonic() - started_at)
@@ -432,6 +442,8 @@ class Session:
                     await asyncio.sleep(ahead - lead)
                 await self.send_audio(seq, part)
                 sent += len(part)
+                if self.speaking_text == text:
+                    self.speak_total_s = sent / BYTES_PER_S
 
         try:
             async for chunk in self.hub.tts.stream(text):
@@ -463,7 +475,26 @@ class Session:
         else:
             await self.set_state(after)  # "thinking" after a "one sec" line: the answer is on its way
 
+    def _where_we_got_to(self) -> None:
+        """Cut off mid-answer: remember what was being said (to tell its echo from their words) and
+        what was still to come (for "carry on")."""
+        text, started = self.speaking_text, self.speak_started
+        if not text or self.state != "speaking":
+            return
+        self.interrupted_text, self.interrupted_at = text, time.time()
+        if started is None:
+            self.hub.conv.interrupted = text  # cut off before it began: all of it is still to come
+            return
+        total = max(self.speak_total_s, len(text) / 14.0)  # ~14 characters a second, if still arriving
+        played = max(0.0, time.monotonic() - started - 0.3)
+        upto = int(len(text) * min(1.0, played / total))
+        # Back up to the start of the sentence being said, so "carry on" picks up cleanly.
+        starts = [0] + [m.end() for m in re.finditer(r"[.!?]\s+", text)]
+        start = max(i for i in starts if i <= upto) if upto < len(text) else len(text)
+        self.hub.conv.interrupted = text[start:].strip()
+
     async def stop_speaking(self) -> None:
+        self._where_we_got_to()
         for task in (self.speak_task, self.interim_task):
             if task and not task.done():
                 task.cancel()
@@ -679,6 +710,12 @@ class Hub:
             await self.announce(s, str(e) if "Update Buddy" in str(e) else "Hmm, I didn't quite get that. Say it again for me?")
             return
         stt_ms = int((time.monotonic() - t0) * 1000)
+        if s.interrupted_text and time.time() - s.interrupted_at < 20 and text.strip():
+            cleaned = intents.strip_echo(text, s.interrupted_text)
+            if cleaned != text:
+                self.record("echo_removed", heard=text, kept=cleaned)
+                text = cleaned
+            s.interrupted_text = ""
         # How loud it was and what came out: shows a too-quiet (or clipping) mic in the Activity tab.
         if len(audio):
             peak = float(np.abs(audio.astype(np.int32)).max())

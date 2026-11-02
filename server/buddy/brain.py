@@ -110,7 +110,8 @@ class Conversation:
     pager: int | None = None
     pending: dict | None = None
     clear_requested: float = 0.0
-    dropped: list[str] = field(default_factory=list)  # topics the user asked Buddy to leave alone
+    dropped: list[str] = field(default_factory=list)
+    interrupted: str = ""  # the rest of an answer that got cut off, for "carry on"  # topics the user asked Buddy to leave alone
 
     def add(self, role: str, content: str, note: str = "") -> None:
         """note: private background for later turns (e.g. "I searched the web for ..."), never spoken."""
@@ -396,6 +397,11 @@ class Brain:
             text, nxt = self.memory.spoken_list(conv.pager)
             conv.pager = nxt
             return Reply(text, intent="more_memory")
+        if n == "carry_on":
+            rest, conv.interrupted = conv.interrupted, ""
+            if rest:
+                return Reply(rest, intent="carry_on")
+            return None  # nothing was cut off: let Claude work out what they mean
         if n == "voice":
             return self._switch_voice(a)
         if n == "music":

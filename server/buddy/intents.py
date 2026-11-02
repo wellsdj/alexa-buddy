@@ -35,6 +35,32 @@ def wake_heard(text: str) -> bool:
     return bool(WAKE_ANYWHERE.search(text or "")) or has_wake(text)
 
 
+def strip_echo(heard: str, spoken: str) -> str:
+    """Remove Buddy's own words from the start of what was heard after cutting in on it
+    ("Little more of it. But hold on..." -> "But hold on...")."""
+    tokens = heard.split()
+    norm = [re.sub(r"[^a-z0-9']", "", t.lower()) for t in tokens]
+    said = [re.sub(r"[^a-z0-9']", "", t.lower()) for t in spoken.split()]
+    said = [w for w in said if w]
+    best = 0
+    for k in range(min(len(norm), 12), 0, -1):  # longest opening run that Buddy itself said
+        pre = norm[:k]
+        if not all(pre):
+            continue
+        for i in range(len(said) - k + 1):
+            window = said[i:i + k]
+            # the last word may be cut short by the interruption ("Mel" for "Melt")
+            if pre[:-1] == window[:-1] and window[-1].startswith(pre[-1]):
+                best = k
+                break
+        if best:
+            break
+    if best == 1 and norm[0] in ("no", "yes", "yeah", "ok", "okay", "right", "so", "and", "but", "i", "it", "the", "a"):
+        best = 0  # one common word on its own is probably theirs
+    rest = " ".join(tokens[best:]).lstrip(" ,.;:-")
+    return strip_wake(rest) or rest
+
+
 def has_wake(text: str) -> bool:
     return bool(WAKE_PREFIX.match(text or ""))
 
@@ -89,6 +115,11 @@ def match(text: str, now: datetime, context: dict | None = None) -> Intent | Non
     if re.fullmatch(r"(stop|cancel|never ?mind|nevermind|nothing|forget it|no thanks?|nope|no)", t):
         return Intent("stop")
 
+    if len(t.split()) <= 12 and re.search(
+            r"\b(carry on|go on|keep going|as you were|(say|finish|tell me) what you were (saying|going to say)|"
+            r"what were you (saying|going to say)|"
+            r"you were saying|where were we|continue( please)?|sorry,? (carry|go) on)\b", t):
+        return Intent("carry_on")
     voice = _voice(t)
     if voice:
         return voice
@@ -206,6 +237,8 @@ def _weather(t: str) -> Intent | None:
                          r"sunny|snow|cold out|warm out|coat|jacket)\b", t)
     if not weathery:
         return None
+    if re.search(r"\b(oven|fridge|freezer|body|water|bath|room|cook|cooking|bake|baking|core|cpu|recipe)\b", t):
+        return None  # "oven temperature", "bake at what temperature": not the weather
     # Any place ("in Paris", "for Manchester") and any day up to 10 days ahead.
     m = re.search(r"\b(?:in|for|at|over) (?!the (?:morning|afternoon|evening|week|weekend)\b|the next\b|my\b|here\b|"
                   r"today\b|tomorrow\b|tonight\b|this\b|next\b|a\b|\d)([a-z][a-z'. -]*?)"
