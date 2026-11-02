@@ -9,7 +9,7 @@ from datetime import datetime
 from .timeparse import find_clock, find_date, find_duration, find_repeat, resolve_clock, words_to_digits
 
 WAKE_PREFIX = re.compile(
-    r"^\s*((hey|hi|hay|a|okay|ok|yo|hello)[\s,]+)?(buddy|budd?ie|body|bodie|bud)\b[\s,.!?:-]*", re.I)
+    r"^\s*((hey|hi|hay|a|okay|ok|yo|hello|oi)[\s,]+)?(buddy|budd?ie|body|bodie|bud|buddha|bodhi|birdie)\b[\s,.!?:-]*", re.I)
 NUMBER_WORDS = {"zero": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
                 "seven": 7, "eight": 8, "nine": 9, "ten": 10, "max": 10, "maximum": 10, "full": 10}
 
@@ -22,6 +22,17 @@ class Intent:
 
 def strip_wake(text: str) -> str:
     return WAKE_PREFIX.sub("", text, count=1).strip()
+
+
+# "Hey buddy" as the ears often hear it, anywhere in a sentence (not "my buddy", which has no hey/hi/ok).
+WAKE_ANYWHERE = re.compile(
+    r"\b(hey|hay|hi|ok|okay|oi|yo|a)[\s,.!]+(budd\w*|bod(y|ie|ies|i)?|bud|buddha|birdie|bodhi|baddie|betty|"
+    r"bunny|buggy|puddy|buddie)\b", re.I)
+
+
+def wake_heard(text: str) -> bool:
+    """A "hey buddy" anywhere in what was heard, allowing for the usual mishearings."""
+    return bool(WAKE_ANYWHERE.search(text or "")) or has_wake(text)
 
 
 def has_wake(text: str) -> bool:

@@ -56,8 +56,9 @@ class ContextJudge:
         t = text.strip()
         if not t:
             return False
-        if intents.has_wake(t):
-            return self._verdict(True, "starts with hey buddy")
+        if intents.has_wake(t) or (mentioned and intents.wake_heard(t)):
+            # "Hey buddy" heard (even with the radio or someone talking just before): it's for Buddy.
+            return self._verdict(True, "hey buddy")
         if since_reply_s < 60 and intents.is_off(intents.strip_wake(t)):
             return self._verdict(True, "told Buddy to go off soon after it spoke")
         if since_reply_s < 8 and intents.match(intents.strip_wake(t), _now(self.settings)) is not None:

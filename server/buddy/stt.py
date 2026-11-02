@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import re
 import threading
 import time
@@ -18,6 +19,9 @@ from .config import MODELS_DIR, Settings
 
 log = logging.getLogger("buddy.stt")
 
+# Parakeet (NVIDIA, English): the accurate one, ~480 MB. Moonshine: the small backup.
+PARAKEET_DIR = MODELS_DIR / "ears" / "parakeet-tdt-0.6b-v2"
+PARAKEET_FILES = ("encoder.int8.onnx", "decoder.int8.onnx", "joiner.int8.onnx", "tokens.txt")
 EARS_DIR = MODELS_DIR / "ears" / "moonshine-base-en"
 EARS_FILES = ("preprocess.onnx", "encode.int8.onnx", "uncached_decode.int8.onnx",
               "cached_decode.int8.onnx", "tokens.txt")
@@ -35,20 +39,37 @@ class STTError(Exception):
 
 
 class LocalSTT:
-    def __init__(self, settings: Settings, models_dir=EARS_DIR, threads: int = 2):
+    def __init__(self, settings: Settings, models_dir=None, threads: int | None = None):
         self.settings = settings
-        self.models_dir = models_dir
-        self.threads = threads
+        self.fixed_dir = models_dir  # tests point this at a specific Moonshine folder
+        self.threads = threads or max(2, min(4, (os.cpu_count() or 2) - 1))
         self._recognizer = None
+        self._engine = ""
         self._lock = threading.Lock()
         self.last_ms = 0
 
+    def _which(self) -> str:
+        if self.fixed_dir is None and all((PARAKEET_DIR / f).exists() for f in PARAKEET_FILES):
+            return "parakeet"
+        d = self.fixed_dir or EARS_DIR
+        return "moonshine" if all((d / f).exists() for f in EARS_FILES) else ""
+
+    @property
+    def models_dir(self):
+        return PARAKEET_DIR if self._which() == "parakeet" else (self.fixed_dir or EARS_DIR)
+
     def available(self) -> bool:
-        return all((self.models_dir / f).exists() for f in EARS_FILES)
+        return bool(self._which())
 
     def _load(self):
         import sherpa_onnx
+        self._engine = self._which()
         d = self.models_dir
+        if self._engine == "parakeet":
+            return sherpa_onnx.OfflineRecognizer.from_transducer(
+                encoder=str(d / "encoder.int8.onnx"), decoder=str(d / "decoder.int8.onnx"),
+                joiner=str(d / "joiner.int8.onnx"), tokens=str(d / "tokens.txt"),
+                model_type="nemo_transducer", num_threads=self.threads)
         return sherpa_onnx.OfflineRecognizer.from_moonshine(
             preprocessor=str(d / "preprocess.onnx"), encoder=str(d / "encode.int8.onnx"),
             uncached_decoder=str(d / "uncached_decode.int8.onnx"), cached_decoder=str(d / "cached_decode.int8.onnx"),
@@ -87,7 +108,8 @@ class LocalSTT:
         return clean_transcript(text, speech_seconds)
 
     def status(self) -> dict:
-        return {"engine": "Moonshine (on this computer)", "installed": self.available(), "last_ms": self.last_ms}
+        name = {"parakeet": "Parakeet", "moonshine": "Moonshine"}.get(self._engine or self._which(), "none")
+        return {"engine": f"{name} (on this computer)", "installed": self.available(), "last_ms": self.last_ms}
 
 
 def clean_transcript(text: str, speech_seconds: float) -> str:

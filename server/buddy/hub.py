@@ -601,12 +601,19 @@ class Hub:
             await self.announce(s, str(e) if "Update Buddy" in str(e) else "Hmm, I didn't quite get that. Say it again for me?")
             return
         stt_ms = int((time.monotonic() - t0) * 1000)
+        # How loud it was and what came out: shows a too-quiet (or clipping) mic in the Activity tab.
+        if len(audio):
+            peak = float(np.abs(audio.astype(np.int32)).max())
+            self.record("capture", session=s.id, heard=text, speech_s=round(speech_s, 2),
+                        loudest_db=round(20 * np.log10(max(peak, 1.0) / 32768), 1),
+                        level_db=round(rms_dbfs(audio), 1), clipped=bool(peak >= 32000), mode=silent or "normal")
         if silent == "wake":
             # A soft "hey buddy" out of nowhere. If the words are clearly something else, ignore it;
             # if they're unclear, wake up anyway to be sure.
             words = text.lower().split()
-            starts_buddy = intents.has_wake(text) or any("budd" in w for w in words[:4])
-            if text.strip() and not starts_buddy:
+            starts_buddy = intents.wake_heard(text) or any(w.startswith(("budd", "bod", "bud")) for w in words[:5])
+            # Only ignore it when the words are clearly something else; unclear or short: wake to be sure.
+            if len(words) > 3 and not starts_buddy:
                 self.record("wake_rejected", session=s.id, heard=text)
                 await s.set_state("idle")
                 return

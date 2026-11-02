@@ -17,11 +17,19 @@ ROOT = Path(__file__).resolve().parent
 VOICES = ROOT / "data" / "voices"
 HF = "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_GB/alan/medium/"
 FALLBACK = "https://github.com/rhasspy/piper/releases/download/v0.0.2/voice-en-gb-alan-low.tar.gz"
-EARS = ROOT / "models" / "ears" / "moonshine-base-en"
-EARS_FILES = ("preprocess.onnx", "encode.int8.onnx", "uncached_decode.int8.onnx",
-              "cached_decode.int8.onnx", "tokens.txt")
-EARS_URL = ("https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/"
-            "sherpa-onnx-moonshine-base-en-int8.tar.bz2")
+# Buddy's ears. Parakeet (NVIDIA, English): very accurate, about 480 MB. Moonshine: the older,
+# smaller backup (kept if already downloaded).
+EARS_MODELS = {
+    "parakeet": (ROOT / "models" / "ears" / "parakeet-tdt-0.6b-v2",
+                 ("encoder.int8.onnx", "decoder.int8.onnx", "joiner.int8.onnx", "tokens.txt"),
+                 "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/"
+                 "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8.tar.bz2", 480),
+    "moonshine": (ROOT / "models" / "ears" / "moonshine-base-en",
+                  ("preprocess.onnx", "encode.int8.onnx", "uncached_decode.int8.onnx", "cached_decode.int8.onnx",
+                   "tokens.txt"),
+                  "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/"
+                  "sherpa-onnx-moonshine-base-en-int8.tar.bz2", 240),
+}
 
 
 def fetch(url: str) -> bytes:
@@ -30,8 +38,9 @@ def fetch(url: str) -> bytes:
     return r.content
 
 
-def install_ears() -> bool:
-    """Moonshine speech-to-text (about 240 MB). Streams to a temp file, then keeps only what's needed."""
+def install_ears(which: str = "parakeet") -> bool:
+    """Download one of Buddy's ears models. Streams to a temp file, then keeps only what's needed."""
+    EARS, EARS_FILES, EARS_URL, size_mb = EARS_MODELS[which]
     if all((EARS / f).exists() for f in EARS_FILES):
         print("Ears already installed.")
         return True
@@ -46,7 +55,7 @@ def install_ears() -> bool:
         if all((EARS / f).exists() for f in EARS_FILES):
             print("Ears installed.")
             return True
-    print("Downloading Buddy's ears: speech-to-text that runs on this computer (about 240 MB, one-off)...")
+    print(f"Downloading Buddy's new ears: speech-to-text that runs on this computer (about {size_mb} MB, one-off)...")
     try:
         with tempfile.TemporaryFile() as tmp:
             with httpx.stream("GET", EARS_URL, follow_redirects=True, timeout=httpx.Timeout(60, read=300),
@@ -58,7 +67,7 @@ def install_ears() -> bool:
                     tmp.write(chunk)
                     got += len(chunk)
                     shown = f"{got * 100 // total}% " if total else ""
-                    print(f"\r  {shown}({got >> 20} of {total >> 20 or '~240'} MB)   ", end="", flush=True)
+                    print(f"\r  {shown}({got >> 20} of {total >> 20 or size_mb} MB)   ", end="", flush=True)
                 print()
             print("  Unpacking...")
             tmp.seek(0)
@@ -70,8 +79,8 @@ def install_ears() -> bool:
                         part.write_bytes(tar.extractfile(m).read())
                         part.replace(EARS / name)
     except Exception as e:  # noqa: BLE001
-        print(f"  Couldn't download the ears ({e}). Typing to Buddy still works; "
-              "double-click Update Buddy again later so it can hear you.")
+        print(f"  Couldn't download the ears ({e}). Buddy uses its old ears until then; "
+              "double-click Update Buddy again later.")
         return False
     ok = all((EARS / f).exists() for f in EARS_FILES)
     print("Ears installed." if ok else "  The download looked incomplete; run Update Buddy again.")
@@ -83,7 +92,8 @@ def main() -> int:
         if not (ROOT / "models" / name).exists():
             print(f"Missing models/{name}. Re-download the project folder.")
             return 1
-    install_ears()
+    if not install_ears("parakeet"):
+        install_ears("moonshine")  # at least the small backup, so Buddy can hear
     VOICES.mkdir(parents=True, exist_ok=True)
     if list(VOICES.glob("*.onnx")):
         print("Offline voice already installed:", ", ".join(p.name for p in VOICES.glob("*.onnx")))
