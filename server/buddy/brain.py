@@ -22,7 +22,7 @@ from zoneinfo import ZoneInfo
 from . import intents
 from .alarms import DAY_NAMES, AlarmStore, human_duration, ordinal, spoken_time
 from .config import Settings
-from .llm import LLMError
+from .llm import LLMError, parse_json_loose
 from .memory import MemoryManager, MemoryStore
 from .spotify import SpotifyError as SpotifySetupError
 from .timeparse import find_clock, find_date, find_repeat, resolve_clock, words_to_digits
@@ -224,7 +224,8 @@ I'll check" out loud before searching, so don't start your answer with that.)
 - For long writing, planning or tricky reasoning, call think_harder (it asks the user first).
 - If you ask the user something, end with a question mark.
 - Never say you did something unless a tool confirmed it.
-- Trust your earlier answers in this conversation: they were right. "(Background note ...)" lines are your own \
+- Trust your earlier answers in this conversation, above all those your fact-checker confirmed (see the \
+background notes): they were right, so never doubt or walk them back unless the user shows they were wrong. "(Background note ...)" lines are your own \
 private notes about earlier turns (for example a web search you did); use them, never read them out, and don't \
 apologise for or doubt earlier answers unless the user says they were wrong.
 - If something goes wrong, be relaxed and kind about it, say what you can do instead, and keep it short.
@@ -280,14 +281,20 @@ class Brain:
                 reply = await self._llm(text, conv, ctx, note=reply.text)
         if reply is None:
             reply = await self._llm(text, conv, ctx)
+        if reply.intent in ("llm", "llm_deep") and reply.text and self.settings["fact_check"]:
+            reply = await self._make_sure(text, conv, ctx, reply)
         reply.text = speakable(reply.text, 1400 if reply.intent == "llm_deep" else 900)
         if reply.text and reply.intent in REWORD and self.settings["reword_replies"]:
             reply.text = await self._reword(text, reply.text)
         conv.add("user", text)
         if reply.text:
             notes = [f'I searched the web for "{q}" and found: {r[:350]}' for q, r in ctx.get("searched", [])]
-            if reply.intent == "llm_deep":
+            if ctx.get("thought"):
                 notes.append("I thought this one through carefully.")
+            if ctx.get("checked") == "correct":
+                notes.append("My fact-checker confirmed this answer is correct, so I stand by it.")
+            elif ctx.get("checked") == "gave_up":
+                notes.append("I tried my own knowledge, a web search and thinking hard, and couldn't find solid info.")
             conv.add("assistant", reply.text, " ".join(notes))
             conv.last_reply = reply.text
         if reply.intent != "more_memory" and reply.intent != "memory_list":
@@ -410,6 +417,67 @@ class Brain:
             return Reply(self.alarms.confirm_text(al), intent=n)
         return None
 
+    async def _check(self, question: str, answer: str, ctx: dict) -> dict:
+        """A strict, separate fact-checker. Returns {"verdict": correct | not_factual | unsure | wrong, "why": ...}."""
+        evidence = "\n".join(f'- Web search for "{q}": {r[:1200]}' for q, r in ctx.get("searched", [])) or "(none)"
+        now = self.now()
+        system = ("You are a strict fact-checker for a voice assistant's spoken answers. Decide if the answer is "
+                  "accurate. Reply with JSON only: {\"verdict\": \"correct\" | \"not_factual\" | \"unsure\" | "
+                  "\"wrong\", \"why\": \"short reason\"}.\n"
+                  "- not_factual: chat, opinions, jokes, feelings, confirmations of tasks, or asking the user something.\n"
+                  "- correct: the facts are right: supported by the evidence, or settled general knowledge you are "
+                  "confident about.\n"
+                  "- unsure: it depends on recent or changing facts (news, scores, prices, people's current roles, "
+                  "opening times, anything after your knowledge) and there is no evidence supporting it, or you "
+                  "can't tell.\n"
+                  "- wrong: it contradicts the evidence or well-established facts.\n"
+                  f"Today is {now.strftime('%A %d %B %Y')}. Be strict about specifics (names, numbers, dates).")
+        msgs = [{"role": "system", "content": system},
+                {"role": "user", "content": f"Question: {question}\nAnswer: {answer}\nEvidence:\n{evidence}"}]
+        try:
+            res = await asyncio.wait_for(self.llm.chat(msgs, tier="fast", json_mode=True, max_tokens=300), timeout=8.0)
+            data = parse_json_loose(res.content or "")
+        except Exception as e:  # noqa: BLE001 - a broken check mustn't block the answer
+            log.info("fact-check skipped: %s", e)
+            return {"verdict": "not_factual", "why": "check unavailable"}
+        if not isinstance(data, dict) or data.get("verdict") not in ("correct", "not_factual", "unsure", "wrong"):
+            return {"verdict": "not_factual", "why": "unclear check"}
+        return data
+
+    async def _make_sure(self, text: str, conv: Conversation, ctx: dict, reply: Reply) -> Reply:
+        """Check the answer before saying it. If it doesn't hold up: search, then think hard and search,
+        checking each time; if nothing holds up, say so honestly rather than guess."""
+        if reply.text.rstrip().endswith("?") or reply.intent == "think_offer":
+            return reply  # asking the user something: nothing to check
+        verdict = await self._check(text, reply.text, ctx)
+        log.info("fact-check: %s (%s)", verdict.get("verdict"), verdict.get("why", ""))
+        if verdict["verdict"] in ("correct", "not_factual"):
+            ctx["checked"] = "correct" if verdict["verdict"] == "correct" else ""
+            return reply
+        say = ctx.get("say")
+        if say:
+            await say(random.choice(["Let me double-check that.", "Hang on, let me make sure that's right.",
+                                     "One sec, I want to be sure about this."]))
+            ctx["said_while"] = True
+        for attempt in ("search", "think"):
+            why = verdict.get("why", "")
+            note = f"A fact-check said your answer \"{reply.text[:300]}\" was {verdict['verdict']}: {why}"
+            if attempt == "think":
+                ctx["thought"] = True
+            retry = await self._llm(text, conv, ctx, tier="smart" if attempt == "think" else "fast",
+                                    allow_think=False, note=note, force_search=True)
+            if not retry.text:
+                continue
+            verdict = await self._check(text, retry.text, ctx)
+            log.info("fact-check after %s: %s (%s)", attempt, verdict.get("verdict"), verdict.get("why", ""))
+            if verdict["verdict"] in ("correct", "not_factual"):
+                ctx["checked"] = "correct" if verdict["verdict"] == "correct" else ""
+                retry.intent = "llm_deep" if attempt == "think" else retry.intent
+                return retry
+        ctx["checked"] = "gave_up"
+        return Reply("Sorry, I've had a proper look, on the web and thinking it through, and I couldn't find solid "
+                     "information on that. I'd rather not guess.", reply.actions, model=reply.model, intent="llm")
+
     async def _reword(self, said_by_user: str, reply: str) -> str:
         """Say a quick, ready-made reply in Buddy's own words so it doesn't sound the same every time.
         Facts stay exact. Falls back to the original if Claude is slow or unavailable."""
@@ -520,16 +588,20 @@ class Brain:
         )
 
     async def _llm(self, text: str, conv: Conversation, ctx: dict, tier: str = "fast",
-                   allow_think: bool = True, note: str = "") -> Reply:
+                   allow_think: bool = True, note: str = "", force_search: bool = False) -> Reply:
         if THINK_REQUEST.search(text):
             tier = "smart"
         if tier == "smart":
+            ctx["thought"] = True
             await say_while(ctx, "think")
         system = await self.system_prompt()
         if note:
             system += (f"\nYour quick first try at this just failed: \"{note}\". Be persistent: try another wording "
                        "or spelling, use web_search to pin down the right name if that would help, then use the tool "
                        "again. If it still doesn't work after a couple of goes, say briefly and kindly what you tried.")
+        if force_search:
+            system += ("\nYour last answer to this didn't pass a fact-check. Use web_search to get current, reliable "
+                       "facts before answering, and only say what the results support.")
         if conv.dropped:
             system += ("\nTopics the user asked you to drop (don't bring them up again unless they do): "
                        + "; ".join(conv.dropped[-6:]) + ".")
