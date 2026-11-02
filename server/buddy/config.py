@@ -39,6 +39,8 @@ DEFAULTS: dict[str, Any] = {
     "spotify_client_id": "",  # from your own app at developer.spotify.com (no secret needed)
     "music_on_buddy": True,  # Spotify plays through Buddy's own speaker (librespot), not your phone or Mac
     "spotify_device": "",  # part of the name of the Spotify app/speaker to play on; empty = whichever is active
+    "alarm_sounds_folder": "",  # empty = look for a "sounds for buddy alarm" folder (Desktop, Documents...)
+    "default_alarm_sound": 1,  # used when you don't pick one (0 = the desk unit's beeps)
     "fact_check": True,  # check factual answers before saying them; retry with search / thinking if they fail
     "reword_replies": True,  # quick replies (timers, weather...) said in Claude's own words, not word-for-word
     "voices": [],  # up to 8 of {"name": ..., "id": ...}; "change your voice" cycles through them

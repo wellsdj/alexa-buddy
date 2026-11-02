@@ -43,6 +43,7 @@ from .config import Settings
 from .listening import ContextJudge
 from .llm import GroqLLM
 from .memory import MemoryManager, MemoryStore
+from .alarm_sounds import AlarmSounds
 from .music import MusicPlayer
 from .spotify import Spotify
 from .stt import LocalSTT, STTError
@@ -461,7 +462,9 @@ class Hub:
         self.judge = ContextJudge(settings, self.listener)
         self.stt = stt or LocalSTT(settings)
         self.awake = True  # "off" sets this to False until the next "hey buddy"
-        self.device_gone_at: dict[str, float] = {}  # desk unit name -> when it last disconnected
+        self.device_gone_at: dict[str, float] = {}
+        self.ring_started: dict = {}  # alarm id -> when it started ringing
+        self.timed_out: set = set()  # alarms this server stopped because nobody answered  # desk unit name -> when it last disconnected
         self.last_spoke_at = 0.0
         self.tts = TTSRouter(settings, ElevenLabsTTS(settings, http))
         self.weather = Weather(settings, http)
@@ -473,6 +476,8 @@ class Hub:
         self.brain.spotify = self.spotify
         self.music = MusicPlayer(settings, self)  # Spotify through Buddy's own speaker
         self.spotify.music = self.music
+        self.sounds = AlarmSounds(settings)  # your own alarm sounds
+        self.brain.sounds = self.sounds
         self.conv = Conversation()
         self.sessions: dict[str, Session] = {}
         self.fired_cache: dict[str, Alarm] = {}
@@ -745,10 +750,56 @@ class Hub:
             s.ringing = alarm_id
             await self.broadcast_ui({"type": "event", "kind": "ringing", "session": s.id, "id": alarm_id,
                                      "label": a.label if a else "", "alarm_kind": kind})
+            number = (a.sound or int(self.settings["default_alarm_sound"])) if a and kind == "alarm" else 0
+            if number:
+                self._soon(self._ring_with_sound(s, alarm_id, number))
+            if kind == "alarm":
+                self.ring_started[alarm_id] = datetime.now(ZoneInfo(self.settings["timezone"]))
+                self._soon(self._give_up_after(s, alarm_id, 30))
+
+    async def _give_up_after(self, s: Session, alarm_id: str | None, seconds: float) -> None:
+        """Nobody answered the alarm: stop it (older board software rings for 10 minutes)."""
+        await asyncio.sleep(seconds)
+        if s.ringing == alarm_id:
+            self.timed_out.add(alarm_id)
+            await s.send_json({"type": "alarm_stop", "reason": "timeout"})
+
+    async def _ring_with_sound(self, s: Session, alarm_id: str | None, number: int) -> None:
+        """Play your alarm sound on a loop while the alarm rings. The board stops its own beeps while
+        this sound arrives, and goes back to them if it stops (the laptop went to sleep, say)."""
+        pcm = await asyncio.to_thread(self.sounds.pcm, number)
+        if not pcm:
+            return
+        started = time.monotonic()
+        while s.ringing == alarm_id and time.monotonic() - started < 40:
+            s.seq = (s.seq + 1) % 256
+            seq = s.seq
+            await s.send_json({"type": "audio_start", "seq": seq, "rate": SR, "text": "", "ring": True})
+            t0, sent = time.monotonic(), 0
+            for i in range(0, len(pcm), 3200):
+                if s.ringing != alarm_id:
+                    break
+                ahead = sent / BYTES_PER_S - (time.monotonic() - t0)
+                if ahead > 0.6:
+                    await asyncio.sleep(ahead - 0.6)
+                await s.send_audio(seq, pcm[i:i + 3200])
+                sent += 3200
+            await s.send_json({"type": "audio_end", "seq": seq, "bytes": sent})
+            await asyncio.sleep(max(0.0, sent / BYTES_PER_S - (time.monotonic() - t0)) + 0.4)
+        if s.ringing != alarm_id:
+            await s.send_json({"type": "stop_audio", "seq": s.seq})
 
     async def alarm_stopped(self, s: Session, alarm_id: str | None, reason: str) -> None:
         a = self._resolve(alarm_id)
         s.ringing = None
+        rang_at = self.ring_started.pop(alarm_id, None)
+        if a and a.kind == "alarm" and (reason == "timeout" or alarm_id in self.timed_out):
+            self.timed_out.discard(alarm_id)
+            when = rang_at or datetime.now(ZoneInfo(self.settings["timezone"]))
+            self.brain.missed.append(f"{spoken_time(when)}" + (f" ({a.label})" if a.label else ""))
+            self.record("alarm_missed", session=s.id, id=alarm_id, at=spoken_time(when))
+            await self.broadcast_ui({"type": "event", "kind": "ringing", "session": s.id, "id": None})
+            return  # no briefing: nobody's there to hear it
         self.record("alarm_stopped", session=s.id, id=alarm_id, reason=reason)
         await self.broadcast_ui({"type": "event", "kind": "ringing", "session": s.id, "id": None})
         if not a or a.kind != "alarm" or reason == "snooze":
@@ -866,4 +917,5 @@ class Hub:
             "weather_error": self.weather.last_error,
             "spotify": self.spotify.status(),
             "music": self.music.status(),
+            "alarm_sounds": self.sounds.status(),
         }

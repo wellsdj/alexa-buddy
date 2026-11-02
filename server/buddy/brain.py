@@ -57,6 +57,20 @@ SETUP_PROBLEM = re.compile(r"isn'?t (set up|connected)|premium|my speaker|update
                            r"spotify (open|isn'?t letting)|switched off", re.I)
 
 
+_WORDS = {1: "one", 2: "two", 3: "three", 4: "four", 5: "five", 6: "six", 7: "seven", 8: "eight", 9: "nine"}
+_PICKS = {"one": 1, "won": 1, "first": 1, "1": 1, "two": 2, "to": 2, "too": 2, "second": 2, "2": 2, "three": 3,
+          "third": 3, "3": 3, "four": 4, "for": 4, "fourth": 4, "4": 4, "five": 5, "fifth": 5, "5": 5, "six": 6,
+          "sixth": 6, "6": 6, "seven": 7, "7": 7, "eight": 8, "8": 8, "nine": 9, "9": 9}
+
+
+def _number_pick(text: str) -> int | None:
+    """ "two", "the second one", "number 2", "sound three please" -> 2, 2, 2, 3."""
+    for w in re.findall(r"[a-z0-9]+", (text or "").lower()):
+        if w in _PICKS and not (w in ("to", "too", "for") and len(text.split()) > 2):
+            return _PICKS[w]
+    return None
+
+
 def quick_failed(text: str) -> bool:
     return bool(text and QUICK_FAIL.search(text) and not SETUP_PROBLEM.search(text))
 
@@ -115,7 +129,9 @@ TOOLS = [
             "time": {"type": "string", "description": "24h local time HH:MM"},
             "repeat": {"type": "string", "description": "none, daily, weekdays, weekends, or days like 'mon,wed'"},
             "date": {"type": "string", "description": "YYYY-MM-DD, only for a one-off on a specific day"},
-            "label": {"type": "string"}}, "required": ["time"]}}},
+            "label": {"type": "string"},
+            "sound": {"type": "integer", "description": "alarm sound number, only if the user said one"}},
+            "required": ["time"]}}},
     {"type": "function", "function": {
         "name": "set_timer", "description": "Start a countdown timer.",
         "parameters": {"type": "object", "properties": {
@@ -261,6 +277,8 @@ class Brain:
         self.memory_mgr = memory_mgr
         self.weather = weather
         self.volume = int(settings["volume"])
+        self.sounds = None  # AlarmSounds, set by the hub
+        self.missed: list[str] = []  # alarms that rang out with nobody there, to mention next time
 
     def now(self) -> datetime:
         return datetime.now(ZoneInfo(self.settings["timezone"]))
@@ -271,6 +289,7 @@ class Brain:
         text = intents.strip_wake(text)
         if not text:
             return Reply("", intent="empty")
+        ctx["said"] = text
         reply = await self._pending(text, conv, ctx)
         if reply is None:
             intent = intents.match(text, self.now(), {"ringing": ctx.get("ringing"), "pager": conv.pager is not None})
@@ -286,6 +305,8 @@ class Brain:
         reply.text = speakable(reply.text, 1400 if reply.intent == "llm_deep" else 900)
         if reply.text and reply.intent in REWORD and self.settings["reword_replies"]:
             reply.text = await self._reword(text, reply.text)
+        if self.missed and reply.text and reply.intent not in ("off", "stop", "repeat", "think_offer"):
+            reply.text = await self._mention_missed(text, reply.text)
         conv.add("user", text)
         if reply.text:
             notes = [f'I searched the web for "{q}" and found: {r[:350]}' for q, r in ctx.get("searched", [])]
@@ -323,6 +344,15 @@ class Brain:
             if NO.search(text):
                 return await self._llm(p["text"], conv, ctx, allow_think=False)
             return None  # something else entirely: treat it as a new request
+        if p.get("intent") == "alarm_sound":
+            n = _number_pick(text)
+            names = self.sounds.names() if self.sounds else []
+            if n and 1 <= n <= len(names):
+                self.alarms.set_sound(p["id"], n)
+                return Reply(random.choice([f"Sound {_WORDS[n]} it is.", f"Lovely, sound {_WORDS[n]}.",
+                                            f"Done, sound {_WORDS[n]}."]), intent="alarm_sound")
+            self.alarms.set_sound(p["id"], int(self.settings["default_alarm_sound"]))
+            return None  # something else entirely: keep the usual sound and treat it as a new request
         if p.get("intent") == "alarm_time":
             digits = words_to_digits(text)
             clock = find_clock(digits)
@@ -405,6 +435,9 @@ class Brain:
             return Reply(f"Okay, I'll wake you in {human_duration(a['seconds'])}.", intent=n)
         if n == "alarm":
             al = self.alarms.add_alarm(a["time"], a.get("repeat") or None, a.get("label", ""), a.get("date"))
+            ask = self._alarm_sound(al, conv, ctx.get("said", ""))
+            if ask:
+                return Reply(f"{self.alarms.confirm_text(al)} {ask}", intent="alarm_ask", follow_up=True)
             return Reply(self.alarms.confirm_text(al), intent=n)
         if n == "alarm_needs_time":
             conv.pending = {"intent": "alarm_time"}
@@ -416,6 +449,47 @@ class Brain:
             al = self.alarms.add_alarm(a["time"], a.get("repeat") or None, a["text"], a.get("date"), kind="reminder")
             return Reply(self.alarms.confirm_text(al), intent=n)
         return None
+
+    async def _mention_missed(self, said_by_user: str, reply: str) -> str:
+        """Work "by the way, you missed your 7 AM alarm" into the reply wherever it fits best."""
+        missed, self.missed = self.missed, []
+        what = " and ".join(missed)
+        plural = "alarms" if len(missed) > 1 else "alarm"
+        fallback = f"{reply} By the way, you missed your {what} {plural}."
+        system = ("You are a friendly voice assistant. Work one short, natural mention into the reply below that "
+                  f"the user missed their {what} {plural} (it rang out with nobody there). Put it wherever it fits "
+                  "best: at the start if it matters most, in the middle if it flows, or at the end as a 'by the "
+                  "way'. Keep every other fact and number in the reply exactly. Reply with only the words to say.")
+        msgs = [{"role": "system", "content": system},
+                {"role": "user", "content": f'They said: "{said_by_user}"\nReply: "{reply}"'}]
+        try:
+            res = await asyncio.wait_for(self.llm.chat(msgs, tier="fast", max_tokens=300), timeout=4.0)
+            out = (res.content or "").strip().strip('"').strip()
+        except Exception as e:  # noqa: BLE001
+            log.info("missed-alarm mention fell back: %s", e)
+            return fallback
+        digits_ok = all(n in out for n in re.findall(r"\d+", reply))
+        mentioned = "alarm" in out.lower() and "miss" in out.lower()
+        return out if out and digits_ok and mentioned else fallback
+
+    def _alarm_sound(self, al, conv: Conversation, said: str) -> str:
+        """Pick the alarm's sound: the one they named, else ask "one or two?" when there's a choice.
+        Returns the question to add to the reply, or ""."""
+        names = self.sounds.names() if self.sounds else []
+        if al.kind != "alarm" or not names:
+            return ""
+        m = re.search(r"\b(?:sound|tone|ringtone|ring)\s*(?:number\s*)?(\w+)", said or "", re.I)
+        n = _number_pick(m.group(1)) if m else None
+        if n and 1 <= n <= len(names):
+            self.alarms.set_sound(al.id, n)
+            return ""
+        if len(names) == 1:
+            self.alarms.set_sound(al.id, 1)
+            return ""
+        self.alarms.set_sound(al.id, int(self.settings["default_alarm_sound"]))  # until they answer
+        conv.pending = {"intent": "alarm_sound", "id": al.id}
+        options = [_WORDS[i] for i in range(1, min(len(names), 9) + 1)]
+        return f"Which alarm sound, {', '.join(options[:-1])} or {options[-1]}?"
 
     async def _check(self, question: str, answer: str, ctx: dict) -> dict:
         """A strict, separate fact-checker. Returns {"verdict": correct | not_factual | unsure | wrong, "why": ...}."""
@@ -682,6 +756,9 @@ class Brain:
             if name == "set_alarm":
                 al = self.alarms.add_alarm(a["time"], a.get("repeat") or None, a.get("label", ""), a.get("date") or None)
                 c = self.alarms.confirm_text(al)
+                ask = self._alarm_sound(al, conv, f"sound {a['sound']}" if a.get("sound") else ctx.get("said", ""))
+                if ask:
+                    c = f"{c} {ask}"
                 return f"ok id={al.id}: {c}", c, []
             if name == "set_timer":
                 al = self.alarms.add_timer(int(a["seconds"]), a.get("label", ""))

@@ -549,6 +549,9 @@ async function loadStatus() {
   const dev = devices[0]?.info || {};
   if (dev.rssi) stats.push(["Desk unit Wi-Fi", `${dev.rssi} dBm${dev.rssi < -75 ? " (weak)" : ""} · heap ${Math.round((dev.heap || 0) / 1024)} KB`]);
   if (dev.dropped_spk != null) stats.push(["Desk unit audio gaps", `speaker ${dev.dropped_spk} · mic ${dev.dropped_mic ?? 0}`]);
+  const snd = st.alarm_sounds || {};
+  stats.push(["Alarm sounds", snd.folder ? (snd.sounds.length ? snd.sounds.map((n, i) => `${i + 1}: ${n}`).join(", ")
+    : `no sound files in ${snd.folder}`) : "no “sounds for buddy alarm” folder found (Desktop, Documents or Downloads)"]);
   const mus = st.music || {};
   if (mus.enabled) stats.push(["Music to Buddy's speaker",
     `${mus.running ? "librespot running" : "librespot NOT running"} · in ${mus.kb_in} KB · out ${mus.kb_out} KB` +

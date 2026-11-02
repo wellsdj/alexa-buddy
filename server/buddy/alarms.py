@@ -39,6 +39,7 @@ class Alarm:
     enabled: bool = True
     created: float = field(default_factory=_time.time)
     duration: int = 0  # timers: original length in seconds
+    sound: int = 0  # alarms: which of your alarm sounds (1, 2, ...); 0 = the desk unit's own beeps
 
     @property
     def repeating(self) -> bool:
@@ -159,6 +160,14 @@ class AlarmStore:
             nd = (local_now + timedelta(days=1)).date()
             target = datetime(nd.year, nd.month, nd.day, h, m, tzinfo=self.tz)
         return target.timestamp()
+
+    def set_sound(self, alarm_id: str, sound: int) -> Alarm | None:
+        with self._lock:
+            a = self._items.get(alarm_id)
+            if a:
+                a.sound = max(0, int(sound))
+                self._save()
+        return a
 
     def add_alarm(self, hhmm: str, repeat: str | list | None = None, label: str = "",
                   date: str | None = None, kind: str = "alarm", now: float | None = None) -> Alarm:

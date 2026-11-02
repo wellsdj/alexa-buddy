@@ -22,7 +22,7 @@
 
 #include "config.h"
 
-#define FW_VERSION "1.2.0"
+#define FW_VERSION "1.3.0"
 #define SAMPLE_RATE 16000
 #define MIC_FRAMES 320               // 20 ms per I2S read
 #define SEND_BYTES 1280              // 40 ms of 16-bit audio per WebSocket frame
@@ -48,6 +48,7 @@ static volatile int acceptSeq = -1;
 static volatile uint32_t seqBytes = 0;
 static volatile bool streamEnded = false;
 static volatile bool flushSpeaker = false;
+static volatile uint32_t lastStreamMs = 0;  // when sound last arrived from the server (an alarm sound, say)
 static volatile uint32_t spkRate = SAMPLE_RATE;   // speaker rate now: 16 kHz speech, 32 kHz music
 static volatile uint32_t wantRate = SAMPLE_RATE;  // rate the next stream needs
 static volatile bool playbackDone = false;
@@ -219,7 +220,8 @@ static void playTask(void *) {
       flushSpeaker = false;
       playing = false;
     }
-    if (ringMode != RING_NONE && toneLen == 0) {
+    // While your own alarm sound is arriving from the server, it replaces the beeps.
+    if (ringMode != RING_NONE && toneLen == 0 && millis() - lastStreamMs > 2500) {
       static const Note alarmPattern[] = {{784, 160}, {0, 40}, {988, 160}, {0, 40}, {1175, 300}, {0, 700}};
       static const Note timerPattern[] = {{1047, 110}, {0, 90}, {1047, 110}, {0, 90}, {1047, 110}, {0, 90}, {1047, 110}, {0, 600}};
       if (ringMode == RING_ALARM) queueNotes(alarmPattern, 6, false);
@@ -231,6 +233,10 @@ static void playTask(void *) {
     if (!tone) {
       n = xStreamBufferReceive(spkStream, mono, sizeof(mono), pdMS_TO_TICKS(20)) / 2;
       gain = speechGain();
+      if (ringMode != RING_NONE) {  // an alarm sound: at least half volume, getting louder like the beeps
+        float ramp = min(1.0f, 0.3f + (millis() - ringStartMs) / 30000.0f * 0.7f);
+        gain = max(0.5f, gain) * ramp;
+      }
       if (n == 0) {
         if (playing && streamEnded && xStreamBufferIsEmpty(spkStream)) {
           playing = false;
@@ -372,7 +378,7 @@ static void checkAlarms() {
   if (millis() - lastCheck < 250) return;
   lastCheck = millis();
   if (ringMode != RING_NONE) {
-    uint32_t limit = ringKind == K_TIMER ? 3 * 60000 : 10 * 60000;
+    uint32_t limit = ringKind == K_TIMER ? 3 * 60000 : 30000;  // alarms give up after 30 s (missed)
     if (millis() - ringStartMs > limit) stopRinging("timeout");
   }
   if (!timeValid()) return;
@@ -422,6 +428,11 @@ static void handleJson(uint8_t *payload, size_t len) {
     earcon(doc["name"] | "");
   } else if (!strcmp(type, "audio_start")) {
     acceptSeq = -1;
+    if (doc["ring"] | false) {
+      portENTER_CRITICAL(&toneMux);
+      toneLen = 0;  // your alarm sound takes over from the beeps
+      portEXIT_CRITICAL(&toneMux);
+    }
     uint32_t r = doc["rate"] | SAMPLE_RATE;
     if (r == 16000 || r == 22050 || r == 24000 || r == 32000 || r == 44100) wantRate = r;
     flushSpeakerNow();
@@ -463,7 +474,7 @@ static void handleJson(uint8_t *payload, size_t len) {
     saveFires();
     Serial.printf("[alarms] schedule updated: %d fire times\n", n);
   } else if (!strcmp(type, "alarm_stop")) {
-    stopRinging(doc["quiet"] | false ? "snooze" : "voice");
+    stopRinging(doc["reason"] | (doc["quiet"] | false ? "snooze" : "voice"));
   }
 }
 
@@ -509,6 +520,7 @@ static void wsEvent(WStype_t type, uint8_t *payload, size_t len) {
         seqBytes += bytes;
         // All or nothing: a half-written piece would shift every later sample by a byte,
         // which turns the voice into loud static until the next answer.
+        lastStreamMs = millis();
         if (xStreamBufferSpacesAvailable(spkStream) >= bytes) xStreamBufferSend(spkStream, payload + 1, bytes, 0);
         else droppedSpk++;
       }
