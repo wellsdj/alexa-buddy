@@ -9,7 +9,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
-<link rel="stylesheet" href="/static/style.css?v=chat6">
+<link rel="stylesheet" href="/static/style.css?v=chat7">
 </head>
 <body>
 <header class="top">
@@ -85,6 +85,7 @@
     <button role="tab" data-tab="voices" aria-selected="false">Voices</button>
     <button role="tab" data-tab="settings" aria-selected="false">Settings</button>
     <button role="tab" data-tab="activity" aria-selected="false">Activity</button>
+    <button role="tab" data-tab="mictest" aria-selected="false">Mic test</button>
   </nav>
   <div class="drawer-body">
     <div class="panel" id="panel-alarms" role="tabpanel">
@@ -214,6 +215,27 @@
         <label>Access token <span class="note">optional; if set, the ESP32 and this page need it</span>
           <input data-setting="device_token" type="text" placeholder="leave blank on a home network"></label>
       </fieldset>
+      <fieldset>
+        <legend>Updates</legend>
+        <p class="note">Get Buddy's newest features. Buddy restarts by itself; this page reconnects after a minute or two.</p>
+        <span class="row"><button class="btn primary small" id="update-now" type="button">Update Buddy now</button></span>
+        <p class="note" id="update-status"></p>
+      </fieldset>
+    </div>
+
+    <div class="panel" id="panel-mictest" role="tabpanel" hidden>
+      <header class="panel-head"><h2>Mic test</h2><p>Talk normally from where you usually are. Your words appear as Buddy hears them. Buddy won't answer while the test is on.</p></header>
+      <div class="add-memory">
+        <select id="mt-source" aria-label="Which microphone"><option value="me">this browser</option></select>
+        <button class="btn primary" id="mt-start" type="button">Start</button>
+      </div>
+      <section class="mic-box">
+        <div class="meter"><span class="meter-name">Level</span><div class="bar"><i id="mt-bar"></i></div><span class="meter-val" id="mt-db">–</span></div>
+        <p class="note" id="mt-stats">Press Start, then say something.</p>
+        <p class="note" id="mt-advice"></p>
+      </section>
+      <ol class="mt-lines" id="mt-lines"></ol>
+      <p class="mt-partial" id="mt-partial"></p>
     </div>
 
     <div class="panel" id="panel-activity" role="tabpanel" hidden>
@@ -230,6 +252,6 @@
 </aside>
 
 <div class="toast" id="toast" role="status" hidden></div>
-<script src="/static/app.js?v=chat6"></script>
+<script src="/static/app.js?v=chat7"></script>
 </body>
 </html>

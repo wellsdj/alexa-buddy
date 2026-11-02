@@ -172,6 +172,19 @@ def create_app(settings: Settings | None = None, http=None, claude_http=None, st
         return HTMLResponse(_page("Spotify connected", f"Connected{' as ' + who if who else ''}. "
                                                        "You can close this tab and ask Buddy to play something."))
 
+    @app.post("/api/update")
+    async def update_buddy():
+        """The Update Buddy button, from the web page: runs the same installer, detached, because it
+        stops this server and starts the new version."""
+        import subprocess
+        log_path = settings.data_dir / "update.log"
+        cmd = ("curl -fsSL https://raw.githubusercontent.com/wellsdj/alexa-buddy/main/install.sh | "
+               f"BUDDY_NO_BROWSER=1 bash > '{log_path}' 2>&1")
+        subprocess.Popen(["/bin/bash", "-c", cmd], start_new_session=True,
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        hub.record("update_started")
+        return {"ok": True}
+
     @app.post("/api/spotify/disconnect")
     async def spotify_disconnect():
         hub.spotify.disconnect()

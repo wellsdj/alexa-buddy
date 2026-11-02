@@ -89,6 +89,15 @@ class Session:
         self.inbox: asyncio.Queue = asyncio.Queue(maxsize=400)
         self.worker: asyncio.Task | None = None
         self.speak_task: asyncio.Task | None = None
+        self.mic_test = False  # being tested: transcribe everything live for the Mic test page
+        self.mic_test_viewer: "Session | None" = None
+        self.mic_test_until = 0.0
+        self.mt_buf: list[np.ndarray] = []
+        self.mt_silence = 0
+        self.mt_busy = False
+        self.mt_last_partial = 0.0
+        self.mt_peak = 0.0
+        self.mt_clipped = 0
         self.relistened = False  # already gave them a second go after not making out their words
         self.interim_task: asyncio.Task | None = None  # a "one sec, I'll check" line still playing
         self.seq = 0
@@ -141,9 +150,53 @@ class Session:
             await self.send_audio(seq, STARTUP_SOUND[i:i + 3200])
         await self.send_json({"type": "audio_end", "seq": seq, "bytes": len(STARTUP_SOUND)})
 
+    # ---------- mic test ----------
+    async def _mic_test_audio(self, pcm: np.ndarray, probs: list[float]) -> None:
+        """Live transcription for the Mic test page: partial text while you talk, final text after."""
+        if time.time() > self.mic_test_until or not self.mic_test_viewer:
+            self.mic_test = False
+            return
+        peak = float(np.abs(pcm.astype(np.int32)).max()) if len(pcm) else 0.0
+        self.mt_peak = max(self.mt_peak * 0.9, peak)
+        self.mt_clipped += int(np.sum(np.abs(pcm.astype(np.int32)) >= 32000))
+        voiced = any(p >= 0.5 for p in probs)
+        if voiced or self.mt_buf:
+            self.mt_buf.append(pcm)
+        self.mt_silence = 0 if voiced else self.mt_silence + len(pcm)
+        stats = {"db": round(self.level_db, 1),
+                 "peak_db": round(20 * np.log10(max(self.mt_peak, 1.0) / 32768), 1), "clipped": self.mt_clipped}
+        audio_s = sum(len(b) for b in self.mt_buf) / SR
+        if self.mt_buf and (self.mt_silence > SR * 0.7 or audio_s > 12):
+            audio = np.concatenate(self.mt_buf)
+            self.mt_buf, self.mt_silence = [], 0
+            asyncio.create_task(self._mic_test_send(audio, final=True, stats=stats))
+        elif self.mt_buf and not self.mt_busy and time.time() - self.mt_last_partial > 0.8 and audio_s > 0.5:
+            self.mt_last_partial = time.time()
+            asyncio.create_task(self._mic_test_send(np.concatenate(self.mt_buf), final=False, stats=stats))
+        elif time.time() - self.mt_last_partial > 0.5 and not self.mt_buf:
+            self.mt_last_partial = time.time()
+            await self.mic_test_viewer.send_json({"type": "event", "kind": "mic_test", **stats})
+
+    async def _mic_test_send(self, audio: np.ndarray, final: bool, stats: dict) -> None:
+        if not final:
+            self.mt_busy = True
+        t0 = time.monotonic()
+        try:
+            text = await self.hub.stt.transcribe(audio, "", max(0.5, len(audio) / SR))
+        except STTError as e:
+            text = f"[ears error: {e}]"
+        finally:
+            if not final:
+                self.mt_busy = False
+        ms = int((time.monotonic() - t0) * 1000)
+        if self.mic_test_viewer:
+            await self.mic_test_viewer.send_json({
+                "type": "event", "kind": "mic_test", "text": text, "final": final, "ms": ms,
+                "engine": self.hub.stt.status().get("engine", ""), "seconds": round(len(audio) / SR, 1), **stats})
+
     # ---------- audio in ----------
     def feed(self, pcm_bytes: bytes) -> None:
-        if not self.hands_free and not self.ptt and self.state != "listening":
+        if not self.hands_free and not self.ptt and self.state != "listening" and not self.mic_test:
             return
         pcm = np.frombuffer(pcm_bytes[: len(pcm_bytes) - len(pcm_bytes) % 2], dtype=np.int16)
         try:
@@ -169,7 +222,7 @@ class Session:
                 # arrives at once, the pre-roll is cut relative to the moment of the wake word.
                 for start in range(0, len(pcm), 1920):
                     piece = pcm[start:start + 1920]
-                    run_wake = self.hands_free and (self.state != "listening" or bool(self.silent))
+                    run_wake = self.hands_free and not self.mic_test and (self.state != "listening" or bool(self.silent))
                     wake, probs = await asyncio.to_thread(
                         self._analyze, piece, run_wake, float(s["wake_threshold"]), float(s["wake_verify_threshold"]))
                     await self._on_audio(piece, wake, probs)
@@ -203,6 +256,10 @@ class Session:
             score = self.detector.take_peak() if self.detector else 0.0
             await self.hub.broadcast_ui({"type": "event", "kind": "level", "session": self.id,
                                          "db": round(self.level_db, 1), "wake": round(score, 3)})
+
+        if self.mic_test:
+            await self._mic_test_audio(pcm, probs)
+            return  # Buddy doesn't react while its mic is being tested
 
         if self.state == "listening":
             self.capture.append(pcm)
@@ -439,6 +496,8 @@ class Session:
         elif t == "button":
             if self.state == "speaking":
                 await self.stop_speaking()
+        elif t == "mic_test":
+            await self.hub.mic_test(self, bool(msg.get("on")), msg.get("target") or "me")
         elif t == "text":
             text = (msg.get("text") or "").strip()
             if text:
@@ -527,6 +586,9 @@ class Hub:
 
     def remove(self, s: Session) -> None:
         self.sessions.pop(s.id, None)
+        for x in self.sessions.values():  # a closed Mic test page stops its test
+            if x.mic_test_viewer is s:
+                x.mic_test, x.mic_test_viewer = False, None
         for t in (s.worker, s.speak_task):
             if t and not t.done():
                 t.cancel()
@@ -556,6 +618,22 @@ class Hub:
             if self.just_switched_on(s):
                 await s.play_startup_sound()
         self.record("connect", session=s.id, role=s.role, info=s.info)
+
+    async def mic_test(self, viewer: Session, on: bool, target: str) -> None:
+        """Start or stop the live mic test. target: "me" (this browser) or a desk unit's session id."""
+        for x in self.sessions.values():  # only one test at a time, per viewer
+            if x.mic_test_viewer is viewer:
+                x.mic_test, x.mic_test_viewer = False, None
+        if not on:
+            return
+        who = viewer if target == "me" else self.sessions.get(target)
+        if who is None:
+            await viewer.send_json({"type": "event", "kind": "mic_test", "error": "That mic isn't connected."})
+            return
+        who.mic_test, who.mic_test_viewer = True, viewer
+        who.mic_test_until = time.time() + 300  # switches itself off after 5 minutes
+        who.mt_buf, who.mt_silence, who.mt_peak, who.mt_clipped = [], 0, 0.0, 0
+        self.record("mic_test", target=who.id)
 
     def just_switched_on(self, s: Session) -> bool:
         """Plugged in, rather than a quick Wi-Fi reconnect. Newer board software says how long
@@ -615,6 +693,7 @@ class Hub:
             # Only ignore it when the words are clearly something else; unclear or short: wake to be sure.
             if len(words) > 3 and not starts_buddy:
                 self.record("wake_rejected", session=s.id, heard=text)
+                await self.note(s, f'Heard "{text}", but it didn\'t sound like "hey buddy".')
                 await s.set_state("idle")
                 return
             self.record("wake_verified", session=s.id, heard=text)
@@ -630,6 +709,7 @@ class Hub:
             self.record("heard", session=s.id, heard=text, for_buddy=for_buddy, how=self.judge.last_how,
                         stt_ms=stt_ms)
             if not for_buddy:
+                await self.note(s, f'Heard "{text}" and decided it wasn\'t for me.')
                 await s.set_state("idle")
                 return
             await self._accept(s, text, stt_ms)
@@ -638,6 +718,9 @@ class Hub:
             text = await self._second_listen(audio, speech_s)  # louder, trimmed: often enough
         if not text.strip():
             self.record("nothing_heard", session=s.id, speech_s=round(speech_s, 2))
+            if speech_s >= 0.3:
+                await self.note(s, "Heard you talking but couldn't make out any words"
+                                   + (", so I'm still listening." if speech_s >= 0.6 and not s.relistened else "."))
             if speech_s >= 0.6 and not s.relistened:
                 # Someone said something we couldn't make out: no apology, just keep listening
                 # (the light stays on) so they can say it again without "hey buddy".
@@ -689,6 +772,10 @@ class Hub:
         await s.set_state("thinking")
         await self.respond(s, text)
 
+    async def note(self, s: Session, text: str) -> None:
+        """A small grey line in the chat explaining why Buddy went quiet (not spoken)."""
+        await self.broadcast_ui({"type": "event", "kind": "transcript", "session": s.id, "role": "note", "text": text})
+
     async def announce(self, s: Session, text: str) -> None:
         """Speak something that isn't a reply to what was just said, and show it in the chat."""
         await self.broadcast_ui({"type": "event", "kind": "transcript", "session": s.id, "role": "assistant", "text": text})
@@ -719,6 +806,10 @@ class Hub:
         if reply.text:
             await s.speak(reply.text, then_listen=reply.follow_up)
         else:
+            if reply.intent in ("off", "stop"):
+                await self.note(s, f'Went quiet: I took "{text}" as {"off" if reply.intent == "off" else "stop"}.')
+            elif reply.intent not in ("music",):
+                await self.note(s, f'Heard "{text}" but had nothing to say back.')
             await s.set_state("idle")
 
     async def apply_action(self, s: Session, act: dict) -> None:

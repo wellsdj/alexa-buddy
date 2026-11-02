@@ -138,7 +138,7 @@ const Mic = {
       const mute = this.ctx.createGain(); mute.gain.value = 0;
       src.connect(this.node).connect(mute).connect(this.ctx.destination);
       this.node.port.onmessage = (e) => {
-        if (S.ws?.readyState === 1 && (S.handsFree || S.ptt || S.state === "listening")) S.ws.send(e.data);
+        if (S.ws?.readyState === 1 && (S.handsFree || S.ptt || S.micTest || S.state === "listening")) S.ws.send(e.data);
       };
     })();
     try { await this.starting; } finally { this.starting = null; }
@@ -219,6 +219,7 @@ function onEvent(m) {
       if ((S.meterSource === "me" && m.session === S.sessionId) || m.session === S.meterSource) showLevel(m.db, m.wake);
       break;
     case "transcript": addChat(m); break;
+    case "mic_test": micTestEvent(m); break;
     case "log": addLog(m.entry); if (m.entry.event === "turn") loadStatusSoon(); break;
     case "alarms": loadAlarms(); break;
     case "memory": loadMemory(); break;
@@ -251,7 +252,8 @@ function addChat(m) {
   if (!m.text) return;
   const meta = m.role === "assistant" && (m.model || m.intent)
     ? el("span", { class: "meta" }, m.model ? m.model.replace("openai/", "") : `instant · ${m.intent}`) : null;
-  const li = el("li", { class: `${m.role}${m.session && m.session !== S.sessionId ? " from-device" : ""}` }, m.text, meta);
+  const li = m.role === "note" ? el("li", { class: "note-line" }, m.text)
+    : el("li", { class: `${m.role}${m.session && m.session !== S.sessionId ? " from-device" : ""}` }, m.text, meta);
   chat.append(li);
   while (chat.children.length > 120) chat.firstChild.remove();
   requestAnimationFrame(() => (chat.scrollTop = chat.scrollHeight));
@@ -484,6 +486,42 @@ async function useVoice(i) {
   } catch (err) { toast("Couldn't save: " + err.message); }
 }
 
+// ---------------------------------------------------------------- mic test
+async function micTest(on) {
+  const target = $("mt-source").value;
+  if (on && target === "me") {
+    try { await Mic.start(); } catch (err) { toast("Microphone: " + err.message, 5000); return; }
+  }
+  S.micTest = on;
+  send({ type: "mic_test", on, target });
+  $("mt-start").textContent = on ? "Stop" : "Start";
+  $("mt-stats").textContent = on ? "Listening… say something." : "Stopped.";
+  if (on) { $("mt-lines").replaceChildren(); $("mt-partial").textContent = ""; $("mt-advice").textContent = ""; }
+  if (!on && !S.handsFree && !S.ptt) Mic.stop();
+}
+function micTestEvent(m) {
+  if (m.error) { toast(m.error); micTest(false); return; }
+  if (m.db != null) {
+    $("mt-bar").style.width = Math.max(0, Math.min(100, ((m.db + 70) / 60) * 100)) + "%";
+    $("mt-db").textContent = `${Math.round(m.db)} dB`;
+    $("mt-stats").textContent = `Loudest recently: ${m.peak_db} dB · distorted samples: ${m.clipped}`;
+    $("mt-advice").textContent = m.clipped > 50 ? "Too loud: it's distorting. Lower the desk unit mic boost in Settings (try ×4)."
+      : m.peak_db < -32 && m.text ? "Quite quiet: raise the desk unit mic boost in Settings, or move a bit closer."
+      : m.peak_db > -32 ? "Level looks good." : "";
+  }
+  if (m.text == null) return;
+  if (m.final) {
+    $("mt-partial").textContent = "";
+    if (m.text.trim()) {
+      $("mt-lines").append(el("li", {}, m.text, el("span", { class: "meta" }, ` ${m.seconds}s of speech · ${m.ms} ms · ${m.engine}`)));
+    } else {
+      $("mt-lines").append(el("li", { class: "miss" }, `(heard ${m.seconds}s of sound but no words)`));
+    }
+  } else {
+    $("mt-partial").textContent = m.text ? m.text + " …" : "…";
+  }
+}
+
 async function saveSetting(input) {
   const key = input.dataset.setting;
   const value = input.type === "checkbox" ? input.checked : input.value;
@@ -510,6 +548,10 @@ async function loadStatus() {
   sel.replaceChildren(el("option", { value: "me" }, "this browser"),
     ...devices.map((d) => el("option", { value: d.id }, `desk unit (${d.name})`)));
   sel.value = [...sel.options].some((o) => o.value === cur) ? cur : "me";
+  const mts = $("mt-source"), mcur = mts.value;
+  mts.replaceChildren(el("option", { value: "me" }, "this browser"),
+    ...devices.map((d) => el("option", { value: d.id }, `desk unit mic (${d.name})`)));
+  mts.value = [...mts.options].some((o) => o.value === mcur) ? mcur : (devices[0]?.id || "me");
   showKeys(st.keys);
   const sp = st.spotify || {};
   $("spotify-status").textContent = sp.connected
@@ -718,6 +760,14 @@ function init() {
     catch (err) { toast("Couldn't: " + err.message); }
   };
   $("spotify-redirect").textContent = `http://127.0.0.1:${location.port || 80}/spotify/callback`;
+  $("mt-start").onclick = () => micTest(!S.micTest);
+  $("update-now").onclick = async () => {
+    if (!confirm("Update Buddy now? It restarts by itself; give it a minute or two.")) return;
+    try {
+      await api("/api/update", { method: "POST" });
+      $("update-status").textContent = "Updating… Buddy will restart and this page will reconnect. If it takes more than 5 minutes, double-click Update Buddy on the Desktop.";
+    } catch (err) { $("update-status").textContent = "Couldn't start the update: " + err.message; }
+  };
   $("voices-save").onclick = async () => {
     try {
       await saveVoices();
