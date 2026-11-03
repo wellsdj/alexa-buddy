@@ -712,7 +712,7 @@ function init() {
     input.addEventListener("change", () => saveSetting(input));
     if (input.type === "range") input.addEventListener("input", () => {
       const out = input.nextElementSibling;
-      if (out?.tagName === "OUTPUT") out.textContent = Number(input.value).toFixed(2);
+      if (out?.tagName === "OUTPUT") out.textContent = Number(input.value).toFixed(Number(input.step) >= 1 ? 0 : 2);
     });
   }
   for (const b of document.querySelectorAll("[data-save-key]")) {

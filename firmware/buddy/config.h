@@ -25,6 +25,12 @@
 #define STATUS_LED_PIN_ALT 38
 #define LED_BRIGHTNESS 40  // 0-255; the on-board LED is very bright
 
+// LED strip behind the grille (WS2812B / WS2812E: 5V, GND, DIN). -1 to disable.
+// How many LEDs and how bright are set on Buddy's web page (Settings > Light strip).
+#define STRIP_PIN 2
+#define STRIP_MAX_LEDS 60      // the most it will drive (one metre of 60/m)
+#define STRIP_DEFAULT_LEDS 15  // until the web page says otherwise (about 25 cm)
+
 // Microphone loudness. The INMP441 is quiet, so its 24-bit samples are shifted down by
 // this much to 16 bits. Lower = louder. The server can change it live (web page ->
 // Settings -> Listening), so you rarely need to touch this.

@@ -22,7 +22,7 @@
 
 #include "config.h"
 
-#define FW_VERSION "1.3.0"
+#define FW_VERSION "1.4.0"
 #define SAMPLE_RATE 16000
 #define MIC_FRAMES 320               // 20 ms per I2S read
 #define SEND_BYTES 1280              // 40 ms of 16-bit audio per WebSocket frame
@@ -341,6 +341,100 @@ static void updateLed() {
   }
 }
 
+// ------------------------------------------------------------------ LED strip behind the grille
+// Same moods as the little light, as animations along the strip, fading smoothly between them.
+static uint16_t stripCount = STRIP_DEFAULT_LEDS;
+static uint8_t stripBrightness = 70;  // 0-255, set from the web page
+#if STRIP_PIN >= 0
+static rmt_data_t stripBits[STRIP_MAX_LEDS * 24];
+static float stripNow[STRIP_MAX_LEDS][3];  // what's showing (0..1), eased towards the target
+static bool stripReady = false;
+
+static void stripInit() {
+  stripReady = rmtInit(STRIP_PIN, RMT_TX_MODE, RMT_MEM_NUM_BLOCKS_1, 10000000);  // 0.1 us ticks
+  Serial.printf("[strip] %s on GPIO %d, %u LEDs\n", stripReady ? "ready" : "FAILED", STRIP_PIN, stripCount);
+}
+
+static void stripShow() {
+  if (!stripReady) return;
+  size_t i = 0;
+  float scale = stripBrightness / 255.0f;
+  for (uint16_t n = 0; n < stripCount; n++) {
+    // WS2812 wants green, red, blue, most significant bit first. Squaring keeps fades smooth to the eye.
+    float g = stripNow[n][1], r = stripNow[n][0], b = stripNow[n][2];
+    uint8_t grb[3] = {(uint8_t)(g * g * scale * 255), (uint8_t)(r * r * scale * 255), (uint8_t)(b * b * scale * 255)};
+    for (uint8_t c = 0; c < 3; c++) {
+      for (int8_t bit = 7; bit >= 0; bit--) {
+        bool one = grb[c] & (1 << bit);
+        stripBits[i].level0 = 1;
+        stripBits[i].duration0 = one ? 8 : 4;  // high 0.8 us for a 1, 0.4 us for a 0
+        stripBits[i].level1 = 0;
+        stripBits[i].duration1 = one ? 4 : 8;
+        i++;
+      }
+    }
+  }
+  rmtWrite(STRIP_PIN, stripBits, i, 20);
+}
+
+static void stripUpdate() {
+  static uint32_t last = 0;
+  uint32_t t = millis();
+  if (t - last < 25) return;  // 40 frames a second
+  last = t;
+  uint16_t n = stripCount;
+  float mid = (n - 1) / 2.0f;
+  float want[STRIP_MAX_LEDS][3];
+  float sec = t / 1000.0f;
+  for (uint16_t k = 0; k < n; k++) {
+    float r = 0, g = 0, b = 0;
+    if (ringMode != RING_NONE) {  // alarm: amber, pulsing
+      float v = 0.35f + 0.65f * ((sinf(sec * 2 * PI * 2.0f) + 1) * 0.5f);
+      r = v; g = v * 0.45f;
+    } else if (micMuted) {  // muted: a quiet red
+      r = 0.35f;
+    } else if (WiFi.status() != WL_CONNECTED || !wsConnected) {  // can't reach Buddy: slow red blink
+      r = (fabsf(k - mid) < 1.0f && (t / 1000) % 3 == 0) ? 0.5f : 0;
+    } else if (serverState == "listening") {  // listening: blue, gently breathing
+      float v = 0.75f + 0.25f * sinf(sec * 2 * PI * 0.7f + k * 0.25f);
+      r = 0.05f * v; g = 0.35f * v; b = v;
+    } else if (serverState == "thinking") {  // thinking: purple glow with a bright dot sweeping
+      float pos = (sinf(sec * 2 * PI * 0.45f) + 1) * 0.5f * (n - 1);
+      float d = fabsf(k - pos);
+      float v = 0.22f + 0.78f * max(0.0f, 1.0f - d / 2.5f);
+      r = 0.6f * v; b = v;
+    } else if (serverState == "speaking") {  // speaking: green, opening out from the middle with the voice
+      float reach = min(1.0f, 0.15f + speakLevel * 6.0f) * (mid + 1);
+      float v = (fabsf(k - mid) <= reach) ? 1.0f : 0.12f;
+      g = v; b = v * 0.45f;
+    }
+    want[k][0] = r; want[k][1] = g; want[k][2] = b;
+  }
+  for (uint16_t k = 0; k < n; k++)
+    for (uint8_t c = 0; c < 3; c++) stripNow[k][c] += (want[k][c] - stripNow[k][c]) * 0.25f;  // smooth
+  stripShow();
+}
+
+static void stripSet(int count, int brightness) {
+  uint16_t old = stripCount;
+  if (count >= 1) stripCount = min(count, STRIP_MAX_LEDS);
+  if (brightness >= 0) stripBrightness = min(brightness, 255);
+  if (stripCount < old) {  // switch off the LEDs no longer used
+    uint16_t keep = stripCount;
+    stripCount = old;
+    for (uint16_t k = keep; k < old; k++) stripNow[k][0] = stripNow[k][1] = stripNow[k][2] = 0;
+    stripShow();
+    stripCount = keep;
+  }
+  prefs.putUShort("stripLeds", stripCount);
+  prefs.putUChar("stripBri", stripBrightness);
+}
+#else
+static void stripInit() {}
+static void stripUpdate() {}
+static void stripSet(int, int) {}
+#endif
+
 // ------------------------------------------------------------------ alarms kept on the device
 static void saveFires() {
   prefs.putBytes("fires", fires, sizeof(Fire) * fireCount);
@@ -421,6 +515,7 @@ static void handleJson(uint8_t *payload, size_t len) {
   if (!strcmp(type, "hello_ack")) {
     if (doc["volume"].is<int>()) volumeLevel = constrain(doc["volume"].as<int>(), 0, 10);
     if (doc["mic_shift"].is<int>()) micShift = constrain(doc["mic_shift"].as<int>(), 8, 18);
+    if (doc["strip_leds"].is<int>()) stripSet(doc["strip_leds"].as<int>(), doc["strip_brightness"] | -1);
     // No tune here: the server plays the "I'm on" sound once, when the unit is switched on.
   } else if (!strcmp(type, "state")) {
     serverState = doc["state"] | "idle";
@@ -456,6 +551,8 @@ static void handleJson(uint8_t *payload, size_t len) {
   } else if (!strcmp(type, "volume")) {
     volumeLevel = constrain(doc["level"] | 6, 0, 10);
     prefs.putUChar("volume", volumeLevel);
+  } else if (!strcmp(type, "strip")) {
+    stripSet(doc["leds"] | -1, doc["brightness"] | -1);
   } else if (!strcmp(type, "mic_gain")) {
     micShift = constrain(doc["shift"] | MIC_SHIFT_DEFAULT, 8, 18);
     prefs.putUChar("micShift", micShift);
@@ -668,6 +765,9 @@ void setup() {
   volumeLevel = prefs.getUChar("volume", 6);
   micShift = prefs.getUChar("micShift", MIC_SHIFT_DEFAULT);
   micMuted = prefs.getBool("muted", false);
+  stripCount = min((int)prefs.getUShort("stripLeds", STRIP_DEFAULT_LEDS), STRIP_MAX_LEDS);
+  stripBrightness = prefs.getUChar("stripBri", 70);
+  stripInit();
   loadFires();
 
   micStream = xStreamBufferCreate(MIC_BUFFER_BYTES, SEND_BYTES);
@@ -740,5 +840,6 @@ void loop() {
   maintainConnection();
   sendStats();
   updateLed();
+  stripUpdate();
   delay(1);
 }

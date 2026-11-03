@@ -592,6 +592,9 @@ class Hub:
         if "volume" in changes:
             self.brain.volume = int(changes["volume"])
             self._soon(self.broadcast({"type": "volume", "level": int(changes["volume"])}, role="device"))
+        if {"strip_leds", "strip_brightness"} & changes.keys():
+            self._soon(self.broadcast({"type": "strip", "leds": int(self.settings["strip_leds"]),
+                                       "brightness": int(self.settings["strip_brightness"])}, role="device"))
         if "device_mic_shift" in changes:
             self._soon(self.broadcast({"type": "mic_gain", "shift": int(changes["device_mic_shift"])}, role="device"))
         self._soon(self.broadcast_ui({"type": "event", "kind": "settings"}))
@@ -643,7 +646,9 @@ class Hub:
     async def greet(self, s: Session) -> None:
         await s.send_json({"type": "hello_ack", "server_time": int(time.time()), "volume": self.brain.volume,
                            "name": self.settings["assistant_name"], "session": s.id,
-                           "mic_shift": int(self.settings["device_mic_shift"])})
+                           "mic_shift": int(self.settings["device_mic_shift"]),
+                           "strip_leds": int(self.settings["strip_leds"]),
+                           "strip_brightness": int(self.settings["strip_brightness"])})
         if s.role == "device":
             await self.push_schedule(s)
             if self.just_switched_on(s):

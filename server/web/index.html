@@ -9,7 +9,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
-<link rel="stylesheet" href="/static/style.css?v=chat7">
+<link rel="stylesheet" href="/static/style.css?v=chat8">
 </head>
 <body>
 <header class="top">
@@ -216,6 +216,12 @@
           <input data-setting="device_token" type="text" placeholder="leave blank on a home network"></label>
       </fieldset>
       <fieldset>
+        <legend>Light strip</legend>
+        <p class="note">The LED strip behind the grille (data wire on GPIO 2). Count the LEDs on your piece. Changes show straight away.</p>
+        <label>Number of LEDs <input data-setting="strip_leds" type="number" min="1" max="60" step="1"></label>
+        <label>Brightness <input data-setting="strip_brightness" type="range" min="5" max="255" step="5"><output id="strip-out"></output></label>
+      </fieldset>
+      <fieldset>
         <legend>Updates</legend>
         <p class="note">Get Buddy's newest features. Buddy restarts by itself; this page reconnects after a minute or two.</p>
         <span class="row"><button class="btn primary small" id="update-now" type="button">Update Buddy now</button></span>
@@ -252,6 +258,6 @@
 </aside>
 
 <div class="toast" id="toast" role="status" hidden></div>
-<script src="/static/app.js?v=chat7"></script>
+<script src="/static/app.js?v=chat8"></script>
 </body>
 </html>
