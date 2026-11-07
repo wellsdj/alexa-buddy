@@ -172,7 +172,8 @@ class Data:
 def _secret() -> bytes:
     """Signs sign-ins and questions. STUDY_SECRET if set; otherwise made from the storage key (also secret),
     so there's nothing extra to set up."""
-    s = os.environ.get("STUDY_SECRET", "") or os.environ.get("BLOB_READ_WRITE_TOKEN", "")
+    s = (os.environ.get("STUDY_SECRET", "") or os.environ.get("BLOB_READ_WRITE_TOKEN", "")
+         or os.environ.get("ANTHROPIC_API_KEY", ""))
     if not s:
         raise HTTPException(500, "The website's storage isn't connected yet (Vercel → Storage → Blob).")
     return hashlib.sha256(b"study-buddy:" + s.encode()).digest()
@@ -219,9 +220,10 @@ async def claude(prompt: str, max_tokens: int = 6000) -> str:
 
 def create_app(store=None) -> FastAPI:
     app = FastAPI(title="Study Buddy")
-    if store is None and not os.environ.get("BLOB_READ_WRITE_TOKEN") and os.environ.get("VERCEL"):
+    blob_ready = bool(os.environ.get("BLOB_READ_WRITE_TOKEN") or os.environ.get("BLOB_STORE_ID"))
+    if store is None and not blob_ready and os.environ.get("VERCEL"):
         store = NoStore()  # on Vercel but storage not connected: say so, rather than forget everything
-    data = Data(store or (BlobStore() if os.environ.get("BLOB_READ_WRITE_TOKEN") else MemoryStore()))
+    data = Data(store or (BlobStore() if blob_ready else MemoryStore()))
     app.state.data = data
 
     @app.exception_handler(StudyError)
@@ -246,6 +248,20 @@ def create_app(store=None) -> FastAPI:
     def check_sync(request: Request) -> None:
         if not hmac.compare_digest(request.headers.get("x-sync-key", ""), sync_key()):
             raise HTTPException(401, "Wrong or missing sync key.")
+
+    @app.get("/study/api/health")
+    async def health():
+        """What's set up (names only, never values), to help when something isn't working."""
+        names = ("BLOB_READ_WRITE_TOKEN", "BLOB_STORE_ID", "ANTHROPIC_API_KEY", "STUDY_SECRET", "VERCEL_OIDC_TOKEN")
+        out = {n: bool(os.environ.get(n)) for n in names}
+        out["blob_like"] = sorted(k for k in os.environ if "BLOB" in k)
+        try:
+            await data.s.list("profiles/")
+            out["storage_works"] = True
+        except Exception as e:  # noqa: BLE001
+            out["storage_works"] = False
+            out["storage_error"] = f"{type(e).__name__}: {str(e)[:200]}"
+        return out
 
     # ---------- people ----------
     @app.get("/study/api/profiles")
