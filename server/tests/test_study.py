@@ -276,3 +276,25 @@ def test_start_revising_flow_and_buddy_knows_progress(settings):
         assert prog["skills"][0]["seen"] == 1 and prog["week"]["right"] == 1
         said = hub.brain._study_progress()
         assert "Alex" in said and "Solving equations" in said and "1/1 right" in said
+
+
+def test_once_connected_recordings_go_to_the_website(settings, monkeypatch):
+    app = create_app(settings)
+    hub = app.state.hub
+    sent = []
+
+    async def fake_push(pid, rec):
+        sent.append((pid, rec["name"]))
+        return True
+    with TestClient(app, follow_redirects=False) as c:
+        assert c.get("/api/study/cloud").json()["connected"] is False
+        settings.set_secret("STUDY_SYNC_KEY", "k")
+        assert hub.study_worker.owner() == "cloud"
+        assert c.get("/study").headers["location"] == "https://studdy-buddy.vercel.app"
+        assert c.get("/study?local=1").status_code == 200
+        monkeypatch.setattr(hub.study_worker, "push", fake_push)
+        w = hub.study_worker
+        w.stt, w.llm = WordySTT(), CheckLLM()
+        rec = w.recordings.add("cloud", make_wav(settings.data_dir / "x.wav", 150), 1794000000, "pocket")
+        asyncio.run(w.check_recording("cloud", rec["id"]))
+        assert sent == [("cloud", "Maths lesson")]

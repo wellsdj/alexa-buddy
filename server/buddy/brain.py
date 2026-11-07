@@ -287,6 +287,7 @@ class Brain:
         self.sounds = None  # AlarmSounds, set by the hub
         self.missed: list[str] = []  # alarms that rang out with nobody there, to mention next time
         self.study = None  # (StudyStore, Practice), set by the hub
+        self.study_cloud = None  # the hub's study_cloud(), set by the hub
 
     def now(self) -> datetime:
         return datetime.now(ZoneInfo(self.settings["timezone"]))
@@ -841,7 +842,7 @@ class Brain:
                 r = self._switch_voice(args)
                 return r.text, r.text, []
             if name == "study_progress":
-                return self._study_progress(a.get("person", "")), "", []
+                return await self._study_progress_any(a.get("person", "")), "", []
             if name == "web_search":
                 await say_while(ctx, "search")
                 found = await self.llm.web_search(a.get("query", ""))
@@ -852,6 +853,23 @@ class Brain:
         except (KeyError, ValueError, TypeError) as e:
             return f"error: {e}", "", []
         return f"error: unknown tool {name}", "", []
+
+    async def _study_progress_any(self, person: str = "") -> str:
+        """From Study Buddy online when Buddy is connected to it, else from this Mac."""
+        cloud = self.study_cloud() if self.study_cloud else None
+        if cloud:
+            import httpx
+            url, key = cloud
+            try:
+                async with httpx.AsyncClient(timeout=15) as c:
+                    r = await c.get(f"{url.rstrip('/')}/study/api/sync/progress",
+                                    params={"name": person or self.settings["user_name"] or ""}, headers={"X-Sync-Key": key})
+                if r.status_code == 200:
+                    return r.json().get("text", "")
+                return f"Study Buddy online didn't answer ({r.status_code})."
+            except httpx.HTTPError:
+                return "Couldn't reach Study Buddy online right now."
+        return self._study_progress(person)
 
     def _study_progress(self, person: str = "") -> str:
         """A plain summary of someone's revising, for Buddy to talk about."""
@@ -865,22 +883,9 @@ class Brain:
         p = (next((x for x in profiles if x["name"].lower() == want), None)
              or next((x for x in profiles if want and x["name"].lower().startswith(want.split()[0])), None)
              or next((x for x in profiles if x["id"] == store.recorder_owner()), None) or profiles[0])
+        from .practice import describe_progress
         lessons = [x for x in store.lessons(p["id"]) if x["status"] == "ready"]
-        skills = practice.progress.summary(p["id"])
-        week = practice.progress.recent(p["id"])
-        lines = [f"Profile: {p['name']}. {len(lessons)} lessons with notes."]
-        for x in lessons[:5]:
-            lines.append(f"- {x['date']}: {x['subject'] or 'lesson'}{(' about ' + x['about']) if x.get('about') else ''}")
-        if skills:
-            lines.append("Maths skills (level 1 = just starting, 5 = exam-ready; answered / right):")
-            for k in skills:
-                lines.append(f"- {k['name']}: level {k['level']} ({k['right']}/{k['seen']} right)")
-            weakest = [k["name"] for k in skills[:2]]
-            lines.append(f"Weakest: {', '.join(weakest)}.")
-        else:
-            lines.append("No maths questions answered yet.")
-        lines.append(f"Last 7 days: {week['answered']} questions answered, {week['right']} right, on {week['days']} days.")
-        return "\n".join(lines)
+        return describe_progress(p["name"], lessons, practice.progress.summary(p["id"]), practice.progress.recent(p["id"]))
 
     async def _week_weather(self) -> str:
         data = await self.weather.fetch()

@@ -1,0 +1,4 @@
+# For the Study Buddy website on Vercel only (api/index.py). Buddy's Mac server uses server/requirements.txt.
+fastapi>=0.110
+anthropic>=2.3,<3
+vercel>=0.12

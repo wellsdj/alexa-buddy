@@ -610,9 +610,11 @@ class Hub:
         self.sounds = AlarmSounds(settings)  # your own alarm sounds
         self.study = StudyStore(d)  # Study Buddy: lessons, notes and questions per person
         self.study_worker = StudyWorker(self.study, self.stt, self.llm)
+        self.study_worker.cloud = self.study_cloud
         from .practice import Practice
         self.practice = Practice(self.study.dir)  # "Start revising": questions that fit each person
         self.brain.study = (self.study, self.practice)  # so Buddy can say how revising is going
+        self.brain.study_cloud = self.study_cloud
         self.brain.sounds = self.sounds
         self.conv = Conversation()
         self.sessions: dict[str, Session] = {}
@@ -656,6 +658,12 @@ class Hub:
         asyncio.create_task(self.tts.eleven.refresh_quota())
         asyncio.create_task(self.weather.fetch())
         self.study_worker.start()
+
+    def study_cloud(self) -> tuple[str, str] | None:
+        """(Study Buddy website, sync key) once Buddy is connected to it, else None."""
+        key = self.settings.secret("STUDY_SYNC_KEY")
+        url = (self.settings["study_cloud_url"] or "").strip()
+        return (url, key) if key and url.startswith("http") else None
 
     async def stop(self) -> None:
         await self.music.stop()

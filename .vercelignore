@@ -1,0 +1,12 @@
+firmware
+case
+PLAN.md
+install.sh
+server/models
+server/sounds
+server/tests
+server/run.sh
+server/autostart.sh
+server/_env.sh
+server/setup_models.py
+server/requirements.txt

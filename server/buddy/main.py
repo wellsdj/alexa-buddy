@@ -207,8 +207,45 @@ def create_app(settings: Settings | None = None, http=None, claude_http=None, st
             raise HTTPException(400, str(e))
 
     @app.get("/study")
-    async def study_page():
+    async def study_page(request: Request):
+        cloud = hub.study_cloud()
+        if cloud and request.query_params.get("local") != "1":
+            return RedirectResponse(cloud[0])  # Study Buddy lives online now
         return FileResponse(WEB_DIR / "study.html", headers={"Cache-Control": "no-cache"})
+
+    @app.get("/api/study/cloud")
+    async def study_cloud_status():
+        cloud = hub.study_cloud()
+        return {"connected": bool(cloud), "url": settings["study_cloud_url"],
+                "waiting": len([r for r in hub.study_worker.recordings.all("cloud") if r["status"] == "ready" and not r.get("sent")])}
+
+    @app.post("/api/study/pair")
+    async def study_pair(body: dict):
+        """Swap the code shown on the Study Buddy website for the key that lets Buddy send recordings."""
+        import httpx
+        url = (body.get("url") or settings["study_cloud_url"] or "").strip().rstrip("/")
+        if not url.startswith("http"):
+            raise HTTPException(400, "Type the website address first.")
+        try:
+            async with httpx.AsyncClient(timeout=20) as c:
+                r = await c.post(f"{url}/study/api/sync/pair", json={"code": body.get("code", "")})
+        except httpx.HTTPError:
+            raise HTTPException(502, "Couldn't reach the Study Buddy website. Check the address and the internet.")
+        if r.status_code != 200:
+            try:
+                msg = r.json().get("detail")
+            except ValueError:
+                msg = None
+            raise HTTPException(400, msg or f"The website said no ({r.status_code}).")
+        settings.update({"study_cloud_url": url})
+        settings.set_secret("STUDY_SYNC_KEY", r.json()["key"])
+        asyncio.create_task(hub.study_worker.push_waiting())
+        return {"ok": True}
+
+    @app.post("/api/study/unpair")
+    async def study_unpair():
+        settings.set_secret("STUDY_SYNC_KEY", "")
+        return {"ok": True}
 
     @app.get("/study/api/profiles")
     async def study_profiles():
@@ -379,7 +416,7 @@ def create_app(settings: Settings | None = None, http=None, claude_http=None, st
         the audio file; ?recorded_at= is when it started, in seconds since 1970)."""
         if not check_token(request.headers.get("x-buddy-token") or request.query_params.get("token")):
             raise HTTPException(401, "token required")
-        pid = study.recorder_owner()
+        pid = hub.study_worker.owner()
         if not pid:
             raise HTTPException(409, "Nobody is set to receive recordings yet (open Study and choose “Send recordings to me”).")
         import tempfile

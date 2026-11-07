@@ -14,6 +14,9 @@ const lessonName = (x) => x.title || (x.subject ? `${x.subject} lesson` : (x.sta
 const aboutLine = (x) => x.about ? `About ${x.about}` : "";
 
 const S = { token: load("studyToken"), me: null, poll: null };
+// On the website (no port) there's no Buddy page to go back to; on the Mac there is.
+const CLOUD = location.port === "";
+if (CLOUD) document.querySelectorAll(".to-buddy").forEach((a) => a.remove());
 
 function load(k) { try { return localStorage.getItem(k) || ""; } catch { return ""; } }
 function store(k, v) { try { v ? localStorage.setItem(k, v) : localStorage.removeItem(k); } catch { /* private window */ } }
@@ -42,7 +45,7 @@ async function whoView() {
         <span class="avatar c${p.colour}">${esc(p.name[0].toUpperCase())}</span>${esc(p.name)}</button>`).join("")}
       <button class="person add" data-add><span class="avatar">+</span>Add person</button>
     </div>
-    <p class="foot"><a href="/">← Back to Buddy</a></p></section>`;
+    ${CLOUD ? "" : `<p class="foot"><a href="/">← Back to Buddy</a></p>`}</section>`;
   view.querySelectorAll(".person[data-id]").forEach((b) => b.onclick = async () => {
     const pin = await askPin(`Hi ${b.dataset.name}`, "Type your PIN", async (pin) => {
       const r = await api("/login", { method: "POST", body: JSON.stringify({ profile: b.dataset.id, pin }) });
@@ -200,7 +203,8 @@ async function addView() {
       <button class="btn wide" id="go">Start revising</button>
     </div>
     <p class="error" id="err"></p>
-    <p style="margin-top:28px"><button class="link" id="other">Or upload a file from this computer</button></p>
+    ${data.can_upload === false ? `<p style="margin-top:28px"><button class="link" id="pair">Connect your Buddy</button></p><p class="muted small" id="pair-box" hidden></p>`
+      : `<p style="margin-top:28px"><button class="link" id="other">Or upload a file from this computer</button></p>`}
     <form id="f" hidden>
       <label class="drop" id="drop">
         <input type="file" name="file" accept="audio/*,.m4a,.mp3,.wav,.aac,.caf">
@@ -222,11 +226,18 @@ async function addView() {
     const err = $("#err");
     err.textContent = "";
     try {
-      const lesson = await api(`/recordings/${chosen}/use`, { method: "POST", body: JSON.stringify({ title: $("[name=title]").value }) });
+      const rec = recs.find((r) => r.id === chosen);
+      const lesson = await api(`/recordings/${chosen}/use`, { method: "POST", body: JSON.stringify({ title: $("[name=title]").value, date: isoDay(rec.recorded_at * 1000) }) });
       location.hash = `#/revise/${lesson.id}`;
     } catch (ex) { err.textContent = ex.message; }
   };
-  $("#other").onclick = () => { $("#f").hidden = false; $("#other").hidden = true; };
+  if ($("#other")) $("#other").onclick = () => { $("#f").hidden = false; $("#other").hidden = true; };
+  $("#pair")?.addEventListener("click", async () => {
+    const r = await api("/pair-code", { method: "POST" });
+    const box = $("#pair-box");
+    box.hidden = false;
+    box.innerHTML = `Your code: <b style="font-size:22px;letter-spacing:3px;color:#fff">${esc(r.code)}</b><br>On the Mac, open Buddy → Settings → Study website, type this code and press Connect. It works for ${r.minutes} minutes. Lesson recordings then come here, to you.`;
+  });
   const f = $("#f"), file = f.file;
   file.onchange = () => {
     const x = file.files[0];
@@ -384,11 +395,13 @@ const R = { round: null, q: null, tries: 0 };
 
 async function reviseView(id) {
   if (id !== "all") {
+    if (!view.querySelector(".getting-ready")) view.innerHTML = `<h1 class="fade getting-ready" style="margin-top:20px">Getting ready…</h1>
+      <p class="muted">Buddy is reading the lesson and setting up your questions. This takes about a minute.</p>`;
     const x = await api(`/lessons/${encodeURIComponent(id)}`);
     if (x.status !== "ready") {
       const [cls, label] = STATUS[x.status] || ["", x.status];
       view.innerHTML = `<a class="back" href="#/">← Lessons</a>
-        <h1 class="fade" style="margin-top:20px">Getting ready…</h1>
+        <h1 class="fade getting-ready" style="margin-top:20px">Getting ready…</h1>
         <p class="muted">${x.status === "failed" ? esc(x.error) : "Buddy is reading the lesson and setting up your questions. This takes about a minute."}</p>
         <p><span class="tag ${cls}">${esc(label)}${x.status === "listening" ? ` ${x.progress}%` : ""}</span></p>`;
       if (busy(x)) S.poll = setTimeout(() => location.hash === `#/revise/${id}` && reviseView(id).catch(() => {}), 2500);
@@ -404,7 +417,7 @@ async function reviseView(id) {
 function showRound(r) {
   R.round = r.round;
   if (r.finished) return roundDone(r);
-  R.q = r.question; R.tries = 0;
+  R.q = r.question; R.tries = 0; R.helped = false;
   const q = r.question;
   view.innerHTML = `
     <div class="rv-top"><a class="back" href="${R.lesson === "all" ? "#/progress" : `#/lesson/${esc(R.lesson)}`}">← Stop</a>
@@ -467,8 +480,10 @@ async function check() {
   if (values.flat().every((v) => !String(v).trim())) { msg.textContent = "Type your answer in the box first."; return; }
   btn.disabled = true;
   try {
-    const r = await api("/revise/answer", { method: "POST", body: JSON.stringify({ round: R.round, question: R.q.id, values }) });
+    const r = await api("/revise/answer", { method: "POST", body: JSON.stringify({ round: R.round, question: R.q.id, values, tries: R.tries, helped: R.helped }) });
+    if (r.round) R.round = r.round;
     if (r.try_again) {
+      R.tries++;
       msg.className = "rv-msg bad"; msg.textContent = "Not quite. Have another go, or press Help.";
       btn.disabled = false;
       return;
@@ -489,6 +504,7 @@ async function check() {
 }
 
 async function help() {
+  R.helped = true;
   const sheet = $("#help-sheet");
   sheet.hidden = false;
   sheet.innerHTML = `<div class="help-head"><b>Help</b><button class="link" id="help-x">Close</button></div><p class="muted">Thinking…</p>`;

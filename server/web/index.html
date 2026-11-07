@@ -158,6 +158,7 @@
         <button type="button" class="set-row" data-open="listening"><span><b>Listening &amp; mic</b><small>How easily Buddy wakes, mic boost, follow-ups, morning briefing</small></span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></button>
         <button type="button" class="set-row" data-open="light"><span><b>Light</b><small>How many lights and how bright</small></span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></button>
         <button type="button" class="set-row" data-open="music"><span><b>Music</b><small>Connect Spotify and choose where music plays</small></span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></button>
+        <button type="button" class="set-row" data-open="studyweb"><span><b>Study website</b><small>Connect Buddy to Study Buddy online, so lesson recordings go there</small></span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></button>
         <button type="button" class="set-row" data-open="keys"><span><b>Keys</b><small>Claude, ElevenLabs and Groq keys</small></span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></button>
         <button type="button" class="set-row" data-open="updates"><span><b>Update Buddy</b><small>Get the newest features</small></span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></button>
         <button type="button" class="set-row" data-open="brains"><span><b>Advanced: brains</b><small>Which Claude and Groq models Buddy uses</small></span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></button>
@@ -211,6 +212,14 @@
         <span class="row" id="music-login-row" hidden><a class="btn primary small" id="music-login" href="#" target="_blank" rel="noopener">Log in Buddy's speaker</a></span>
         <label>Play on instead <span class="note">optional: part of another device's name, e.g. “MacBook” or “iPhone”. Empty = Buddy's speaker (or whichever Spotify app is active).</span>
           <input data-setting="spotify_device" type="text" placeholder="whichever is active"></label>
+      </fieldset>
+      <fieldset data-section="studyweb" hidden>
+        <legend>Study website</legend>
+        <p class="note">On the Study Buddy website, sign in, open “Add a lesson” and press “Connect your Buddy”. Type the code it shows here.</p>
+        <label>Website <input data-setting="study_cloud_url" type="text" spellcheck="false"></label>
+        <label>Code <span class="row"><input id="study-code" type="text" placeholder="e.g. K7Q2MX" autocomplete="off" spellcheck="false" style="text-transform:uppercase"><button class="btn primary small" id="study-connect" type="button">Connect</button></span></label>
+        <p class="note" id="study-status">Not connected.</p>
+        <span class="row"><button class="btn small" id="study-disconnect" type="button" hidden>Disconnect</button></span>
       </fieldset>
       <fieldset data-section="keys" hidden>
         <legend>Keys</legend>

@@ -665,6 +665,32 @@ function init() {
   $("ring-stop").onclick = () => stopRinging("button");
   $("ring-snooze").onclick = () => { send({ type: "text", text: "snooze" }); };
 
+  // Study website: connect with the code the website shows.
+  {
+    const status = $("study-status"), btn = $("study-connect"), off = $("study-disconnect");
+    const refresh = async () => {
+      try {
+        const r = await api("/api/study/cloud");
+        status.textContent = r.connected
+          ? `Connected. Lesson recordings go to ${r.url}${r.waiting ? ` (${r.waiting} waiting to send)` : ""}.`
+          : "Not connected.";
+        off.hidden = !r.connected;
+      } catch { /* server restarting */ }
+    };
+    btn.onclick = async () => {
+      btn.disabled = true;
+      status.textContent = "Connecting…";
+      try {
+        await api("/api/study/pair", { method: "POST", body: JSON.stringify({ code: $("study-code").value.trim() }) });
+        $("study-code").value = "";
+      } catch (e) { status.textContent = e.message; btn.disabled = false; return; }
+      btn.disabled = false;
+      refresh();
+    };
+    off.onclick = async () => { await api("/api/study/unpair", { method: "POST" }); refresh(); };
+    document.querySelector('[data-open="studyweb"]').addEventListener("click", refresh);
+  }
+
   // Settings: a short menu of sections; tap one to see just that section, or search.
   {
     const panel = $("panel-settings"), menu = $("set-menu"), back = $("set-back"), search = $("set-search");

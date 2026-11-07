@@ -902,6 +902,55 @@ def match_skills(text: str) -> list[str]:
 
 
 # ---------- what each person knows ----------
+def apply_answer(skills: dict, skill_id: str, level: int, right: bool, helped: bool = False, t: float | None = None) -> float:
+    """Update someone's level for a skill after an answer (in place). Returns the new level."""
+    s = skills.setdefault(skill_id, {"level": 1.5, "seen": 0, "right": 0, "streak": 0, "last": 0})
+    s["seen"] += 1
+    s["last"] = t or time.time()
+    if right and not helped:
+        s["right"] += 1
+        s["streak"] = max(1, s["streak"] + 1)
+        s["level"] = min(5.0, s["level"] + (0.5 if level >= s["level"] else 0.2))
+    elif right:  # right, but after Help: a small step
+        s["right"] += 1
+        s["streak"] = 0
+        s["level"] = min(5.0, s["level"] + 0.1)
+    else:
+        s["streak"] = min(-1, s["streak"] - 1) if s["streak"] <= 0 else -1
+        s["level"] = max(1.0, s["level"] - (0.4 if level <= s["level"] + 0.5 else 0.2))
+    return s["level"]
+
+
+def summarise(skills: dict) -> list[dict]:
+    out = [{"skill": sid, "name": SKILLS[sid].name, "topic": SKILLS[sid].topic, "level": round(s["level"], 1),
+            "seen": s["seen"], "right": s["right"], "last": s["last"]} for sid, s in skills.items() if sid in SKILLS]
+    return sorted(out, key=lambda x: x["level"])
+
+
+def pick_next(skills: dict, choices: list[str], last: str = "") -> tuple[str, int]:
+    """Which skill to ask next (weakest first, a bit mixed up) and at what level."""
+    pool = [s for s in choices if s != last] or choices
+    weights = [1.0 + (5 - skills.get(s, {}).get("level", 1.5)) ** 1.5 for s in pool]
+    sid = random.choices(pool, weights)[0]
+    st = skills.get(sid, {"level": 1.5, "streak": 0})
+    return sid, target_level(st["level"], st.get("streak", 0))
+
+
+def describe_progress(name: str, lessons: list[dict], skills: list[dict], week: dict) -> str:
+    """A plain summary of someone's revising, for Buddy to talk about."""
+    lines = [f"Profile: {name}. {len(lessons)} lessons with notes."]
+    for x in lessons[:5]:
+        lines.append(f"- {x['date']}: {x.get('subject') or 'lesson'}{(' about ' + x['about']) if x.get('about') else ''}")
+    if skills:
+        lines.append("Maths skills (level 1 = just starting, 5 = exam-ready; answered / right):")
+        for k in skills:
+            lines.append(f"- {k['name']}: level {k['level']} ({k['right']}/{k['seen']} right)")
+        lines.append(f"Weakest: {', '.join(k['name'] for k in skills[:2])}.")
+    else:
+        lines.append("No maths questions answered yet.")
+    lines.append(f"Last 7 days: {week['answered']} questions answered, {week['right']} right, on {week['days']} days.")
+    return "\n".join(lines)
+
 class Progress:
     """Per person: a level for each skill, and a log of answers."""
 
@@ -934,34 +983,14 @@ class Progress:
     def record(self, pid: str, skill_id: str, level: int, right: bool, lesson: str = "", helped: bool = False) -> float:
         with self._lock:
             data = self.load(pid)
-            s = data["skills"].setdefault(skill_id, {"level": 1.5, "seen": 0, "right": 0, "streak": 0, "last": 0})
-            s["seen"] += 1
-            s["last"] = time.time()
-            if right and not helped:
-                s["right"] += 1
-                s["streak"] = max(1, s["streak"] + 1)
-                s["level"] = min(5.0, s["level"] + (0.5 if level >= s["level"] else 0.2))
-            elif right:  # right, but after Help: a small step
-                s["right"] += 1
-                s["streak"] = 0
-                s["level"] = min(5.0, s["level"] + 0.1)
-            else:
-                s["streak"] = min(-1, s["streak"] - 1) if s["streak"] <= 0 else -1
-                s["level"] = max(1.0, s["level"] - (0.4 if level <= s["level"] + 0.5 else 0.2))
+            new_level = apply_answer(data["skills"], skill_id, level, right, helped)
             data["log"] = (data["log"] + [{"t": time.time(), "skill": skill_id, "level": level, "right": right,
                                            "helped": helped, "lesson": lesson}])[-1000:]
             self.save(pid, data)
-            return s["level"]
+            return new_level
 
     def summary(self, pid: str) -> list[dict]:
-        data = self.load(pid)
-        out = []
-        for sid, s in data["skills"].items():
-            if sid not in SKILLS:
-                continue
-            out.append({"skill": sid, "name": SKILLS[sid].name, "topic": SKILLS[sid].topic, "level": round(s["level"], 1),
-                        "seen": s["seen"], "right": s["right"], "last": s["last"]})
-        return sorted(out, key=lambda x: x["level"])
+        return summarise(self.load(pid)["skills"])
 
     def recent(self, pid: str, days: float = 7) -> dict:
         cut = time.time() - days * 86400
@@ -1013,13 +1042,7 @@ class Practice:
         if rd["done"] >= self.ROUND:
             return {"round": rid, "finished": True, "right": rd["right"], "total": rd["done"], "results": rd["results"],
                     "skills": [{"name": SKILLS[s].name, "level": round(self.progress.level(rd["pid"], s), 1)} for s in rd["skills"]]}
-        data = self.progress.load(rd["pid"])["skills"]
-        choices = [s for s in rd["skills"] if s != rd["last"]] or rd["skills"]
-        # Weakest first, but mixed up a bit so it doesn't feel like a list.
-        weights = [1.0 + (5 - data.get(s, {}).get("level", 1.5)) ** 1.5 for s in choices]
-        sid = random.choices(choices, weights)[0]
-        st = data.get(sid, {"level": 1.5, "streak": 0})
-        level = target_level(st["level"], st.get("streak", 0))
+        sid, level = pick_next(self.progress.load(rd["pid"])["skills"], rd["skills"], rd["last"])
         q = make_question(sid, level)
         qid = secrets.token_hex(6)
         self.live[qid] = Live(rd["pid"], sid, level, q, rd["lesson"])

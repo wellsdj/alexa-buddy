@@ -25,6 +25,7 @@ from pathlib import Path
 import numpy as np
 
 from .audio import resample
+from .study_text import CHECK_PROMPT, LESSON_PROMPT, StudyError, _clean_name, _hash_pin, _parse_json, tidy  # noqa: F401
 
 log = logging.getLogger("buddy.study")
 
@@ -36,66 +37,6 @@ MIN_LESSON_S = 120  # recordings shorter than 2 minutes aren't lessons
 MIN_LESSON_WORDS = 150  # and ones where hardly any words come out (in a pocket, say) aren't either
 INBOX_FOLDER = "Buddy lessons"  # voice memos put in a folder with this name on the Mac are picked up too
 AUDIO_EXT = {".m4a", ".mp3", ".wav", ".aac", ".caf", ".aif", ".aiff", ".flac", ".ogg", ".mp4", ".qta"}
-
-CHECK_PROMPT = """Here is the start of an automatic transcript of a recording made in a school. Decide whether it is
-a lesson where something is being taught or discussed (not just chatter, noise or a recording made by accident).
-Reply with JSON only: {{"is_lesson": true or false, "subject": "the school subject, one or two words, e.g. Maths",
-"about": "what it was about in under 8 words, starting with a small letter"}}
-
-Transcript:
-\"\"\"
-{text}
-\"\"\""""
-
-LESSON_PROMPT = """You help a secondary-school student revise. Below is {what} from a {subject} lesson.
-It may be messy: several people talking, gaps and mistakes from automatic transcription. Work out what
-was actually taught, and ignore chat that isn't about the lesson.
-
-Reply with JSON only, in exactly this shape:
-{{
-  "title": "short title for the lesson, 3-7 words",
-  "subject": "the school subject, one or two words, e.g. Maths, English, Chemistry",
-  "about": "what the lesson was about in under 8 words, starting with a small letter, e.g. calculating angles in triangles",
-  "summary": "2-3 plain sentences: what the lesson was about",
-  "notes": [{{"heading": "...", "points": ["clear revision note", "..."]}}],
-  "topics": [{{"name": "short topic name", "summary": "one sentence"}}],
-  "skills": ["skill ids from the list below that this lesson taught, if it's a maths lesson"],
-  "questions": [{{"topic": "one of the topic names", "level": 1, "question": "...",
-                  "answer": "the correct answer, short", "why": "one or two sentences explaining it",
-                  "choices": []}}]
-}}
-
-Maths practice skills (for "skills"; leave it empty if none fit or it isn't maths):
-{skills}
-
-Rules:
-- Notes: the key facts, methods, definitions and the teacher's worked examples, in simple language.
-  Keep any numbers, formulas and steps exactly. 3-8 headings.
-- Topics: 2-8 topics, named the way a teacher or exam board would (e.g. "Simultaneous equations").
-- Questions: 8-15 practice questions covering every topic, from easy (level 1) through medium (2) to
-  exam-style (3). Make up fresh numbers rather than repeating the lesson's examples word for word.
-  For about a third of them give 4 "choices" (multiple choice, the answer must be one of them);
-  leave "choices" empty for the rest.
-- Don't invent content that wasn't in the lesson. If there's too little to work with, still reply in
-  this shape, with fewer notes and questions.
-
-{what_cap}:
-\"\"\"
-{text}
-\"\"\""""
-
-
-class StudyError(Exception):
-    pass
-
-
-def _hash_pin(pin: str, salt: str) -> str:
-    return hashlib.sha256(f"{salt}:{pin}".encode()).hexdigest()
-
-
-def _clean_name(name: str) -> str:
-    return re.sub(r"\s+", " ", (name or "").strip())[:30]
-
 
 class StudyStore:
     def __init__(self, data_dir: Path):
@@ -388,60 +329,13 @@ def split_at_pauses(x: np.ndarray) -> list[np.ndarray]:
     return pieces
 
 
-def _parse_json(text: str) -> dict:
-    text = text.strip()
-    m = re.search(r"\{.*\}", text, re.S)
-    if not m:
-        raise StudyError("Claude didn't send back notes.")
-    try:
-        return json.loads(m.group(0))
-    except ValueError as e:
-        raise StudyError("Claude's notes came back garbled.") from e
-
-
-def tidy(result: dict, lesson: dict) -> dict:
-    """Keep only well-formed notes, topics and questions."""
-    notes = [{"heading": str(n.get("heading", "")).strip(), "points": [str(p).strip() for p in n.get("points", []) if str(p).strip()]}
-             for n in result.get("notes", []) if isinstance(n, dict)]
-    topics = [{"name": str(t.get("name", "")).strip(), "summary": str(t.get("summary", "")).strip()}
-              for t in result.get("topics", []) if isinstance(t, dict) and str(t.get("name", "")).strip()]
-    questions = []
-    for i, q in enumerate(result.get("questions", [])):
-        if not isinstance(q, dict) or not str(q.get("question", "")).strip() or not str(q.get("answer", "")).strip():
-            continue
-        choices = [str(c).strip() for c in q.get("choices") or [] if str(c).strip()]
-        answer = str(q["answer"]).strip()
-        if choices and answer not in choices:
-            choices = []  # a multiple-choice question whose answer isn't a choice: ask it as a normal one
-        try:
-            level = min(3, max(1, int(q.get("level", 2))))
-        except (TypeError, ValueError):
-            level = 2
-        questions.append({"id": f"q{i + 1}", "topic": str(q.get("topic", "")).strip(), "level": level,
-                          "question": str(q["question"]).strip(), "answer": answer,
-                          "why": str(q.get("why", "")).strip(), "choices": choices})
-    # Your own title stays; Buddy's suggestion is kept apart, shown only if you didn't give one.
-    lesson.update({"auto_title": str(result.get("title", "")).strip()[:80],
-                   "subject": lesson.get("subject") or str(result.get("subject", "")).strip()[:30],
-                   "summary": str(result.get("summary", "")).strip(),
-                   "about": str(result.get("about", "")).strip().rstrip(".")[:80],
-                   "notes": [n for n in notes if n["heading"] or n["points"]], "topics": topics,
-                   "questions": questions})
-    from .practice import SKILLS, match_skills
-    skills = [x for x in result.get("skills") or [] if isinstance(x, str) and x in SKILLS]
-    if not skills and re.search(r"math|algebra|geometr|statistic|number", f"{lesson['subject']} {result.get('subject', '')}", re.I):
-        # Claude didn't say: match the topics and notes against the skills' keywords instead.
-        skills = match_skills(" ".join([t["name"] for t in topics] + [p for n in notes for p in n["points"]]))
-    lesson["skills"] = skills[:8]
-    return lesson
-
-
 class StudyWorker:
     """Turns new lessons into notes, one at a time, in the background."""
 
     def __init__(self, store: StudyStore, stt, llm):
         self.store, self.stt, self.llm = store, stt, llm
         self.recordings = Recordings(store)
+        self.cloud = lambda: None  # (website address, sync key) once Buddy is connected to Study Buddy online
         self.queue: asyncio.Queue = asyncio.Queue()
         self.task: asyncio.Task | None = None
         self.watch_task: asyncio.Task | None = None
@@ -456,6 +350,7 @@ class StudyWorker:
             for x in self.store.lessons(p["id"]):
                 if x["status"] in ("waiting", "listening", "writing"):
                     self.queue.put_nowait((p["id"], x["id"]))
+        for p in self.store.profiles() + [{"id": "cloud"}]:
             for r in self.recordings.all(p["id"]):
                 if r["status"] == "checking":
                     self.queue.put_nowait((p["id"], "rec:" + r["id"]))
@@ -473,13 +368,47 @@ class StudyWorker:
         while True:
             try:
                 await asyncio.to_thread(self.scan_folder)
+                await self.push_waiting()
             except Exception:  # noqa: BLE001 - keep watching
                 log.exception("lesson folder scan failed")
             await asyncio.sleep(30)
 
+    def owner(self) -> str:
+        """Who new recordings belong to: the website (once connected), or a person on this Mac."""
+        return "cloud" if self.cloud() else self.store.recorder_owner()
+
+    async def push_waiting(self) -> None:
+        """Send checked lessons that haven't reached the website yet (it was offline, say)."""
+        if not self.cloud():
+            return
+        for r in self.recordings.all("cloud"):
+            if r["status"] == "ready" and not r.get("sent"):
+                await self.push("cloud", r)
+
+    async def push(self, pid: str, rec: dict) -> bool:
+        cloud = self.cloud()
+        if not cloud:
+            return False
+        url, key = cloud
+        import httpx
+        body = {k: rec.get(k) for k in ("id", "recorded_at", "name", "subject", "about", "duration_s", "transcript", "source")}
+        try:
+            async with httpx.AsyncClient(timeout=30) as c:
+                r = await c.post(f"{url.rstrip('/')}/study/api/sync/recording", json=body, headers={"X-Sync-Key": key})
+            ok = r.status_code == 200
+            if not ok:
+                log.warning("study website refused a recording: %s %s", r.status_code, r.text[:200])
+        except Exception as e:  # noqa: BLE001 - try again later
+            log.warning("couldn't reach the study website: %s", e)
+            ok = False
+        if ok:
+            rec["sent"] = True
+            self.recordings.save(pid, rec)
+        return ok
+
     def scan_folder(self, folder: Path | None = None) -> int:
         folder = folder or find_inbox_folder()
-        pid = self.store.recorder_owner()
+        pid = self.owner()
         if not folder or not pid:
             return 0
         n = 0
@@ -493,7 +422,7 @@ class StudyWorker:
             self.store.mark_imported(key)
             self.add_recording(pid, f, st.st_mtime, "folder")
             n += 1
-        for p in self.store.profiles():
+        for p in self.store.profiles() + [{"id": "cloud"}]:
             self.recordings.cleanup(p["id"])
         return n
 
@@ -568,6 +497,8 @@ class StudyWorker:
             if rec["status"] != "checking":
                 audio_file.unlink(missing_ok=True)  # the words are kept; the recording isn't
             self.recordings.save(pid, rec)
+        if rec["status"] == "ready" and pid == "cloud":
+            await self.push(pid, rec)  # off to Study Buddy online
 
     def lesson_from_recording(self, pid: str, rid: str, title: str = "") -> dict:
         rec = self.recordings.get(pid, rid)
