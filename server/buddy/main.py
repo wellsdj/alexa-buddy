@@ -299,6 +299,80 @@ def create_app(settings: Settings | None = None, http=None, claude_http=None, st
         study_call(hub.study_worker.recordings.delete, studying(request)["id"], rid)
         return {"ok": True}
 
+    # ---------- Start revising ----------
+    from .practice import HELP_PROMPT, SKILLS, match_skills
+    from .study import _parse_json
+    practice = hub.practice
+
+    def lesson_skills(lesson: dict) -> list[str]:
+        skills = [x for x in lesson.get("skills") or [] if x in SKILLS]
+        if not skills and lesson.get("status") == "ready":
+            text = " ".join([lesson.get("subject", "")] + [t["name"] for t in lesson.get("topics", [])]
+                            + [p for n in lesson.get("notes", []) for p in n.get("points", [])])
+            if any(w in text.lower() for w in ("math", "algebra", "geometr", "angle", "fraction", "equation", "statistic")):
+                skills = match_skills(text)
+        return skills
+
+    @app.post("/study/api/revise/start")
+    async def revise_start(request: Request, body: dict):
+        pid = studying(request)["id"]
+        if body.get("lesson") == "all":
+            skills = [x["skill"] for x in practice.progress.summary(pid)][:8]
+            if not skills:
+                raise HTTPException(400, "Revise a lesson first; then you can revise everything together.")
+            return practice.start(pid, "all", skills)
+        lesson = study_call(study.lesson, pid, body.get("lesson", ""))
+        skills = lesson_skills(lesson)
+        if not skills:
+            return {"cards": True}  # not maths: the lesson's own questions instead
+        return practice.start(pid, lesson["id"], skills)
+
+    @app.post("/study/api/revise/answer")
+    async def revise_answer(request: Request, body: dict):
+        pid = studying(request)["id"]
+        try:
+            practice.question(body.get("question", ""), pid)
+            return practice.answer(body.get("round", ""), body.get("question", ""), body.get("values") or [])
+        except (KeyError, ValueError):
+            raise HTTPException(400, "That question has expired. Start revising again.")
+
+    @app.post("/study/api/revise/next")
+    async def revise_next(request: Request, body: dict):
+        studying(request)
+        try:
+            return practice.next(body.get("round", ""))
+        except KeyError:
+            raise HTTPException(400, "That round has expired. Start revising again.")
+
+    @app.post("/study/api/revise/help")
+    async def revise_help(request: Request, body: dict):
+        pid = studying(request)["id"]
+        try:
+            lv = practice.question(body.get("question", ""), pid)
+        except KeyError:
+            raise HTTPException(400, "That question has expired.")
+        lv.helped = True
+        if lv.help_steps is None:
+            from .practice import show_answer
+            labels = [f.get("label") or "" for f in lv.q.fields]
+            answer = ", ".join(f"{l} {show_answer(a)}{f.get('suffix') and ' ' + f['suffix'] or ''}".strip()
+                               for l, a, f in zip(labels, lv.q.answers, lv.q.fields))
+            try:
+                r = await hub.llm.chat([{"role": "user", "content": HELP_PROMPT.format(
+                    question=lv.q.text, answer=answer, method=lv.q.method or SKILLS[lv.skill].name)}],
+                    tier="fast", json_mode=True, max_tokens=900)
+                steps = [str(x).strip() for x in _parse_json(r.content).get("steps", []) if str(x).strip()]
+            except Exception as e:  # noqa: BLE001
+                log.warning("help failed: %s", e)
+                steps = []
+            lv.help_steps = steps or [lv.q.method or "Have a look at your notes for this topic, then try again."]
+        return {"steps": lv.help_steps}
+
+    @app.get("/study/api/progress")
+    async def study_progress(request: Request):
+        pid = studying(request)["id"]
+        return {"skills": practice.progress.summary(pid), "week": practice.progress.recent(pid)}
+
     @app.post("/study/api/device/recording")
     async def study_device_recording(request: Request):
         """The pocket Buddy sends a finished recording here when it's back on Wi-Fi (the body is

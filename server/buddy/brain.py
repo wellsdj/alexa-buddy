@@ -205,6 +205,12 @@ TOOLS = [
         "parameters": {"type": "object", "properties": {
             "step": {"type": "integer"}, "number": {"type": "integer"}, "name": {"type": "string"}}}}},
     {"type": "function", "function": {
+        "name": "study_progress", "description": "How the user's revising is going in Study Buddy: lessons recorded, "
+                                                 "maths skills and their level (1-5), what's strong and weak, what to revise next. "
+                                                 "Use for questions like 'how am I doing', 'what's my progress', 'what should I revise'.",
+        "parameters": {"type": "object", "properties": {
+            "person": {"type": "string", "description": "Only if they name someone else's profile"}}}}},
+    {"type": "function", "function": {
         "name": "web_search", "description": "Search the web for current or factual info (news, sport, prices, opening times, events).",
         "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}},
     {"type": "function", "function": {
@@ -280,6 +286,7 @@ class Brain:
         self.volume = int(settings["volume"])
         self.sounds = None  # AlarmSounds, set by the hub
         self.missed: list[str] = []  # alarms that rang out with nobody there, to mention next time
+        self.study = None  # (StudyStore, Practice), set by the hub
 
     def now(self) -> datetime:
         return datetime.now(ZoneInfo(self.settings["timezone"]))
@@ -833,6 +840,8 @@ class Brain:
                 args = {k: a[k] for k in ("number", "name") if a.get(k)} or {"step": int(a.get("step") or 1)}
                 r = self._switch_voice(args)
                 return r.text, r.text, []
+            if name == "study_progress":
+                return self._study_progress(a.get("person", "")), "", []
             if name == "web_search":
                 await say_while(ctx, "search")
                 found = await self.llm.web_search(a.get("query", ""))
@@ -843,6 +852,35 @@ class Brain:
         except (KeyError, ValueError, TypeError) as e:
             return f"error: {e}", "", []
         return f"error: unknown tool {name}", "", []
+
+    def _study_progress(self, person: str = "") -> str:
+        """A plain summary of someone's revising, for Buddy to talk about."""
+        if not self.study:
+            return "Study Buddy isn't set up."
+        store, practice = self.study
+        profiles = store.profiles()
+        if not profiles:
+            return "Nobody has a Study Buddy profile yet (open Study from Buddy's web page)."
+        want = (person or self.settings["user_name"] or "").strip().lower()
+        p = (next((x for x in profiles if x["name"].lower() == want), None)
+             or next((x for x in profiles if want and x["name"].lower().startswith(want.split()[0])), None)
+             or next((x for x in profiles if x["id"] == store.recorder_owner()), None) or profiles[0])
+        lessons = [x for x in store.lessons(p["id"]) if x["status"] == "ready"]
+        skills = practice.progress.summary(p["id"])
+        week = practice.progress.recent(p["id"])
+        lines = [f"Profile: {p['name']}. {len(lessons)} lessons with notes."]
+        for x in lessons[:5]:
+            lines.append(f"- {x['date']}: {x['subject'] or 'lesson'}{(' about ' + x['about']) if x.get('about') else ''}")
+        if skills:
+            lines.append("Maths skills (level 1 = just starting, 5 = exam-ready; answered / right):")
+            for k in skills:
+                lines.append(f"- {k['name']}: level {k['level']} ({k['right']}/{k['seen']} right)")
+            weakest = [k["name"] for k in skills[:2]]
+            lines.append(f"Weakest: {', '.join(weakest)}.")
+        else:
+            lines.append("No maths questions answered yet.")
+        lines.append(f"Last 7 days: {week['answered']} questions answered, {week['right']} right, on {week['days']} days.")
+        return "\n".join(lines)
 
     async def _week_weather(self) -> str:
         data = await self.weather.fetch()

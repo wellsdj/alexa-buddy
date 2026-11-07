@@ -239,3 +239,40 @@ def test_pocket_buddy_can_send_a_recording(settings):
         got = c.post("/study/api/device/recording?recorded_at=1794000000", content=buf.getvalue())
         assert got.status_code == 200
         assert c.get("/study/api/recordings", headers={"X-Study-Token": r["token"]}).json()["mine"]
+
+
+def test_start_revising_flow_and_buddy_knows_progress(settings):
+    from buddy.practice import show_answer
+    app = create_app(settings)
+    hub = app.state.hub
+
+    class LLM(FakeLLM):
+        async def chat(self, messages, **kw):
+            if "maths tutor" in messages[0]["content"]:
+                return SimpleNamespace(content=json.dumps({"steps": ["Take 3 from both sides.", "Divide by 2: x = 4."]}))
+            return SimpleNamespace(content=json.dumps(dict(NOTES, skills=["linear_equations", "made_up_skill"])))
+
+    with TestClient(app) as c:
+        hub.study_worker.llm = hub.llm = LLM()
+        tok = c.post("/study/api/profiles", json={"name": "Alex", "pin": "1234"}).json()["token"]
+        h = {"X-Study-Token": tok}
+        lesson = c.post("/study/api/lessons/text", headers=h, json={"subject": "Maths", "text": LESSON_TEXT}).json()
+        for _ in range(60):
+            if c.get(f"/study/api/lessons/{lesson['id']}", headers=h).json()["status"] == "ready":
+                break
+            time.sleep(0.05)
+        assert c.get(f"/study/api/lessons/{lesson['id']}", headers=h).json()["skills"] == ["linear_equations"]
+        r = c.post("/study/api/revise/start", headers=h, json={"lesson": lesson["id"]}).json()
+        q = r["question"]
+        assert q["skill"] == "Solving equations" and "answer" not in json.dumps(q)  # the answer stays on the server
+        steps = c.post("/study/api/revise/help", headers=h, json={"question": q["id"]}).json()["steps"]
+        assert len(steps) == 2
+        right = [show_answer(a) for a in hub.practice.live[q["id"]].q.answers]
+        got = c.post("/study/api/revise/answer", headers=h, json={"round": r["round"], "question": q["id"], "values": right}).json()
+        assert got["right"]
+        nxt = c.post("/study/api/revise/next", headers=h, json={"round": r["round"]}).json()
+        assert nxt["number"] == 2
+        prog = c.get("/study/api/progress", headers=h).json()
+        assert prog["skills"][0]["seen"] == 1 and prog["week"]["right"] == 1
+        said = hub.brain._study_progress()
+        assert "Alex" in said and "Solving equations" in said and "1/1 right" in said

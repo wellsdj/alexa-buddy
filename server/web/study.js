@@ -138,7 +138,7 @@ async function homeView() {
   const first = S.me.name.split(" ")[0];
   view.innerHTML = `
     <h1 class="fade">Hi ${esc(first)}</h1>
-    <a class="add-link" href="#/add">+ Add a lesson</a>
+    <p class="home-links"><a class="add-link" href="#/add">+ Add a lesson</a>${lessons.some((x) => x.status === "ready") ? `<a class="add-link" href="#/progress">My progress</a>` : ""}</p>
     ${lessons.length ? `<div class="lessons">${lessons.map(lessonCard).join("")}</div>`
                      : `<p class="empty">No lessons yet. Add a recording of a lesson and Buddy makes notes and questions from it.</p>`}`;
   if (lessons.some(busy)) S.poll = setTimeout(() => location.hash === "#/" && homeView().catch(() => {}), 3000);
@@ -197,7 +197,7 @@ async function addView() {
       : `<p class="empty">No recordings yet.${data.mine && !data.folder ? ` To add voice memos from your phone, make a folder called “${esc(data.folder_name)}” on this Mac's Desktop and put them in it.` : ""}</p>`}</div>
     <div id="use" hidden>
       <label class="field">Title (optional) <input name="title" maxlength="80" placeholder="Leave empty and it's called e.g. “Maths lesson”"></label>
-      <button class="btn wide" id="go">Make my notes</button>
+      <button class="btn wide" id="go">Start revising</button>
     </div>
     <p class="error" id="err"></p>
     <p style="margin-top:28px"><button class="link" id="other">Or upload a file from this computer</button></p>
@@ -208,7 +208,7 @@ async function addView() {
         <span class="muted small">The recording is deleted once it's turned into text.</span>
       </label>
       <p class="picked" id="picked" hidden></p>
-      <button class="btn wide" id="go2" style="margin-top:18px">Make my notes</button>
+      <button class="btn wide" id="go2" style="margin-top:18px">Start revising</button>
       <div class="bar" id="up" hidden><i style="width:0"></i></div>
     </form>
     <p class="note small" style="margin-top:28px">Ask your teacher before recording a lesson, and don't share recordings of other people.</p>`;
@@ -223,7 +223,7 @@ async function addView() {
     err.textContent = "";
     try {
       const lesson = await api(`/recordings/${chosen}/use`, { method: "POST", body: JSON.stringify({ title: $("[name=title]").value }) });
-      location.hash = `#/lesson/${lesson.id}`;
+      location.hash = `#/revise/${lesson.id}`;
     } catch (ex) { err.textContent = ex.message; }
   };
   $("#other").onclick = () => { $("#f").hidden = false; $("#other").hidden = true; };
@@ -242,7 +242,7 @@ async function addView() {
     $("#go2").disabled = true;
     try {
       const lesson = await upload(x, { date: isoDay(x.lastModified) });
-      location.hash = `#/lesson/${lesson.id}`;
+      location.hash = `#/revise/${lesson.id}`;
     } catch (ex) { err.textContent = ex.message; }
     finally { $("#go2").disabled = false; }
   };
@@ -305,9 +305,10 @@ async function lessonView(id, tab) {
     return;
   }
   tab = tab || "notes";
-  const tabs = [["notes", "Notes"], ["practice", `Practice (${x.questions.length})`], ["transcript", x.source === "audio" ? "Transcript" : "Text"]];
+  const tabs = [["notes", "Notes"], ["practice", `Quick questions (${x.questions.length})`], ["transcript", x.source === "audio" ? "Transcript" : "Text"]];
   view.innerHTML = `${head}
     <p class="summary">${esc(x.about ? aboutLine(x) + "." : x.summary)}</p>
+    <a class="btn wide" href="#/revise/${esc(x.id)}" style="margin-top:24px">Start revising</a>
     <div class="tabs" role="tablist">${tabs.map(([k, n]) => `<button role="tab" data-tab="${k}" aria-selected="${k === tab}">${n}</button>`).join("")}</div>
     <section id="tab"></section>
     <p><button class="link" id="del">Delete this lesson</button></p>`;
@@ -378,6 +379,273 @@ async function deleteLesson(id) {
   location.hash = "#/";
 }
 
+// ---------- Start revising: questions that fit you ----------
+const R = { round: null, q: null, tries: 0 };
+
+async function reviseView(id) {
+  if (id !== "all") {
+    const x = await api(`/lessons/${encodeURIComponent(id)}`);
+    if (x.status !== "ready") {
+      const [cls, label] = STATUS[x.status] || ["", x.status];
+      view.innerHTML = `<a class="back" href="#/">← Lessons</a>
+        <h1 class="fade" style="margin-top:20px">Getting ready…</h1>
+        <p class="muted">${x.status === "failed" ? esc(x.error) : "Buddy is reading the lesson and setting up your questions. This takes about a minute."}</p>
+        <p><span class="tag ${cls}">${esc(label)}${x.status === "listening" ? ` ${x.progress}%` : ""}</span></p>`;
+      if (busy(x)) S.poll = setTimeout(() => location.hash === `#/revise/${id}` && reviseView(id).catch(() => {}), 2500);
+      return;
+    }
+  }
+  const r = await api("/revise/start", { method: "POST", body: JSON.stringify({ lesson: id }) });
+  if (r.cards) { location.hash = `#/lesson/${id}/practice`; return; }
+  R.lesson = id;
+  showRound(r);
+}
+
+function showRound(r) {
+  R.round = r.round;
+  if (r.finished) return roundDone(r);
+  R.q = r.question; R.tries = 0;
+  const q = r.question;
+  view.innerHTML = `
+    <div class="rv-top"><a class="back" href="${R.lesson === "all" ? "#/progress" : `#/lesson/${esc(R.lesson)}`}">← Stop</a>
+      <span class="muted small">Question ${r.number} of ${r.of}</span></div>
+    <div class="bar thin"><i style="width:${100 * (r.number - 1) / r.of}%"></i></div>
+    <p class="rv-skill">${esc(q.skill)} <span class="lvl">${"●".repeat(q.level)}${"○".repeat(5 - q.level)}</span></p>
+    <div class="rv-q">${esc(q.text).replace(/\n/g, "<br>")}</div>
+    ${q.diagram ? drawDiagram(q.diagram) : ""}
+    <form id="ans" class="answers" autocomplete="off">
+      ${q.fields.map(fieldHTML).join("")}
+      <p class="rv-msg" id="msg" role="status"></p>
+      <button class="btn wide" id="check">Check</button>
+    </form>
+    <div class="dock-bar">
+      <button type="button" class="help-btn" id="help">Help</button>
+      <button type="button" class="calc-btn" id="calc-toggle" aria-label="Calculator" aria-expanded="false">${CALC_ICON}</button>
+    </div>
+    <div class="help-sheet" id="help-sheet" hidden></div>`;
+  $("#ans input")?.focus();
+  $("#ans").onsubmit = (e) => { e.preventDefault(); check(); };
+  $("#help").onclick = help;
+  $("#calc-toggle").onclick = toggleCalc;
+  view.querySelectorAll("input[data-expr]").forEach((i) => i.addEventListener("input", () => {
+    const p = i.parentElement.querySelector(".preview");
+    if (p) p.textContent = prettyExpr(i.value);
+  }));
+}
+
+function fieldHTML(f, i) {
+  const label = f.label ? `<span class="f-label">${esc(f.label)}</span>` : "";
+  const pre = f.prefix ? `<span class="f-fix">${esc(f.prefix)}</span>` : "";
+  const suf = f.suffix ? `<span class="f-fix">${esc(f.suffix)}</span>` : "";
+  if (f.kind === "fraction" || f.kind === "mixed") {
+    return `<div class="f-row" data-i="${i}">${label}
+      ${f.kind === "mixed" ? `<input class="f-in whole" inputmode="numeric" data-part="w" aria-label="whole number">` : ""}
+      <span class="frac"><input class="f-in" inputmode="numeric" data-part="n" aria-label="top number"><i></i>
+        <input class="f-in" inputmode="numeric" data-part="d" aria-label="bottom number"></span>${suf}</div>`;
+  }
+  if (f.kind === "expr") {
+    return `<div class="f-row col" data-i="${i}">${label}<input class="f-in wide" data-expr placeholder="e.g. x^2 + 3x - 4" spellcheck="false" autocapitalize="off">
+      <span class="preview muted small"></span><span class="muted small">Type ^2 for squared.</span></div>`;
+  }
+  return `<div class="f-row" data-i="${i}">${label}${pre}<input class="f-in" inputmode="decimal" aria-label="${esc(f.label || "answer")}">${suf}</div>`;
+}
+
+const prettyExpr = (v) => v.replace(/\^2/g, "²").replace(/\^3/g, "³").replace(/\*/g, "×").replace(/-/g, " − ").replace(/\+/g, " + ").replace(/\s+/g, " ").trim();
+
+function readValues() {
+  return R.q.fields.map((f, i) => {
+    const row = view.querySelector(`.f-row[data-i="${i}"]`);
+    if (f.kind === "fraction") return [row.querySelector("[data-part=n]").value, row.querySelector("[data-part=d]").value];
+    if (f.kind === "mixed") return [row.querySelector("[data-part=w]").value, row.querySelector("[data-part=n]").value, row.querySelector("[data-part=d]").value];
+    return row.querySelector("input").value;
+  });
+}
+
+async function check() {
+  const msg = $("#msg"), btn = $("#check");
+  const values = readValues();
+  if (values.flat().every((v) => !String(v).trim())) { msg.textContent = "Type your answer in the box first."; return; }
+  btn.disabled = true;
+  try {
+    const r = await api("/revise/answer", { method: "POST", body: JSON.stringify({ round: R.round, question: R.q.id, values }) });
+    if (r.try_again) {
+      msg.className = "rv-msg bad"; msg.textContent = "Not quite. Have another go, or press Help.";
+      btn.disabled = false;
+      return;
+    }
+    view.querySelectorAll("#ans input").forEach((i) => i.disabled = true);
+    msg.className = "rv-msg " + (r.right ? "good" : "bad");
+    const ans = R.q.fields.map((f, i) => `${f.label ? f.label + " " : ""}${f.prefix || ""}${r.answer[i]}${f.suffix ? (f.suffix === "°" ? "°" : " " + f.suffix) : ""}`).join(", ");
+    msg.innerHTML = r.right ? "Correct!" : `The answer was <b>${esc(ans)}</b>.`;
+    btn.textContent = "Next question";
+    btn.disabled = false;
+    $("#ans").onsubmit = async (e) => {
+      e.preventDefault();
+      btn.disabled = true;
+      showRound(await api("/revise/next", { method: "POST", body: JSON.stringify({ round: R.round }) }));
+    };
+    btn.focus();
+  } catch (e) { msg.className = "rv-msg bad"; msg.textContent = e.message; btn.disabled = false; }
+}
+
+async function help() {
+  const sheet = $("#help-sheet");
+  sheet.hidden = false;
+  sheet.innerHTML = `<div class="help-head"><b>Help</b><button class="link" id="help-x">Close</button></div><p class="muted">Thinking…</p>`;
+  $("#help-x").onclick = () => { sheet.hidden = true; };
+  try {
+    const { steps } = await api("/revise/help", { method: "POST", body: JSON.stringify({ question: R.q.id }) });
+    let shown = 1;
+    const draw = () => {
+      sheet.innerHTML = `<div class="help-head"><b>Help</b><button class="link" id="help-x">Close</button></div>
+        <ol class="steps">${steps.slice(0, shown).map((t) => `<li>${esc(t)}</li>`).join("")}</ol>
+        ${shown < steps.length ? `<button class="btn secondary" id="more">Next step</button>` : `<p class="muted small">Now try typing the answer.</p>`}`;
+      $("#help-x").onclick = () => { sheet.hidden = true; };
+      $("#more")?.addEventListener("click", () => { shown++; draw(); });
+    };
+    draw();
+  } catch (e) { sheet.querySelector("p").textContent = e.message; }
+}
+
+function roundDone(r) {
+  view.innerHTML = `
+    <h1 class="fade" style="margin-top:20px">${r.right} out of ${r.total}</h1>
+    <p class="muted">${r.right >= r.total * 0.8 ? "Brilliant. The next questions will be a bit harder." : r.right >= r.total * 0.5 ? "Good work. Keep going to push your level up." : "Tricky ones. The next round will build you back up."}</p>
+    <div class="dots big">${r.results.map((ok) => `<i class="${ok ? "on" : "off"}"></i>`).join("")}</div>
+    <div class="lessons">${r.skills.map((k) => `<div class="lesson"><div class="t">${esc(k.name)}</div>
+      <div class="when">Level ${k.level} of 5</div><div class="bar thin"><i style="width:${k.level * 20}%"></i></div></div>`).join("")}</div>
+    <a class="btn wide" href="#/revise/${esc(R.lesson)}" id="again" style="margin-top:28px">Keep going</a>
+    <p><a class="back" href="#/">Back to lessons</a></p>`;
+  $("#again").onclick = (e) => { e.preventDefault(); reviseView(R.lesson); };
+}
+
+async function progressView() {
+  const p = await api("/progress");
+  view.innerHTML = `<a class="back" href="#/">← Lessons</a>
+    <h1 class="fade" style="margin-top:20px">My progress</h1>
+    <p class="muted">${p.week.answered ? `This week: ${p.week.answered} questions, ${p.week.right} right, on ${p.week.days} day${p.week.days === 1 ? "" : "s"}.` : "No questions answered this week yet."}</p>
+    ${p.skills.length ? `<div class="lessons">${p.skills.map((k) => `<div class="lesson"><div class="t">${esc(k.name)}</div>
+      <div class="when">Level ${k.level} of 5 · ${k.right} of ${k.seen} right</div><div class="bar thin"><i style="width:${k.level * 20}%"></i></div></div>`).join("")}</div>
+      <a class="btn wide" href="#/revise/all" style="margin-top:28px">Revise everything</a>`
+    : `<p class="empty">Start revising a maths lesson and your levels show up here. You can also ask Buddy “how am I doing?”</p>`}`;
+}
+
+// A triangle drawn to shape, with its labels.
+function drawDiagram(d) {
+  if (d.kind !== "triangle") return "";
+  const P = d.pts, cx = (P[0][0] + P[1][0] + P[2][0]) / 3, cy = (P[0][1] + P[1][1] + P[2][1]) / 3;
+  const away = (x, y, k) => { const dx = x - cx, dy = y - cy, l = Math.hypot(dx, dy) || 1; return [x + dx / l * k, y + dy / l * k]; };
+  const toward = (x, y, k) => away(x, y, -k);
+  let out = `<polygon points="${P.map((p) => p.join(",")).join(" ")}" class="tri"/>`;
+  if (d.right != null) {
+    const v = P[d.right], a = P[(d.right + 1) % 3], b = P[(d.right + 2) % 3], s = 14;
+    const u = (p) => { const dx = p[0] - v[0], dy = p[1] - v[1], l = Math.hypot(dx, dy); return [dx / l * s, dy / l * s]; };
+    const [ax, ay] = u(a), [bx, by] = u(b);
+    out += `<polyline points="${v[0] + ax},${v[1] + ay} ${v[0] + ax + bx},${v[1] + ay + by} ${v[0] + bx},${v[1] + by}" class="ra"/>`;
+  }
+  d.vertices.forEach((name, i) => { const [x, y] = away(...P[i], 16); out += `<text x="${x}" y="${y}" class="vx">${esc(name)}</text>`; });
+  d.angles.forEach((t, i) => {
+    if (!t) return;
+    // Sit the label inside the corner: further in for narrow corners so it clears the lines.
+    const v = P[i], a = P[(i + 1) % 3], b = P[(i + 2) % 3];
+    const ang = Math.acos(((a[0] - v[0]) * (b[0] - v[0]) + (a[1] - v[1]) * (b[1] - v[1])) / (Math.hypot(a[0] - v[0], a[1] - v[1]) * Math.hypot(b[0] - v[0], b[1] - v[1])));
+    const [x, y] = toward(...v, Math.min(70, 16 + 14 / Math.sin(ang / 2)));
+    out += `<text x="${x}" y="${y}" class="lab">${esc(t)}</text>`;
+  });
+  d.sides.forEach((t, i) => {
+    if (!t) return;
+    const a = P[(i + 1) % 3], b = P[(i + 2) % 3], [x, y] = away((a[0] + b[0]) / 2, (a[1] + b[1]) / 2, 18);
+    out += `<text x="${x}" y="${y}" class="lab">${esc(t)}</text>`;
+  });
+  return `<svg class="diagram" viewBox="-20 -10 300 290" role="img" aria-label="Triangle diagram">${out}</svg>`;
+}
+
+// ---------- scientific calculator ----------
+const CALC_ICON = `<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="3" width="14" height="18" rx="2.5"/><path d="M8 7h8M8.5 11h0M12 11h0M15.5 11h0M8.5 14.5h0M12 14.5h0M15.5 14.5h0M8.5 18h0M12 18h0M15.5 18h0"/></svg>`;
+const C = { expr: "", ans: 0, deg: true, shown: false };
+const KEYS = [["sin", "cos", "tan", "DEG"], ["x²", "√", "^", "π"], ["(", ")", "AC", "⌫"], ["7", "8", "9", "÷"], ["4", "5", "6", "×"],
+              ["1", "2", "3", "−"], ["0", ".", "Ans", "+"], ["sin⁻¹", "cos⁻¹", "tan⁻¹", "="]];
+
+function toggleCalc() {
+  let panel = $("#calc");
+  if (!panel) {
+    panel = document.createElement("div");
+    panel.id = "calc"; panel.className = "calc"; panel.hidden = true;
+    panel.innerHTML = `<div class="calc-screen"><div id="calc-expr"></div><div id="calc-out">0</div></div>
+      <div class="calc-keys">${KEYS.flat().map((k) => `<button type="button" data-k="${k}" class="${/^[0-9.]$/.test(k) ? "d" : k === "=" ? "eq" : ""}">${k}</button>`).join("")}</div>`;
+    document.body.append(panel);
+    panel.onclick = (e) => { const b = e.target.closest("button"); if (b) calcKey(b.dataset.k); };
+  }
+  panel.hidden = !panel.hidden;
+  $("#calc-toggle")?.setAttribute("aria-expanded", String(!panel.hidden));
+  calcDraw();
+}
+
+function calcKey(k) {
+  const map = { "x²": "^2", "√": "√(", "÷": "÷", "×": "×", "−": "−", "sin": "sin(", "cos": "cos(", "tan": "tan(",
+                "sin⁻¹": "asin(", "cos⁻¹": "acos(", "tan⁻¹": "atan(", "π": "π", "Ans": "Ans" };
+  if (k === "AC") { C.expr = ""; C.result = ""; }
+  else if (k === "⌫") C.expr = C.expr.replace(/(asin\(|acos\(|atan\(|sin\(|cos\(|tan\(|√\(|Ans|.)$/, "");
+  else if (k === "DEG") C.deg = !C.deg;
+  else if (k === "=") {
+    try { C.ans = calcEval(C.expr); C.result = fmt(C.ans); C.expr = ""; } catch { C.result = "Error"; }
+  } else C.expr += map[k] ?? k;
+  calcDraw();
+}
+document.addEventListener("keydown", (e) => {
+  const panel = $("#calc");
+  if (!panel || panel.hidden || e.target.tagName === "INPUT") return;
+  if (/^[0-9.+()^]$/.test(e.key)) calcKey(e.key);
+  else if (e.key === "-") calcKey("−"); else if (e.key === "*") calcKey("×"); else if (e.key === "/") calcKey("÷");
+  else if (e.key === "Enter" || e.key === "=") { e.preventDefault(); calcKey("="); }
+  else if (e.key === "Backspace") calcKey("⌫"); else if (e.key === "Escape") calcKey("AC");
+});
+const fmt = (v) => Number.isFinite(v) ? String(+v.toPrecision(12)) : "Error";
+function calcDraw() {
+  const e = $("#calc-expr"), o = $("#calc-out");
+  if (!e) return;
+  e.textContent = C.expr || " ";
+  o.textContent = C.result || "0";
+  const deg = $('#calc [data-k="DEG"]');
+  if (deg) deg.textContent = C.deg ? "DEG" : "RAD";
+}
+
+// A small, safe expression reader (no eval): + − × ÷ ^ ( ) √ sin cos tan and inverses, π, Ans.
+function calcEval(src) {
+  const toks = src.replace(/\s+/g, "").match(/asin|acos|atan|sin|cos|tan|Ans|π|√|\d*\.?\d+|[()+−×÷^-]/g) || [];
+  let i = 0;
+  const peek = () => toks[i], take = () => toks[i++];
+  const rad = (x) => C.deg ? x * Math.PI / 180 : x, unrad = (x) => C.deg ? x * 180 / Math.PI : x;
+  const FN = { sin: (x) => Math.sin(rad(x)), cos: (x) => Math.cos(rad(x)), tan: (x) => Math.tan(rad(x)),
+               asin: (x) => unrad(Math.asin(x)), acos: (x) => unrad(Math.acos(x)), atan: (x) => unrad(Math.atan(x)), "√": Math.sqrt };
+  const fix = (x) => Math.abs(x - Math.round(x)) < 1e-12 ? Math.round(x) : x;
+  function expr() { let v = term(); while (peek() === "+" || peek() === "−" || peek() === "-") v = take() === "+" ? v + term() : v - term(); return v; }
+  function term() {
+    let v = power();
+    for (;;) {
+      if (peek() === "×") { take(); v *= power(); }
+      else if (peek() === "÷") { take(); v /= power(); }
+      else if (peek() && /^(\d|\.|\(|π|Ans|√|sin|cos|tan|asin|acos|atan)/.test(peek())) v *= power();  // 2π, 3(4)
+      else return v;
+    }
+  }
+  function power() { const b = unary(); if (peek() === "^") { take(); return Math.pow(b, power()); } return b; }
+  function unary() { if (peek() === "−" || peek() === "-") { take(); return -unary(); } return atom(); }
+  function atom() {
+    const t = take();
+    if (t === undefined) throw new Error("end");
+    if (t === "(") { const v = expr(); if (peek() === ")") take(); return v; }
+    if (t === "π") return Math.PI;
+    if (t === "Ans") return C.ans;
+    if (FN[t]) { const v = unary(); return fix(FN[t](v)); }
+    if (/^\d*\.?\d+$/.test(t)) return parseFloat(t);
+    throw new Error("bad");
+  }
+  const v = expr();
+  if (i < toks.length) throw new Error("left over");
+  return v;
+}
+
 // ---------- menu ----------
 $("#me").onclick = (e) => { e.stopPropagation(); $("#me-menu").hidden = !$("#me-menu").hidden; };
 document.addEventListener("click", () => { $("#me-menu").hidden = true; });
@@ -396,6 +664,8 @@ $("#me-menu").onclick = async (e) => {
 async function route() {
   clearTimeout(S.poll);
   document.body.classList.remove("signin");
+  const calc = $("#calc");
+  if (calc) calc.hidden = true;
   try {
     if (S.token && !S.me) S.me = (await api("/me")).profile;
   } catch { /* signed out */ }
@@ -404,6 +674,9 @@ async function route() {
   try {
     if (!S.me) return await whoView();
     if (h === "#/add") return await addView();
+    if (h === "#/progress") return await progressView();
+    const rv = h.match(/^#\/revise\/(\w+)/);
+    if (rv) return await reviseView(rv[1]);
     const m = h.match(/^#\/lesson\/([0-9a-f]+)(?:\/(\w+))?/);
     if (m) return await lessonView(m[1], m[2]);
     return await homeView();

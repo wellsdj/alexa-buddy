@@ -59,10 +59,14 @@ Reply with JSON only, in exactly this shape:
   "summary": "2-3 plain sentences: what the lesson was about",
   "notes": [{{"heading": "...", "points": ["clear revision note", "..."]}}],
   "topics": [{{"name": "short topic name", "summary": "one sentence"}}],
+  "skills": ["skill ids from the list below that this lesson taught, if it's a maths lesson"],
   "questions": [{{"topic": "one of the topic names", "level": 1, "question": "...",
                   "answer": "the correct answer, short", "why": "one or two sentences explaining it",
                   "choices": []}}]
 }}
+
+Maths practice skills (for "skills"; leave it empty if none fit or it isn't maths):
+{skills}
 
 Rules:
 - Notes: the key facts, methods, definitions and the teacher's worked examples, in simple language.
@@ -423,6 +427,12 @@ def tidy(result: dict, lesson: dict) -> dict:
                    "about": str(result.get("about", "")).strip().rstrip(".")[:80],
                    "notes": [n for n in notes if n["heading"] or n["points"]], "topics": topics,
                    "questions": questions})
+    from .practice import SKILLS, match_skills
+    skills = [x for x in result.get("skills") or [] if isinstance(x, str) and x in SKILLS]
+    if not skills and re.search(r"math|algebra|geometr|statistic|number", f"{lesson['subject']} {result.get('subject', '')}", re.I):
+        # Claude didn't say: match the topics and notes against the skills' keywords instead.
+        skills = match_skills(" ".join([t["name"] for t in topics] + [p for n in notes for p in n["points"]]))
+    lesson["skills"] = skills[:8]
     return lesson
 
 
@@ -601,7 +611,8 @@ class StudyWorker:
         lesson.update(status="writing", progress=0)
         self.store.save_lesson(pid, lesson)
         what = "a transcript of a recording" if lesson["source"] == "audio" else "notes or text"
-        prompt = LESSON_PROMPT.format(what=what, what_cap="Transcript" if lesson["source"] == "audio" else "Text",
+        from .practice import catalogue_text
+        prompt = LESSON_PROMPT.format(skills=catalogue_text(), what=what, what_cap="Transcript" if lesson["source"] == "audio" else "Text",
                                       subject=lesson["subject"] or "school", text=lesson["transcript"])
         r = await self.llm.chat([{"role": "user", "content": prompt}], tier="fast", json_mode=True, max_tokens=6000)
         tidy(_parse_json(r.content), lesson)

@@ -610,6 +610,9 @@ class Hub:
         self.sounds = AlarmSounds(settings)  # your own alarm sounds
         self.study = StudyStore(d)  # Study Buddy: lessons, notes and questions per person
         self.study_worker = StudyWorker(self.study, self.stt, self.llm)
+        from .practice import Practice
+        self.practice = Practice(self.study.dir)  # "Start revising": questions that fit each person
+        self.brain.study = (self.study, self.practice)  # so Buddy can say how revising is going
         self.brain.sounds = self.sounds
         self.conv = Conversation()
         self.sessions: dict[str, Session] = {}
