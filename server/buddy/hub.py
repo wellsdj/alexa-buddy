@@ -57,6 +57,10 @@ from .weather import Weather
 log = logging.getLogger("buddy.hub")
 SR = 16000
 BYTES_PER_S = SR * 2
+SORRY = ["Sorry about that!", "Sorry, that was my alarm.", "Sorry about that."]
+AS_I_WAS_SAYING = ["Sorry about that! As I was saying,", "Oh sorry, where was I? Right,",
+                   "Sorry about that. Anyway, as I was saying,"]
+YOU_WERE_SAYING = ["Oh sorry, you were saying?", "Sorry about that! What were you saying?", "Sorry! Go on, you were saying?"]
 STILL_WORKING = ["Hmm, one sec.", "Bear with me.", "Just a sec.", "Hang on a moment."]
 # Played once when the desk unit is switched on: 16 kHz mono 16-bit.
 _STARTUP_FILE = Path(__file__).resolve().parent.parent / "sounds" / "startup.pcm"
@@ -109,6 +113,16 @@ class Session:
         self.seq = 0
         self.playback_done = asyncio.Event()
         self.ringing: str | None = None
+        # An alarm that breaks into a conversation pauses it, and Buddy picks it up afterwards.
+        self.paused: dict | None = None
+        self.turns = 0  # answers given, to tell whether they moved on while the alarm rang
+        self.last_intent = ""
+        self.turn_running = 0
+        # While an alarm rings, listen for "stop" or "snooze" without "hey buddy".
+        self.ring_buf: list[np.ndarray] = []
+        self.ring_speech = 0.0
+        self.ring_quiet = 0.0
+        self.ring_busy = False
         self.level_db = -120.0
         self.last_level_push = 0.0
         self.info: dict = {}
@@ -285,6 +299,8 @@ class Session:
 
         if not self.hands_free:
             return
+        if self.ringing and self.role == "device":
+            self._ring_listen(pcm, probs)
         if wake is not None:
             quiet = self._quiet_before()
             # While Buddy talks its own voice fills the room, so a clear "hey buddy" interrupts anyway.
@@ -310,6 +326,30 @@ class Session:
         if (self.role == "device" and self.state == "idle" and not self.ringing and now >= self.quiet_until
                 and self.hub.room_listening_active() and probs and max(probs) > 0.6):
             await self.start_listening(preroll_s=0.6, silent="room", earcon=False, no_speech_s=3.0)
+
+    def _ring_listen(self, pcm: np.ndarray, probs: list[float]) -> None:
+        """While an alarm rings: when someone says something short, check whether it was "stop" or
+        "snooze". Only those words count, so the alarm's own sound can't set anything off."""
+        self.ring_buf.append(pcm)
+        while sum(len(x) for x in self.ring_buf) > 3 * SR:
+            self.ring_buf.pop(0)
+        if probs and max(probs) > 0.5:
+            self.ring_speech += len(pcm) / SR
+            self.ring_quiet = 0.0
+        else:
+            self.ring_quiet += len(pcm) / SR
+        # A short burst of speech that has just ended, or 2 s of sound (talking over the alarm).
+        if (self.ring_speech >= 0.25 and self.ring_quiet >= 0.35) or self.ring_speech >= 2.0:
+            audio = np.concatenate(self.ring_buf)
+            self.reset_ring_ears()
+            if not self.ring_busy:
+                self.ring_busy = True
+                asyncio.create_task(self.hub.ring_heard(self, audio))
+        elif self.ring_quiet > 1.5:
+            self.ring_speech = 0.0
+
+    def reset_ring_ears(self) -> None:
+        self.ring_buf, self.ring_speech, self.ring_quiet = [], 0.0, 0.0
 
     async def _promote(self, wake) -> None:
         """A silent capture turned out to start with "hey buddy": chime and light up as usual."""
@@ -824,6 +864,13 @@ class Hub:
         await s.speak(text)
 
     async def respond(self, s: Session, text: str, stt_ms: int = 0) -> None:
+        s.turn_running += 1
+        try:
+            await self._respond(s, text, stt_ms)
+        finally:
+            s.turn_running -= 1
+
+    async def _respond(self, s: Session, text: str, stt_ms: int = 0) -> None:
         await self.broadcast_ui({"type": "event", "kind": "transcript", "session": s.id, "role": "user", "text": text})
         ctx = {"ringing": s.ringing or next((d.ringing for d in self.devices() if d.ringing), None),
                "say": s.interim}
@@ -839,6 +886,22 @@ class Hub:
             log.exception("brain failed")
             reply = Reply("Ah, sorry, something went a bit wrong on my end. Give it another go?", intent="error")
             self.record("error", where="brain", error=str(e))
+        s.turns += 1
+        s.last_intent = reply.intent or ""
+        if s.ringing and s.paused is not None and reply.intent not in ("stop", "off", "snooze"):
+            # An alarm went off while this was being worked out: keep it for when the alarm stops.
+            for act in reply.actions:
+                await self.apply_action(s, act)
+            s.paused = {"what": "held", "text": reply.text, "follow_up": reply.follow_up}
+            await s.set_state("idle")
+            self.record("turn", session=s.id, heard=text, said=reply.text, intent=reply.intent, model=reply.model,
+                        stt_ms=stt_ms, brain_ms=reply.ms, held_for_alarm=True)
+            return
+        if (s.paused is not None and s.paused["what"] == "thinking" and reply.text
+                and reply.intent not in ("stop", "off", "snooze")):
+            # An alarm came and went while this was being worked out: say sorry, then answer.
+            s.paused = None
+            reply.text = random.choice(SORRY) + " " + reply.text
         for act in reply.actions:
             await self.apply_action(s, act)
         self.record("turn", session=s.id, heard=text, said=reply.text, intent=reply.intent, model=reply.model,
@@ -883,10 +946,15 @@ class Hub:
         kind = (a.kind if a else kind) or "alarm"
         self.record("alarm_fired", session=s.id, id=alarm_id, kind=kind, label=a.label if a else "")
         if kind == "reminder":
+            busy = await self.pause_for_alarm(s)
             await asyncio.sleep(1.6)  # let the chime finish first
             text = f"Here's your reminder: {a.label}." if a and a.label else "This is your reminder."
             await self.announce(s, text)
+            if busy:
+                self._soon(self._resume_after_alarm(s, s.turns))
         else:
+            await self.pause_for_alarm(s)
+            s.reset_ring_ears()
             s.ringing = alarm_id
             await self.broadcast_ui({"type": "event", "kind": "ringing", "session": s.id, "id": alarm_id,
                                      "label": a.label if a else "", "alarm_kind": kind})
@@ -929,9 +997,105 @@ class Hub:
         if s.ringing != alarm_id:
             await s.send_json({"type": "stop_audio", "seq": s.seq})
 
+    async def pause_for_alarm(self, s: Session) -> bool:
+        """An alarm is going off: stop talking (or listening) and remember where the conversation was,
+        to carry on once it's stopped. Returns True if there was a conversation to pause."""
+        if s.paused is not None:
+            return True
+        if s.state == "speaking" and s.speaking_text and not (s.interim_task and not s.interim_task.done()):
+            await s.stop_speaking()  # notes how far it got in conv.interrupted
+            s.paused = {"what": "speaking", "text": self.conv.interrupted}
+            self.conv.interrupted = ""
+        elif s.state == "listening" and not s.silent:
+            s.capture, s.ptt = [], False
+            await s.set_state("idle")
+            s.paused = {"what": "listening"}
+        elif s.turn_running or s.state == "thinking":
+            if s.interim_task and not s.interim_task.done():
+                s.interim_task.cancel()
+                await s.send_json({"type": "stop_audio", "seq": s.seq})
+                s.seq = (s.seq + 1) % 256
+            s.paused = {"what": "thinking"}
+        else:
+            return False
+        self.record("paused_for_alarm", session=s.id, what=s.paused["what"])
+        return True
+
+    async def _resume_after_alarm(self, s: Session, turns_then: int, prefix: str = "") -> None:
+        """The alarm has stopped: pick the conversation back up, unless they've moved on."""
+        for _ in range(150):  # let a "stop"/"snooze" exchange finish first (up to 30 s)
+            if s.ringing:
+                return  # another alarm: it will resume after that one
+            if s.state not in ("listening", "thinking", "speaking") and not s.turn_running:
+                break
+            await asyncio.sleep(0.2)
+        p, s.paused = s.paused, None
+        if not p:
+            return
+        moved_on = s.turns > turns_then and s.last_intent not in ("stop", "snooze", "thanks", "")
+        if moved_on or s.last_intent == "off":
+            if p["what"] in ("speaking", "held") and p.get("text"):
+                self.conv.interrupted = p["text"]  # still there for "carry on"
+            return
+        sorry = random.choice(SORRY)
+        follow_up = False
+        if p["what"] == "speaking" and p.get("text"):
+            text = random.choice(AS_I_WAS_SAYING) + " " + p["text"]
+        elif p["what"] == "held" and p.get("text"):
+            text, follow_up = sorry + " " + p["text"], bool(p.get("follow_up"))
+        elif p["what"] == "listening":
+            text, follow_up = random.choice(YOU_WERE_SAYING), True
+        else:
+            text = ""
+        text = " ".join(x for x in (prefix, text) if x)
+        if not text:
+            return
+        self.record("resumed_after_alarm", session=s.id, what=p["what"])
+        await self.broadcast_ui({"type": "event", "kind": "transcript", "session": s.id, "role": "assistant", "text": text})
+        await s.speak(text, then_listen=follow_up)
+
+    async def ring_heard(self, s: Session, audio: np.ndarray) -> None:
+        """Something said while the alarm rang (no "hey buddy" needed): act on "stop" or "snooze"."""
+        try:
+            text = await self.stt.transcribe(audio, "", len(audio) / SR)
+        except STTError:
+            return
+        finally:
+            s.ring_busy = False
+        cmd = intents.ring_command(text)
+        if text.strip():
+            self.record("heard_while_ringing", session=s.id, heard=text, command=cmd[0] if cmd else None)
+        if not cmd or not s.ringing:
+            return
+        alarm_id = s.ringing
+        await self.broadcast_ui({"type": "event", "kind": "transcript", "session": s.id, "role": "user", "text": text})
+        if cmd[0] == "stop":
+            await self.apply_action(s, {"type": "alarm_stop"})
+            return
+        minutes = cmd[1] or int(self.settings["snooze_minutes"])
+        a = self._resolve(alarm_id)
+        if a:
+            self.alarms.snooze(a, minutes)
+        line = f"Okay, snoozing for {minutes} minutes."
+        if s.paused is not None:
+            s.paused["prefix"] = line  # said together with picking the conversation back up
+            await self.apply_action(s, {"type": "alarm_stop", "quiet": True})
+        else:
+            await self.apply_action(s, {"type": "alarm_stop", "quiet": True})
+            await self.announce(s, line)
+
     async def alarm_stopped(self, s: Session, alarm_id: str | None, reason: str) -> None:
         a = self._resolve(alarm_id)
         s.ringing = None
+        s.reset_ring_ears()
+        if s.paused is not None:
+            # It broke into a conversation: no briefing, just carry on where we were.
+            rang_at = self.ring_started.pop(alarm_id, None)
+            self.timed_out.discard(alarm_id)
+            self.record("alarm_stopped", session=s.id, id=alarm_id, reason=reason)
+            await self.broadcast_ui({"type": "event", "kind": "ringing", "session": s.id, "id": None})
+            self._soon(self._resume_after_alarm(s, s.turns, s.paused.pop("prefix", "")))
+            return
         rang_at = self.ring_started.pop(alarm_id, None)
         if a and a.kind == "alarm" and (reason == "timeout" or alarm_id in self.timed_out):
             self.timed_out.discard(alarm_id)

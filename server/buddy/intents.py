@@ -98,6 +98,24 @@ def _norm(text: str) -> str:
     return t
 
 
+def ring_command(text: str) -> tuple[str, int | None] | None:
+    """What was said while an alarm rang, without "hey buddy": ("stop", None), ("snooze", minutes) or None.
+    Only short phrases count, so a song or the radio in the background can't stop the alarm."""
+    t = _norm(text)
+    if not t or len(t.split()) > 8:
+        return None
+    if re.search(r"\b(snooze|more minutes?|few minutes|later|not yet)\b", t):
+        digits = words_to_digits(t)
+        m = re.search(r"\b(\d+) (more )?minutes?\b", digits)
+        d = find_duration(digits)
+        mins = int(m.group(1)) if m else ((d[0] // 60) if d and d[0] >= 60 else None)
+        return ("snooze", mins if mins and mins <= 60 else None)
+    if re.search(r"\b(stop|stop it|off|enough|dismiss|cancel|shut up|quiet|i'?m up|i'?m awake|awake|"
+                 r"i'?m getting up|that'?s fine|ok(ay)? i'?m up|alright i'?m up)\b", t):
+        return ("stop", None)
+    return None
+
+
 def match(text: str, now: datetime, context: dict | None = None) -> Intent | None:
     context = context or {}
     t = _norm(text)
