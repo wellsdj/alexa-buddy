@@ -12,7 +12,7 @@ from buddy.main import create_app
 from buddy.study import StudyError, StudyStore, StudyWorker, split_at_pauses, tidy
 
 NOTES = {
-    "title": "Solving simultaneous equations", "subject": "Maths",
+    "title": "Solving simultaneous equations", "subject": "Maths", "about": "solving two equations at once.",
     "summary": "How to solve two equations together by elimination.",
     "notes": [{"heading": "Elimination", "points": ["Make one variable's numbers match", "Add or subtract"]}],
     "topics": [{"name": "Simultaneous equations", "summary": "Two equations, two unknowns."}],
@@ -94,7 +94,7 @@ def test_tidy_drops_broken_questions_and_bad_choices():
         {"topic": "t", "question": "q?", "answer": "7", "choices": ["1", "2"]}]), {"title": "", "subject": ""})
     assert len(lesson["questions"]) == 3
     assert lesson["questions"][-1]["choices"] == []  # answer wasn't a choice: asked as a normal question
-    assert lesson["title"] == "Solving simultaneous equations"
+    assert lesson["auto_title"] == "Solving simultaneous equations" and lesson["title"] == ""
 
 
 def test_recording_becomes_notes_and_is_then_deleted(tmp_path):
@@ -110,7 +110,7 @@ def test_recording_becomes_notes_and_is_then_deleted(tmp_path):
     done = s.lesson(a["id"], lesson["id"])
     assert done["status"] == "ready" and done["duration_s"] == 60
     assert len(stt.pieces) >= 3 and done["notes"] and len(done["questions"]) == 2
-    assert done["title"] == "Solving simultaneous equations" and done["subject"] == "Maths"
+    assert done["subject"] == "Maths" and done["about"] == "solving two equations at once"
     assert "transcript of a recording" in llm.prompts[0]
     assert not up.exists()
 

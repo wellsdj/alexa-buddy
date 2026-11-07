@@ -40,7 +40,8 @@ was actually taught, and ignore chat that isn't about the lesson.
 Reply with JSON only, in exactly this shape:
 {{
   "title": "short title for the lesson, 3-7 words",
-  "subject": "the school subject, one or two words",
+  "subject": "the school subject, one or two words, e.g. Maths, English, Chemistry",
+  "about": "what the lesson was about in under 8 words, starting with a small letter, e.g. calculating angles in triangles",
   "summary": "2-3 plain sentences: what the lesson was about",
   "notes": [{{"heading": "...", "points": ["clear revision note", "..."]}}],
   "topics": [{{"name": "short topic name", "summary": "one sentence"}}],
@@ -179,7 +180,7 @@ class StudyStore:
         lesson = {"id": secrets.token_hex(4), "subject": _clean_name(subject) or "", "date": date or time.strftime("%Y-%m-%d"),
                   "title": (title or "").strip()[:80], "source": source, "created": time.time(),
                   "status": "waiting", "progress": 0, "error": "", "transcript": "", "summary": "",
-                  "notes": [], "topics": [], "questions": [], "duration_s": 0}
+                  "notes": [], "topics": [], "questions": [], "duration_s": 0, "about": ""}
         self.save_lesson(pid, lesson)
         return lesson
 
@@ -202,7 +203,7 @@ class StudyStore:
                 x = json.loads(f.read_text())
             except (OSError, ValueError):
                 continue
-            out.append({k: x.get(k) for k in ("id", "title", "subject", "date", "status", "progress", "error",
+            out.append({k: x.get(k) for k in ("id", "title", "auto_title", "subject", "about", "date", "status", "progress", "error",
                                                "created", "duration_s")}
                        | {"topics": [t["name"] for t in x.get("topics", [])], "questions": len(x.get("questions", []))})
         return sorted(out, key=lambda x: (x["date"] or "", x["created"]), reverse=True)
@@ -299,9 +300,11 @@ def tidy(result: dict, lesson: dict) -> dict:
         questions.append({"id": f"q{i + 1}", "topic": str(q.get("topic", "")).strip(), "level": level,
                           "question": str(q["question"]).strip(), "answer": answer,
                           "why": str(q.get("why", "")).strip(), "choices": choices})
-    lesson.update({"title": lesson.get("title") or str(result.get("title", "")).strip()[:80] or "Lesson",
+    # Your own title stays; Buddy's suggestion is kept apart, shown only if you didn't give one.
+    lesson.update({"auto_title": str(result.get("title", "")).strip()[:80],
                    "subject": lesson.get("subject") or str(result.get("subject", "")).strip()[:30],
                    "summary": str(result.get("summary", "")).strip(),
+                   "about": str(result.get("about", "")).strip().rstrip(".")[:80],
                    "notes": [n for n in notes if n["heading"] or n["points"]], "topics": topics,
                    "questions": questions})
     return lesson

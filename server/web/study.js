@@ -7,6 +7,11 @@ const view = $("#view");
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const today = () => new Date().toLocaleDateString("en-CA");  // YYYY-MM-DD
 const niceDate = (d) => d ? new Date(d + "T12:00").toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" }) : "";
+const longDate = (d) => d ? new Date(d + "T12:00").toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric" }) : "";
+const isoDay = (ms) => new Date(ms).toLocaleDateString("en-CA");
+// What a lesson is called: your title, or "Maths lesson" once Buddy has worked out the subject.
+const lessonName = (x) => x.title || (x.subject ? `${x.subject} lesson` : (x.status === "ready" ? x.auto_title || "Lesson" : "New lesson"));
+const aboutLine = (x) => x.about ? `About ${x.about}` : "";
 
 const S = { token: load("studyToken"), me: null, poll: null };
 
@@ -28,14 +33,16 @@ function signedOut() { S.token = ""; S.me = null; store("studyToken", ""); showM
 // ---------- who's revising ----------
 async function whoView() {
   const { profiles } = await api("/profiles");
-  view.innerHTML = `
-    <h1>Who's revising?</h1>
-    <p class="muted">Everyone has their own lessons, notes and progress.</p>
+  document.body.classList.add("signin");
+  view.innerHTML = `<section class="hero">
+    <h1>Study<br>Buddy</h1>
+    <p class="lead">Your lessons, turned into notes and practice questions. Who's revising?</p>
     <div class="people">
       ${profiles.map((p) => `<button class="person" data-id="${esc(p.id)}" data-name="${esc(p.name)}">
         <span class="avatar c${p.colour}">${esc(p.name[0].toUpperCase())}</span>${esc(p.name)}</button>`).join("")}
       <button class="person add" data-add><span class="avatar">+</span>Add person</button>
-    </div>`;
+    </div>
+    <p class="foot"><a href="/">← Back to Buddy</a></p></section>`;
   view.querySelectorAll(".person[data-id]").forEach((b) => b.onclick = async () => {
     const pin = await askPin(`Hi ${b.dataset.name}`, "Type your PIN", async (pin) => {
       const r = await api("/login", { method: "POST", body: JSON.stringify({ profile: b.dataset.id, pin }) });
@@ -47,6 +54,7 @@ async function whoView() {
 }
 
 function addPersonView() {
+  document.body.classList.remove("signin");
   view.innerHTML = `
     <a class="back" href="#/">← Back</a>
     <h1>Add a person</h1>
@@ -141,75 +149,53 @@ function lessonCard(x) {
   const [cls, label] = STATUS[x.status] || ["", x.status];
   const progress = x.status === "listening" ? ` ${x.progress}%` : "";
   return `<a class="lesson" href="#/lesson/${esc(x.id)}">
-    <div class="meta">${x.subject ? `<span class="tag">${esc(x.subject)}</span>` : ""}<span>${esc(niceDate(x.date))}</span>
-      <span class="tag ${cls}">${esc(label + progress)}</span></div>
-    <div class="t">${esc(x.title || "New lesson")}</div>
-    ${x.status === "ready" ? `<div class="meta">${x.questions} practice questions</div>
-      <div class="chips">${x.topics.map((t) => `<span class="tag">${esc(t)}</span>`).join("")}</div>` : ""}
+    <div class="t">${esc(lessonName(x))}</div>
+    <div class="when">${esc(longDate(x.date))}</div>
+    ${x.status === "ready" ? `<div class="about">${esc(aboutLine(x))}</div>
+      <div class="meta" style="margin-top:8px">${x.questions} practice questions</div>`
+      : `<div class="meta" style="margin-top:8px"><span class="tag ${cls}">${esc(label + progress)}</span></div>`}
     ${x.status === "listening" ? `<div class="bar"><i style="width:${x.progress}%"></i></div>` : ""}
     ${x.status === "failed" ? `<div class="meta">${esc(x.error)}</div>` : ""}
   </a>`;
 }
 
 async function addView() {
-  const { lessons } = await api("/lessons");
-  const subjects = [...new Set(lessons.map((x) => x.subject).filter(Boolean))];
   view.innerHTML = `
     <a class="back" href="#/">← Lessons</a>
     <h1>Add a lesson</h1>
+    <p class="muted">Choose the recording. Buddy works out the subject, the date and what it was about.</p>
     <form id="f">
-      <div class="row">
-        <label class="field">Subject <input name="subject" list="subjects" placeholder="Maths" maxlength="30"></label>
-        <label class="field">Date <input name="date" type="date" value="${today()}"></label>
-      </div>
-      <datalist id="subjects">${subjects.map((s) => `<option value="${esc(s)}">`).join("")}</datalist>
-      <label class="field">Title (optional, Buddy can name it) <input name="title" maxlength="80"></label>
-      <div class="seg" role="group" aria-label="What are you adding?">
-        <button type="button" data-mode="audio" aria-pressed="true">Recording</button>
-        <button type="button" data-mode="text" aria-pressed="false">Paste text</button>
-      </div>
-      <div data-part="audio">
-        <label class="drop" id="drop">
-          <input type="file" name="file" accept="audio/*,.m4a,.mp3,.wav,.aac,.caf">
-          <b id="drop-name">Choose a recording</b>
-          <span class="muted small">A voice memo from your phone works. The recording is deleted once it's turned into text.</span>
-        </label>
-        <p class="note small">Ask your teacher before recording a lesson, and don't share recordings of other people.</p>
-      </div>
-      <div data-part="text" hidden>
-        <label class="field">Notes, a transcript, or a page from your textbook
-          <textarea name="text" placeholder="Paste the lesson here…"></textarea></label>
-      </div>
-      <button class="btn wide" id="go">Make my notes</button>
+      <label class="drop" id="drop">
+        <input type="file" name="file" accept="audio/*,.m4a,.mp3,.wav,.aac,.caf">
+        <b id="drop-name">Choose a recording</b>
+        <span class="muted small">A voice memo from your phone works. The recording is deleted once it's turned into text.</span>
+      </label>
+      <p class="picked" id="picked" hidden></p>
+      <label class="field">Title (optional) <input name="title" maxlength="80" placeholder="Leave empty and it's called e.g. “Maths lesson”"></label>
+      <p class="note small">Ask your teacher before recording a lesson, and don't share recordings of other people.</p>
+      <button class="btn wide" id="go" style="margin-top:14px">Make my notes</button>
       <div class="bar" id="up" hidden><i style="width:0"></i></div>
       <p class="error" id="err"></p>
     </form>`;
-  let mode = "audio";
-  view.querySelectorAll(".seg button").forEach((b) => b.onclick = () => {
-    mode = b.dataset.mode;
-    view.querySelectorAll(".seg button").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
-    view.querySelectorAll("[data-part]").forEach((p) => p.hidden = p.dataset.part !== mode);
-  });
   const f = $("#f"), file = f.file;
   file.onchange = () => {
     const x = file.files[0];
-    $("#drop-name").textContent = x ? `${x.name} (${Math.round(x.size / 1e6 * 10) / 10} MB)` : "Choose a recording";
+    $("#drop-name").textContent = x ? x.name : "Choose a recording";
     $("#drop").classList.toggle("has", !!x);
+    const picked = $("#picked");
+    picked.hidden = !x;
+    if (x) picked.textContent = `Recorded ${longDate(isoDay(x.lastModified))} · ${Math.round(x.size / 1e5) / 10} MB`;
   };
   f.onsubmit = async (e) => {
     e.preventDefault();
     const err = $("#err"), go = $("#go");
     err.textContent = "";
-    const details = { subject: f.subject.value.trim(), date: f.date.value, title: f.title.value.trim() };
+    const x = file.files[0];
+    if (!x) { err.textContent = "Choose a recording first."; return; }
     go.disabled = true;
     try {
-      let lesson;
-      if (mode === "text") {
-        lesson = await api("/lessons/text", { method: "POST", body: JSON.stringify({ ...details, text: f.text.value }) });
-      } else {
-        if (!file.files[0]) throw new Error("Choose a recording first.");
-        lesson = await upload(file.files[0], details);
-      }
+      // The recording's own date is the lesson's date (phones keep it on voice memos).
+      const lesson = await upload(x, { title: f.title.value.trim(), date: isoDay(x.lastModified) });
       location.hash = `#/lesson/${lesson.id}`;
     } catch (ex) { err.textContent = ex.message; }
     finally { go.disabled = false; }
@@ -242,9 +228,8 @@ async function lessonView(id, tab) {
   const x = await api(`/lessons/${encodeURIComponent(id)}`);
   const [cls, label] = STATUS[x.status] || ["", x.status];
   const head = `<a class="back" href="#/">← Lessons</a>
-    <div class="meta" style="margin-top:12px">${x.subject ? `<span class="tag">${esc(x.subject)}</span>` : ""}
-      <span>${esc(niceDate(x.date))}</span>${x.duration_s ? `<span>${Math.round(x.duration_s / 60)} min recording</span>` : ""}</div>
-    <h1>${esc(x.title || "New lesson")}</h1>`;
+    <h1 style="margin-top:14px">${esc(lessonName(x))}</h1>
+    <div class="meta"><span>${esc(longDate(x.date))}</span>${x.duration_s ? `<span>· ${Math.round(x.duration_s / 60)} min recording</span>` : ""}</div>`;
   if (x.status !== "ready") {
     const working = busy(x);
     view.innerHTML = `${head}
@@ -262,7 +247,7 @@ async function lessonView(id, tab) {
   tab = tab || "notes";
   const tabs = [["notes", "Notes"], ["practice", `Practice (${x.questions.length})`], ["transcript", x.source === "audio" ? "Transcript" : "Text"]];
   view.innerHTML = `${head}
-    <p class="summary">${esc(x.summary)}</p>
+    ${x.about ? `<p class="summary" style="margin-top:14px"><b>${esc(aboutLine(x))}.</b> ${esc(x.summary)}</p>` : `<p class="summary">${esc(x.summary)}</p>`}
     <div class="chips">${x.topics.map((t) => `<span class="tag" title="${esc(t.summary)}">${esc(t.name)}</span>`).join("")}</div>
     <div class="tabs" role="tablist">${tabs.map(([k, n]) => `<button role="tab" data-tab="${k}" aria-selected="${k === tab}">${n}</button>`).join("")}</div>
     <section id="tab"></section>
@@ -351,6 +336,7 @@ $("#me-menu").onclick = async (e) => {
 // ---------- pages ----------
 async function route() {
   clearTimeout(S.poll);
+  document.body.classList.remove("signin");
   try {
     if (S.token && !S.me) S.me = (await api("/me")).profile;
   } catch { /* signed out */ }

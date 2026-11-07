@@ -8,8 +8,8 @@
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23000'/%3E%3Ccircle cx='16' cy='16' r='5' fill='%23fff'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
-<link rel="stylesheet" href="/static/style.css?v=chat9">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="/static/style.css?v=chat10">
 </head>
 <body>
 <header class="top">
@@ -17,9 +17,12 @@
     <span id="assistant-name">Buddy</span>
     <span class="status"><button class="dot" id="orb" data-state="offline" aria-label="Stop Buddy talking" title="Stop Buddy talking"></button><span id="state-label">Connecting…</span></span>
   </div>
+  <div class="top-actions">
+  <a class="study-btn" href="/study" title="Study Buddy: your lessons, notes and questions">Study</a>
   <button class="icon-round" id="menu" aria-label="Open controls" aria-controls="drawer" aria-expanded="false">
     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>
   </button>
+  </div>
 </header>
 
 <main class="thread" aria-label="Conversation">

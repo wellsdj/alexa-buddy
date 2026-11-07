@@ -4,12 +4,14 @@
   --line: #1f1f1f; --line-2: #2c2c2c;
   --ink: #fff; --muted: #a3a3a3; --faint: #666;
   --green: #06c167; --red: #ff5a4e; --amber: #ffb020; --blue: #2f8bff; --purple: #a78bfa;
-  --font: "Inter Tight", "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font: "Plus Jakarta Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   color-scheme: dark;
 }
 [hidden] { display: none !important; }
 * { box-sizing: border-box; }
-html, body { margin: 0; background: var(--bg); }
+html, body { margin: 0; }
+/* Dark red fading into blue, like Buddy's own page. */
+html { background: linear-gradient(160deg, #4a0b16 0%, #22091f 42%, #0b1a46 100%) fixed; min-height: 100%; }
 body { color: var(--ink); font: 16px/1.55 var(--font); -webkit-font-smoothing: antialiased; min-height: 100dvh; }
 button, input, select, textarea { font: inherit; color: inherit; }
 a { color: var(--ink); }
@@ -17,7 +19,7 @@ a { color: var(--ink); }
 
 .top {
   position: sticky; top: 0; z-index: 5; height: 60px; display: flex; align-items: center; justify-content: space-between;
-  padding: 0 16px; background: rgba(0, 0, 0, .92); backdrop-filter: blur(10px); border-bottom: 1px solid var(--line);
+  padding: 0 16px; background: rgba(0, 0, 0, .25); backdrop-filter: blur(14px); border-bottom: 1px solid rgba(255,255,255,.08);
 }
 .brand { font-weight: 800; font-size: 20px; letter-spacing: -.04em; text-decoration: none; }
 .me { display: inline-flex; align-items: center; gap: 8px; height: 36px; padding: 0 12px 0 4px; border: 0;
@@ -133,3 +135,28 @@ textarea { min-height: 160px; resize: vertical; }
 .pad button { height: 60px; border-radius: 14px; border: 0; background: var(--s3); font-size: 24px; font-weight: 600; cursor: pointer; }
 .pad button.ghost { background: none; font-size: 16px; color: var(--muted); }
 .pad button:active { background: var(--s4); }
+
+.top-left { display: flex; align-items: center; gap: 14px; }
+.to-buddy { color: rgba(255,255,255,.65); text-decoration: none; font-size: 14px; font-weight: 600; }
+.to-buddy:hover { color: var(--ink); }
+
+/* cards sit on the gradient */
+.lesson, .q, .person, .drop, .note, label.field input, label.field textarea { background: rgba(0, 0, 0, .32); border-color: rgba(255,255,255,.1); }
+.lesson:hover, .person:hover { background: rgba(0, 0, 0, .45); }
+
+/* sign in: big and simple */
+body.signin .top { display: none; }
+.hero { min-height: 100dvh; display: flex; flex-direction: column; justify-content: center; padding: 40px 8px 60px; }
+.hero h1 { font-size: clamp(48px, 11vw, 92px); font-weight: 800; letter-spacing: -.05em; line-height: .95; margin: 0; }
+.hero .lead { font-size: clamp(18px, 2.6vw, 22px); color: rgba(255,255,255,.7); margin: 16px 0 0; max-width: 30ch; }
+.hero .people { margin-top: 40px; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+.hero .person { padding: 28px 12px; font-size: 17px; }
+.hero .person .avatar { width: 76px; height: 76px; font-size: 32px; }
+.hero .foot { margin-top: 34px; }
+.hero .foot a { color: rgba(255,255,255,.6); font-size: 14px; }
+
+/* the lesson list */
+.lesson .t { font-size: 19px; }
+.lesson .when { color: rgba(255,255,255,.7); font-size: 14px; margin-top: 2px; }
+.lesson .about { margin-top: 8px; color: #e8e8e8; }
+.picked { margin: 10px 0 0; color: rgba(255,255,255,.75); font-size: 14px; }

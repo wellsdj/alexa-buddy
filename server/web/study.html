@@ -5,11 +5,14 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#000000">
 <title>Study Buddy</title>
-<link rel="stylesheet" href="/static/study.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap">
+<link rel="stylesheet" href="/static/study.css?v=2">
 </head>
 <body>
 <header class="top">
-  <a class="brand" href="#/">Study Buddy</a>
+  <div class="top-left"><a class="to-buddy" href="/" title="Back to Buddy">← Buddy</a><a class="brand" href="#/">Study</a></div>
   <button id="me" class="me" hidden aria-haspopup="menu"></button>
   <div id="me-menu" class="menu" role="menu" hidden>
     <button data-act="switch" role="menuitem">Switch person</button>
@@ -35,6 +38,6 @@
   </div>
 </div>
 
-<script src="/static/study.js"></script>
+<script src="/static/study.js?v=2"></script>
 </body>
 </html>
