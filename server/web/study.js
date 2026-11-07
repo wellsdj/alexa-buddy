@@ -137,25 +137,75 @@ const STATUS = {
 const busy = (x) => ["waiting", "listening", "writing"].includes(x.status);
 
 async function homeView() {
-  const { lessons } = await api("/lessons");
+  const [{ lessons }, prog] = await Promise.all([api("/lessons"), api("/progress").catch(() => null)]);
   const first = S.me.name.split(" ")[0];
+  const ready = lessons.filter((x) => x.status === "ready");
+  const week = prog?.week || { answered: 0, right: 0, days: 0, streak: 0 };
+  const skills = prog?.skills || [];
+  const today = new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" });
+  const pct = week.answered ? Math.round(100 * week.right / week.answered) : null;
+  const line = week.streak >= 2 ? `${week.streak} days in a row. Keep it going.`
+    : ready.length ? "Ready when you are." : "Record a lesson and Buddy turns it into questions.";
+  const startHref = skills.length ? "#/revise/all" : ready[0] ? `#/revise/${ready[0].id}` : "";
+  view.classList.add("wide");
   view.innerHTML = `
-    <h1 class="fade">Hi ${esc(first)}</h1>
-    <p class="home-links"><a class="add-link" href="#/add">+ Add a lesson</a>${lessons.some((x) => x.status === "ready") ? `<a class="add-link" href="#/progress">My progress</a>` : ""}</p>
-    ${lessons.length ? `<div class="lessons">${lessons.map(lessonCard).join("")}</div>`
-                     : `<p class="empty">No lessons yet. Add a recording of a lesson and Buddy makes notes and questions from it.</p>`}`;
+    <div class="home">
+      <section class="home-head">
+        <p class="date">${esc(today)}</p>
+        <h1 class="fade hello">Hi ${esc(first)}</h1>
+        <p class="lead">${esc(line)}</p>
+        <div class="actions">
+          ${startHref ? `<a class="btn big" href="${startHref}">${ICON_PLAY} Start revising</a>` : ""}
+          <a class="btn ghost big" href="#/add">${ICON_PLUS} Add a lesson</a>
+        </div>
+      </section>
+      <section class="home-list">
+        <h2 class="sec">Your lessons</h2>
+        ${lessons.length ? `<div class="lesson-list">${lessons.map(lessonCard).join("")}</div>` : howItWorks()}
+      </section>
+      <aside class="home-side">
+        <div class="card stats">
+          <div><b>${week.streak || 0}</b><span>day streak</span></div>
+          <div><b>${week.answered}</b><span>this week</span></div>
+          <div><b>${pct === null ? "–" : pct + "%"}</b><span>right</span></div>
+        </div>
+        <div class="card">
+          <h3>Work on these</h3>
+          ${skills.length ? skills.slice(0, 4).map((k) => `<div class="skill"><div class="skill-top"><span>${esc(k.name)}</span><span class="muted">Level ${k.level}</span></div>
+              <div class="bar thin"><i style="width:${k.level * 20}%"></i></div></div>`).join("")
+            + `<a class="more" href="#/progress">All my progress →</a>`
+            : `<p class="muted small">Your weakest topics show up here once you've answered some questions.</p>`}
+        </div>
+      </aside>
+    </div>`;
   if (lessons.some(busy)) S.poll = setTimeout(() => location.hash === "#/" && homeView().catch(() => {}), 3000);
+}
+
+const ICON_PLAY = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>`;
+const ICON_PLUS = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>`;
+
+function howItWorks() {
+  const step = (n, icon, t, d) => `<div class="step"><span class="step-icon">${icon}</span><div><b>${n}. ${t}</b><p class="muted small">${d}</p></div></div>`;
+  return `<div class="steps-card">
+    ${step(1, `<svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>`, "Record a lesson",
+      "Use Voice Memos on your phone (ask your teacher first), or the pocket Buddy. Longer than 2 minutes.")}
+    ${step(2, `<svg viewBox="0 0 24 24"><path d="M3 7h6l2 2h10v10H3z"/></svg>`, "Put it in “Buddy lessons”",
+      "AirDrop it to the Mac and drop it in the Buddy lessons folder on the Desktop. Buddy checks it's a lesson and names it.")}
+    ${step(3, `<svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>`, "Start revising",
+      "It appears here. Buddy writes notes and questions that fit your level, and gets harder as you improve.")}
+  </div>`;
 }
 
 function lessonCard(x) {
   const [cls, label] = STATUS[x.status] || ["", x.status];
   const progress = x.status === "listening" ? ` ${x.progress}%` : "";
-  return `<a class="lesson" href="#/lesson/${esc(x.id)}">
+  return `<a class="lesson row" href="#/lesson/${esc(x.id)}">
+    <span class="rec-icon">${iconFor(x.subject)}</span><span class="row-text">
     <div class="t">${esc(lessonName(x))}</div>
     <div class="when">${esc(longDate(x.date))}</div>
     ${x.status === "ready" ? `<div class="about">${esc(aboutLine(x))}</div>
 `
-      : `<div class="meta" style="margin-top:6px"><span class="tag ${cls}">${esc(label + progress)}</span></div>`}
+      : `<div class="meta" style="margin-top:6px"><span class="tag ${cls}">${esc(label + progress)}</span></div>`}</span>
     ${x.status === "listening" ? `<div class="bar"><i style="width:${x.progress}%"></i></div>` : ""}
     ${x.status === "failed" ? `<div class="meta">${esc(x.error)}</div>` : ""}
   </a>`;
@@ -679,6 +729,7 @@ $("#me-menu").onclick = async (e) => {
 // ---------- pages ----------
 async function route() {
   clearTimeout(S.poll);
+  view.classList.remove("wide");
   document.body.classList.remove("signin");
   const calc = $("#calc");
   if (calc) calc.hidden = true;

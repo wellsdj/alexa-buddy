@@ -32,7 +32,7 @@ from fastapi.responses import JSONResponse
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # the server folder, for buddy.*
 from buddy.practice import (HELP_PROMPT, SKILLS, apply_answer, catalogue_text, check_field,  # noqa: E402
-                            describe_progress, make_question, match_skills, pick_next, show_answer, summarise)
+                            describe_progress, make_question, match_skills, pick_next, show_answer, streak, summarise)
 from buddy.study_text import LESSON_PROMPT, StudyError, _clean_name, _hash_pin, _parse_json, tidy  # noqa: E402
 
 log = logging.getLogger("study")
@@ -492,7 +492,8 @@ def create_app(store=None) -> FastAPI:
         cut = time.time() - 7 * 86400
         xs = [a for a in answers if a["t"] >= cut]
         return {"answered": len(xs), "right": sum(1 for a in xs if a["right"]),
-                "days": len({time.strftime("%Y-%m-%d", time.gmtime(a["t"])) for a in xs})}
+                "days": len({time.strftime("%Y-%m-%d", time.gmtime(a["t"])) for a in xs}),
+                "streak": streak([a["t"] for a in answers])}
 
     def lesson_skills(x: dict) -> list[str]:
         skills = [s for s in x.get("skills") or [] if s in SKILLS]

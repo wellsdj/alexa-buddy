@@ -936,6 +936,17 @@ def pick_next(skills: dict, choices: list[str], last: str = "") -> tuple[str, in
     return sid, target_level(st["level"], st.get("streak", 0))
 
 
+def streak(times: list[float], now: float | None = None) -> int:
+    """Days in a row with at least one answer, up to today (or yesterday, so it isn't lost before you revise today)."""
+    days = {int(t // 86400) for t in times}
+    today = int((now or time.time()) // 86400)
+    d = today if today in days else today - 1
+    n = 0
+    while d in days:
+        n, d = n + 1, d - 1
+    return n
+
+
 def describe_progress(name: str, lessons: list[dict], skills: list[dict], week: dict) -> str:
     """A plain summary of someone's revising, for Buddy to talk about."""
     lines = [f"Profile: {name}. {len(lessons)} lessons with notes."]
@@ -994,9 +1005,11 @@ class Progress:
 
     def recent(self, pid: str, days: float = 7) -> dict:
         cut = time.time() - days * 86400
-        log = [x for x in self.load(pid)["log"] if x["t"] >= cut]
+        everything = self.load(pid)["log"]
+        log = [x for x in everything if x["t"] >= cut]
         return {"answered": len(log), "right": sum(1 for x in log if x["right"]),
-                "days": len({time.strftime("%Y-%m-%d", time.localtime(x["t"])) for x in log})}
+                "days": len({time.strftime("%Y-%m-%d", time.localtime(x["t"])) for x in log}),
+                "streak": streak([x["t"] for x in everything])}
 
 
 def target_level(level: float, streak: int) -> int:
