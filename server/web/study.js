@@ -158,47 +158,108 @@ function lessonCard(x) {
   </a>`;
 }
 
+// Little line icons for each subject (the rest get a sound wave).
+const ICONS = {
+  maths: '<path d="M5 7h5M7.5 4.5v5M14 7h5M5 17h5M14 15l5 4M19 15l-5 4"/>',
+  science: '<path d="M9 3h6M10 3v6l-5 9a2 2 0 0 0 1.7 3h10.6a2 2 0 0 0 1.7-3l-5-9V3"/><path d="M7.5 15h9"/>',
+  book: '<path d="M2 5h7a3 3 0 0 1 3 3v12a2 2 0 0 0-2-2H2z"/><path d="M22 5h-7a3 3 0 0 0-3 3v12a2 2 0 0 1 2-2h8z"/>',
+  globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>',
+  talk: '<path d="M4 5h16v11H9l-5 4z"/>',
+  music: '<path d="M9 18V5l11-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="17" cy="16" r="3"/>',
+  computer: '<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/>',
+  wave: '<path d="M3 12h2M7 8v8M11 5v14M15 9v6M19 7v10M21 12h0"/>',
+};
+function iconFor(subject) {
+  const s = (subject || "").toLowerCase();
+  const k = /math|algebra|geometry|statistic/.test(s) ? "maths"
+    : /science|chem|bio|physic/.test(s) ? "science"
+    : /english|literature|reading|drama|re\b|religio/.test(s) ? "book"
+    : /history|geograph/.test(s) ? "globe"
+    : /french|spanish|german|italian|latin|mandarin|language/.test(s) ? "talk"
+    : /music/.test(s) ? "music"
+    : /computing|computer|ict/.test(s) ? "computer" : "wave";
+  return `<svg viewBox="0 0 24 24" aria-hidden="true">${ICONS[k]}</svg>`;
+}
+const recDay = (t) => new Date(t * 1000).toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" });
+const mins = (s) => s >= 60 ? `${Math.round(s / 60)} min` : `${s} s`;
+
 async function addView() {
+  const data = await api("/recordings");
+  const recs = data.recordings;
+  let chosen = null;
   view.innerHTML = `
     <a class="back" href="#/">← Lessons</a>
-    <h1 class="fade" style="margin-top:20px">Add a lesson</h1>
-    <p class="muted">Buddy works out the subject, the date and what it was about.</p>
-    <form id="f">
+    <h1 class="fade" style="margin-top:20px">Choose a recording</h1>
+    <p class="muted small">${data.mine
+      ? `Recordings from your pocket Buddy appear here by themselves${data.folder ? `, and so do voice memos you put in the “${esc(data.folder_name)}” folder` : ""}. Only real lessons over 2 minutes are kept.`
+      : `Recordings from the pocket Buddy go to someone else. <button class="link" id="mine">Send them to me instead</button>`}</p>
+    <div class="recs" id="recs">${recs.length ? recs.map(recRow).join("")
+      : `<p class="empty">No recordings yet.${data.mine && !data.folder ? ` To add voice memos from your phone, make a folder called “${esc(data.folder_name)}” on this Mac's Desktop and put them in it.` : ""}</p>`}</div>
+    <div id="use" hidden>
+      <label class="field">Title (optional) <input name="title" maxlength="80" placeholder="Leave empty and it's called e.g. “Maths lesson”"></label>
+      <button class="btn wide" id="go">Make my notes</button>
+    </div>
+    <p class="error" id="err"></p>
+    <p style="margin-top:28px"><button class="link" id="other">Or upload a file from this computer</button></p>
+    <form id="f" hidden>
       <label class="drop" id="drop">
         <input type="file" name="file" accept="audio/*,.m4a,.mp3,.wav,.aac,.caf">
-        <b id="drop-name">Choose a recording</b>
-        <span class="muted small">A voice memo from your phone works. The recording is deleted once it's turned into text.</span>
+        <b id="drop-name">Choose a file</b>
+        <span class="muted small">The recording is deleted once it's turned into text.</span>
       </label>
       <p class="picked" id="picked" hidden></p>
-      <label class="field">Title (optional) <input name="title" maxlength="80" placeholder="Leave empty and it's called e.g. “Maths lesson”"></label>
-      <p class="note small">Ask your teacher before recording a lesson, and don't share recordings of other people.</p>
-      <button class="btn wide" id="go" style="margin-top:24px">Make my notes</button>
+      <button class="btn wide" id="go2" style="margin-top:18px">Make my notes</button>
       <div class="bar" id="up" hidden><i style="width:0"></i></div>
-      <p class="error" id="err"></p>
-    </form>`;
+    </form>
+    <p class="note small" style="margin-top:28px">Ask your teacher before recording a lesson, and don't share recordings of other people.</p>`;
+  $("#mine")?.addEventListener("click", async () => { await api("/recordings/mine", { method: "POST" }); addView(); });
+  view.querySelectorAll(".rec[data-ready]").forEach((row) => row.onclick = () => {
+    chosen = row.dataset.id;
+    view.querySelectorAll(".rec").forEach((r) => r.classList.toggle("on", r === row));
+    $("#use").hidden = false;
+  });
+  $("#go").onclick = async () => {
+    const err = $("#err");
+    err.textContent = "";
+    try {
+      const lesson = await api(`/recordings/${chosen}/use`, { method: "POST", body: JSON.stringify({ title: $("[name=title]").value }) });
+      location.hash = `#/lesson/${lesson.id}`;
+    } catch (ex) { err.textContent = ex.message; }
+  };
+  $("#other").onclick = () => { $("#f").hidden = false; $("#other").hidden = true; };
   const f = $("#f"), file = f.file;
   file.onchange = () => {
     const x = file.files[0];
-    $("#drop-name").textContent = x ? x.name : "Choose a recording";
+    $("#drop-name").textContent = x ? x.name : "Choose a file";
     $("#drop").classList.toggle("has", !!x);
-    const picked = $("#picked");
-    picked.hidden = !x;
-    if (x) picked.textContent = `Recorded ${longDate(isoDay(x.lastModified))} · ${Math.round(x.size / 1e5) / 10} MB`;
+    $("#picked").hidden = !x;
+    if (x) $("#picked").textContent = `Recorded ${longDate(isoDay(x.lastModified))} · ${Math.round(x.size / 1e5) / 10} MB`;
   };
   f.onsubmit = async (e) => {
     e.preventDefault();
-    const err = $("#err"), go = $("#go");
-    err.textContent = "";
-    const x = file.files[0];
-    if (!x) { err.textContent = "Choose a recording first."; return; }
-    go.disabled = true;
+    const x = file.files[0], err = $("#err");
+    if (!x) { err.textContent = "Choose a file first."; return; }
+    $("#go2").disabled = true;
     try {
-      // The recording's own date is the lesson's date (phones keep it on voice memos).
-      const lesson = await upload(x, { title: f.title.value.trim(), date: isoDay(x.lastModified) });
+      const lesson = await upload(x, { date: isoDay(x.lastModified) });
       location.hash = `#/lesson/${lesson.id}`;
     } catch (ex) { err.textContent = ex.message; }
-    finally { go.disabled = false; }
+    finally { $("#go2").disabled = false; }
   };
+  if (recs.some((r) => r.status === "checking"))
+    S.poll = setTimeout(() => { if (location.hash === "#/add" && chosen === null && file.files.length === 0) addView().catch(() => {}); }, 4000);
+}
+
+function recRow(r) {
+  const ready = r.status === "ready";
+  return `<button type="button" class="rec" data-id="${esc(r.id)}" ${ready ? "data-ready" : "disabled"}>
+    <span class="rec-icon">${iconFor(r.subject)}</span>
+    <span class="rec-text">
+      <b>${esc(ready ? r.name : "New recording")}</b>
+      <span class="when">${esc(recDay(r.recorded_at))}${r.duration_s ? ` · ${mins(r.duration_s)}` : ""}</span>
+      <span class="about">${esc(ready ? (r.about ? `About ${r.about}` : "") : "Checking it's a lesson…")}</span>
+    </span>
+  </button>`;
 }
 
 // Sends the recording with a progress bar (fetch can't show upload progress).

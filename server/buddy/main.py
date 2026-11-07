@@ -274,6 +274,60 @@ def create_app(settings: Settings | None = None, http=None, claude_http=None, st
         hub.study_worker.add(pid, lesson["id"])
         return lesson
 
+    @app.get("/study/api/recordings")
+    async def study_recordings(request: Request):
+        pid = studying(request)["id"]
+        from .study import INBOX_FOLDER, find_inbox_folder
+        folder = find_inbox_folder()
+        return {"recordings": hub.study_worker.recordings.listed(pid),
+                "mine": study.recorder_owner() == pid, "folder": str(folder) if folder else "",
+                "folder_name": INBOX_FOLDER}
+
+    @app.post("/study/api/recordings/mine")
+    async def study_recordings_mine(request: Request):
+        study.set_recorder_owner(studying(request)["id"])
+        await asyncio.to_thread(hub.study_worker.scan_folder)
+        return {"ok": True}
+
+    @app.post("/study/api/recordings/{rid}/use")
+    async def study_use_recording(request: Request, rid: str, body: dict):
+        pid = studying(request)["id"]
+        return study_call(hub.study_worker.lesson_from_recording, pid, rid, (body.get("title") or "").strip()[:80])
+
+    @app.delete("/study/api/recordings/{rid}")
+    async def study_delete_recording(request: Request, rid: str):
+        study_call(hub.study_worker.recordings.delete, studying(request)["id"], rid)
+        return {"ok": True}
+
+    @app.post("/study/api/device/recording")
+    async def study_device_recording(request: Request):
+        """The pocket Buddy sends a finished recording here when it's back on Wi-Fi (the body is
+        the audio file; ?recorded_at= is when it started, in seconds since 1970)."""
+        if not check_token(request.headers.get("x-buddy-token") or request.query_params.get("token")):
+            raise HTTPException(401, "token required")
+        pid = study.recorder_owner()
+        if not pid:
+            raise HTTPException(409, "Nobody is set to receive recordings yet (open Study and choose “Send recordings to me”).")
+        import tempfile
+        from pathlib import Path
+        tmp = Path(tempfile.mkstemp(suffix=".wav", dir=study.dir)[1])
+        size = 0
+        try:
+            with tmp.open("wb") as f:
+                async for chunk in request.stream():
+                    size += len(chunk)
+                    if size > MAX_UPLOAD_BYTES:
+                        raise HTTPException(413, "too big")
+                    f.write(chunk)
+            try:
+                at = float(request.query_params.get("recorded_at", "") or time.time())
+            except ValueError:
+                at = time.time()
+            rec = hub.study_worker.add_recording(pid, tmp, at, "pocket", move=True)
+        finally:
+            tmp.unlink(missing_ok=True)
+        return {"ok": True, "id": rec["id"]}
+
     @app.post("/study/api/lessons/audio")
     async def study_add_audio(request: Request):
         """The recording is the request body itself; details come in the query string."""

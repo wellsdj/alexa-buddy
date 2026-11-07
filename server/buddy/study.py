@@ -32,6 +32,20 @@ SR = 16000
 CHUNK_MIN_S, CHUNK_MAX_S = 18, 28  # long recordings are cut at quiet moments into pieces this long
 MAX_TRANSCRIPT_CHARS = 120_000  # about two hours of talking
 MAX_UPLOAD_BYTES = 400 * 1024 * 1024
+MIN_LESSON_S = 120  # recordings shorter than 2 minutes aren't lessons
+MIN_LESSON_WORDS = 150  # and ones where hardly any words come out (in a pocket, say) aren't either
+INBOX_FOLDER = "Buddy lessons"  # voice memos put in a folder with this name on the Mac are picked up too
+AUDIO_EXT = {".m4a", ".mp3", ".wav", ".aac", ".caf", ".aif", ".aiff", ".flac", ".ogg", ".mp4", ".qta"}
+
+CHECK_PROMPT = """Here is the start of an automatic transcript of a recording made in a school. Decide whether it is
+a lesson where something is being taught or discussed (not just chatter, noise or a recording made by accident).
+Reply with JSON only: {{"is_lesson": true or false, "subject": "the school subject, one or two words, e.g. Maths",
+"about": "what it was about in under 8 words, starting with a small letter"}}
+
+Transcript:
+\"\"\"
+{text}
+\"\"\""""
 
 LESSON_PROMPT = """You help a secondary-school student revise. Below is {what} from a {subject} lesson.
 It may be messy: several people talking, gaps and mistakes from automatic transcription. Work out what
@@ -85,7 +99,7 @@ class StudyStore:
         self.dir.mkdir(parents=True, exist_ok=True)
         self.path = self.dir / "profiles.json"
         self._lock = threading.Lock()
-        self.data = {"profiles": [], "tokens": {}}
+        self.data = {"profiles": [], "tokens": {}, "recorder_owner": "", "imported": {}}
         if self.path.exists():
             try:
                 self.data.update(json.loads(self.path.read_text()))
@@ -158,6 +172,23 @@ class StudyStore:
         p = next((p for p in self.data["profiles"] if p["id"] == t["profile"]), None)
         return {"id": p["id"], "name": p["name"], "colour": p.get("colour", 0)} if p else None
 
+    def set_recorder_owner(self, pid: str) -> None:
+        """Recordings from the pocket Buddy (and the "Buddy lessons" folder) go to this person."""
+        with self._lock:
+            self.data["recorder_owner"] = pid
+            self._save()
+
+    def recorder_owner(self) -> str:
+        pid = self.data.get("recorder_owner", "")
+        if any(p["id"] == pid for p in self.data["profiles"]):
+            return pid
+        return self.data["profiles"][0]["id"] if len(self.data["profiles"]) == 1 else ""
+
+    def mark_imported(self, key: str) -> None:
+        with self._lock:
+            self.data.setdefault("imported", {})[key] = time.time()
+            self._save()
+
     def remove_profile(self, pid: str) -> None:
         with self._lock:
             self.data["profiles"] = [p for p in self.data["profiles"] if p["id"] != pid]
@@ -216,6 +247,91 @@ class StudyStore:
         d = self.dir / pid / "uploads"
         d.mkdir(parents=True, exist_ok=True)
         return d / lid
+
+
+# ---------- recordings waiting to become lessons ----------
+class Recordings:
+    """Each person's own list of recordings: from the pocket Buddy, or voice memos put in the
+    "Buddy lessons" folder. Each one is checked (long enough, really a lesson) and turned into text
+    by itself; then you pick one to make notes from."""
+
+    def __init__(self, store: StudyStore):
+        self.store = store
+
+    def _dir(self, pid: str) -> Path:
+        d = self.store.dir / pid / "recordings"
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    def _path(self, pid: str, rid: str) -> Path:
+        if not re.fullmatch(r"[0-9a-f]{8}", rid or ""):
+            raise StudyError("No such recording.")
+        return self._dir(pid) / f"{rid}.json"
+
+    def audio_path(self, pid: str, rid: str, ext: str = "") -> Path:
+        """The recording keeps its own file ending (.m4a, .wav...) so the Mac knows how to read it."""
+        if not ext:
+            found = [f for f in self._dir(pid).glob(f"{rid}.*") if f.suffix not in (".json", ".tmp")]
+            return found[0] if found else self._dir(pid) / f"{rid}.wav"
+        return self._dir(pid) / f"{rid}{ext}"
+
+    def add(self, pid: str, src: Path, recorded_at: float, source: str, move: bool = False) -> dict:
+        rec = {"id": secrets.token_hex(4), "recorded_at": recorded_at, "source": source, "status": "checking",
+               "name": "", "subject": "", "about": "", "duration_s": 0, "transcript": "", "created": time.time(),
+               "used_by": ""}
+        ext = src.suffix.lower() if src.suffix.lower() in AUDIO_EXT else ".wav"
+        dst = self.audio_path(pid, rec["id"], ext)
+        (shutil.move if move else shutil.copyfile)(str(src), str(dst))
+        self.save(pid, rec)
+        return rec
+
+    def save(self, pid: str, rec: dict) -> None:
+        p = self._path(pid, rec["id"])
+        tmp = p.with_suffix(".tmp")
+        tmp.write_text(json.dumps(rec, indent=1))
+        tmp.replace(p)
+
+    def get(self, pid: str, rid: str) -> dict:
+        p = self._path(pid, rid)
+        if not p.exists():
+            raise StudyError("No such recording.")
+        return json.loads(p.read_text())
+
+    def all(self, pid: str) -> list[dict]:
+        out = []
+        for f in self._dir(pid).glob("*.json"):
+            try:
+                out.append(json.loads(f.read_text()))
+            except (OSError, ValueError):
+                continue
+        return sorted(out, key=lambda r: r["recorded_at"], reverse=True)
+
+    def listed(self, pid: str) -> list[dict]:
+        """What the "Choose recording" list shows: lessons being checked or ready, not yet used."""
+        return [{k: r[k] for k in ("id", "recorded_at", "status", "name", "subject", "about", "duration_s", "source")}
+                for r in self.all(pid) if r["status"] in ("checking", "ready") and not r["used_by"]]
+
+    def delete(self, pid: str, rid: str) -> None:
+        self._path(pid, rid).unlink(missing_ok=True)
+        self.audio_path(pid, rid).unlink(missing_ok=True)
+
+    def cleanup(self, pid: str, days: float = 7) -> None:
+        """Recordings that weren't lessons are kept a week (so they're not picked up twice), then forgotten."""
+        for r in self.all(pid):
+            if r["status"] in ("too_short", "not_lesson", "unclear") and time.time() - r["created"] > days * 86400:
+                self.delete(pid, r["id"])
+
+
+def find_inbox_folder() -> Path | None:
+    home = Path.home()
+    for p in (home / "Desktop", home / "Documents", home / "Downloads", home):
+        try:
+            for child in p.iterdir():
+                if child.is_dir() and child.name.strip().lower() == INBOX_FOLDER.lower():
+                    return child
+        except OSError:
+            continue
+    return None
 
 
 # ---------- turning a recording into text ----------
@@ -315,25 +431,73 @@ class StudyWorker:
 
     def __init__(self, store: StudyStore, stt, llm):
         self.store, self.stt, self.llm = store, stt, llm
+        self.recordings = Recordings(store)
         self.queue: asyncio.Queue = asyncio.Queue()
         self.task: asyncio.Task | None = None
+        self.watch_task: asyncio.Task | None = None
 
     def start(self) -> None:
         if self.task is None:
             self.task = asyncio.create_task(self._run())
+        if self.watch_task is None:
+            self.watch_task = asyncio.create_task(self._watch_folder())
         # Lessons that were half done when Buddy last stopped: start them again.
         for p in self.store.profiles():
             for x in self.store.lessons(p["id"]):
                 if x["status"] in ("waiting", "listening", "writing"):
                     self.queue.put_nowait((p["id"], x["id"]))
+            for r in self.recordings.all(p["id"]):
+                if r["status"] == "checking":
+                    self.queue.put_nowait((p["id"], "rec:" + r["id"]))
 
     def add(self, pid: str, lid: str) -> None:
         self.queue.put_nowait((pid, lid))
+
+    def add_recording(self, pid: str, src: Path, recorded_at: float, source: str, move: bool = False) -> dict:
+        rec = self.recordings.add(pid, src, recorded_at, source, move)
+        self.queue.put_nowait((pid, "rec:" + rec["id"]))
+        return rec
+
+    async def _watch_folder(self) -> None:
+        """Voice memos put in the "Buddy lessons" folder go into the recorder owner's list by themselves."""
+        while True:
+            try:
+                await asyncio.to_thread(self.scan_folder)
+            except Exception:  # noqa: BLE001 - keep watching
+                log.exception("lesson folder scan failed")
+            await asyncio.sleep(30)
+
+    def scan_folder(self, folder: Path | None = None) -> int:
+        folder = folder or find_inbox_folder()
+        pid = self.store.recorder_owner()
+        if not folder or not pid:
+            return 0
+        n = 0
+        for f in sorted(folder.iterdir()):
+            if f.suffix.lower() not in AUDIO_EXT or f.name.startswith("."):
+                continue
+            st = f.stat()
+            key = f"{f.name}|{st.st_size}|{int(st.st_mtime)}"
+            if key in self.store.data.get("imported", {}) or time.time() - st.st_mtime < 10:
+                continue  # already taken, or still being copied in
+            self.store.mark_imported(key)
+            self.add_recording(pid, f, st.st_mtime, "folder")
+            n += 1
+        for p in self.store.profiles():
+            self.recordings.cleanup(p["id"])
+        return n
 
     async def _run(self) -> None:
         while True:
             pid, lid = await self.queue.get()
             try:
+                if lid.startswith("rec:"):
+                    try:
+                        await self.check_recording(pid, lid[4:])
+                    except Exception:  # noqa: BLE001 - Claude down, say: check it again in 5 minutes
+                        log.exception("checking a recording failed; trying again later")
+                        asyncio.get_running_loop().call_later(300, self.queue.put_nowait, (pid, lid))
+                    continue
                 await self.process(pid, lid)
             except asyncio.CancelledError:
                 raise
@@ -345,6 +509,70 @@ class StudyWorker:
                     self.store.save_lesson(pid, lesson)
                 except StudyError:
                     pass
+
+    async def _transcribe_file(self, path: Path) -> tuple[str, int]:
+        if not self.stt.available():
+            raise StudyError("Buddy's ears aren't installed yet: click Update Buddy, then try again.")
+        audio = await asyncio.to_thread(read_audio, path)
+        words = []
+        for piece in split_at_pauses(audio):
+            text = await self.stt.transcribe(piece, "", len(piece) / SR)
+            if text.strip():
+                words.append(text.strip())
+        return " ".join(words)[:MAX_TRANSCRIPT_CHARS], int(len(audio) / SR)
+
+    async def check_recording(self, pid: str, rid: str) -> None:
+        """Long enough? Real lesson talk? If so it goes in the list, named after its subject and day."""
+        try:
+            rec = self.recordings.get(pid, rid)
+        except StudyError:
+            return
+        audio_file = self.recordings.audio_path(pid, rid)
+        try:
+            if not audio_file.exists():
+                rec["status"] = "unclear"
+                return
+            seconds = await asyncio.to_thread(lambda: len(read_audio(audio_file)) / SR)
+            rec["duration_s"] = int(seconds)
+            if seconds < MIN_LESSON_S:
+                rec["status"] = "too_short"
+                return
+            rec["transcript"], rec["duration_s"] = await self._transcribe_file(audio_file)
+            if len(rec["transcript"].split()) < MIN_LESSON_WORDS:
+                rec["status"] = "unclear"  # hardly any words: in a pocket, or an accident
+                return
+            sample = " ".join(rec["transcript"].split()[:2500])
+            r = await self.llm.chat([{"role": "user", "content": CHECK_PROMPT.format(text=sample)}],
+                                    tier="fast", json_mode=True, max_tokens=300)
+            verdict = _parse_json(r.content)
+            if not verdict.get("is_lesson"):
+                rec["status"] = "not_lesson"
+                return
+            rec["subject"] = _clean_name(str(verdict.get("subject", "")))
+            rec["about"] = str(verdict.get("about", "")).strip().rstrip(".")[:80]
+            rec["name"] = f"{rec['subject']} lesson" if rec["subject"] else "Lesson"
+            rec["status"] = "ready"
+        except StudyError as e:
+            rec["status"], rec["error"] = "unclear", str(e)
+        finally:
+            if rec["status"] != "checking":
+                audio_file.unlink(missing_ok=True)  # the words are kept; the recording isn't
+            self.recordings.save(pid, rec)
+
+    def lesson_from_recording(self, pid: str, rid: str, title: str = "") -> dict:
+        rec = self.recordings.get(pid, rid)
+        if rec["status"] != "ready":
+            raise StudyError("That recording is still being checked.")
+        if rec["used_by"]:
+            raise StudyError("Notes have already been made from that recording.")
+        day = time.strftime("%Y-%m-%d", time.localtime(rec["recorded_at"]))
+        lesson = self.store.new_lesson(pid, rec["subject"], day, title, "audio")
+        lesson.update(transcript=rec["transcript"], duration_s=rec["duration_s"], about=rec["about"])
+        self.store.save_lesson(pid, lesson)
+        rec["used_by"] = lesson["id"]
+        self.recordings.save(pid, rec)
+        self.add(pid, lesson["id"])
+        return lesson
 
     async def process(self, pid: str, lid: str) -> None:
         lesson = self.store.lesson(pid, lid)

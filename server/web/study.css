@@ -144,3 +144,19 @@ textarea { resize: vertical; }
 .pad button { height: 60px; border-radius: 50%; border: 0; background: none; font-size: 26px; font-weight: 400; cursor: pointer; }
 .pad button:hover { background: var(--s3); }
 .pad button.ghost { font-size: 15px; color: var(--muted); }
+
+/* the recordings list: a little finder of lessons */
+.recs { margin-top: 24px; border-top: 1px solid var(--line); }
+.rec { display: flex; align-items: center; gap: 16px; width: 100%; padding: 16px 8px; border: 0; border-bottom: 1px solid var(--line);
+       background: none; text-align: left; cursor: pointer; border-radius: 0; }
+.rec:disabled { cursor: default; opacity: .5; }
+.rec:not(:disabled):hover { background: var(--s1); }
+.rec.on { background: var(--s2); }
+.rec-icon { width: 44px; height: 44px; border-radius: 12px; display: grid; place-items: center; background: var(--s2); flex: none; }
+.rec.on .rec-icon { background: var(--ink); color: #000; }
+.rec-icon svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.rec-text { display: flex; flex-direction: column; min-width: 0; }
+.rec-text b { font-weight: 600; font-size: 16px; }
+.rec-text .when { color: var(--faint); font-size: 13px; }
+.rec-text .about { color: var(--muted); font-size: 14px; margin-top: 2px; }
+#use { margin-top: 8px; }

@@ -1,5 +1,6 @@
 """Study Buddy: profiles with PINs, lessons in, notes and questions out."""
 import asyncio
+import time
 import json
 import wave
 from types import SimpleNamespace
@@ -140,3 +141,101 @@ def test_website_flow(settings, monkeypatch):
         assert c.get(f"/study/api/lessons/{lesson['id']}", headers={"X-Study-Token": sam["token"]}).status_code == 400
         assert c.delete(f"/study/api/lessons/{lesson['id']}", headers=h).json()["ok"]
         assert c.get("/study/api/lessons", headers=h).json()["lessons"] == []
+
+
+# ---------- recordings that arrive by themselves ----------
+class WordySTT(FakeSTT):
+    def __init__(self, words=40):
+        super().__init__()
+        self.words = words
+
+    async def transcribe(self, pcm, prompt="", speech_seconds=1.0):
+        self.pieces.append(len(pcm) / 16000)
+        return " ".join(["angles"] * self.words)
+
+
+class CheckLLM(FakeLLM):
+    def __init__(self, is_lesson=True):
+        super().__init__()
+        self.is_lesson = is_lesson
+
+    async def chat(self, messages, **kw):
+        self.prompts.append(messages[0]["content"])
+        if "is_lesson" in messages[0]["content"]:
+            return SimpleNamespace(content=json.dumps({"is_lesson": self.is_lesson, "subject": "Maths",
+                                                       "about": "calculating angles in triangles."}))
+        return SimpleNamespace(content=json.dumps(NOTES))
+
+
+def make_wav(path, seconds, mtime=None):
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(1), w.setsampwidth(2), w.setframerate(16000)
+        w.writeframes(np.random.default_rng(0).normal(0, 2000, int(16000 * seconds)).astype(np.int16).tobytes())
+    if mtime:
+        import os
+        os.utime(path, (mtime, mtime))
+    return path
+
+
+def check(tmp_path, seconds, stt, llm):
+    s = StudyStore(tmp_path)
+    a = s.add_profile("Alex", "1234")
+    w = StudyWorker(s, stt, llm)
+    rec = w.recordings.add(a["id"], make_wav(tmp_path / "x.wav", seconds), 1794000000, "pocket")
+    asyncio.run(w.check_recording(a["id"], rec["id"]))
+    return w, a["id"], w.recordings.get(a["id"], rec["id"])
+
+
+def test_short_recordings_are_not_lessons(tmp_path):
+    w, pid, rec = check(tmp_path, 90, WordySTT(), CheckLLM())
+    assert rec["status"] == "too_short" and w.recordings.listed(pid) == []
+
+
+def test_recording_with_hardly_any_words_is_dropped(tmp_path):
+    w, pid, rec = check(tmp_path, 150, WordySTT(words=2), CheckLLM())
+    assert rec["status"] == "unclear" and w.recordings.listed(pid) == []
+
+
+def test_chatter_that_isnt_a_lesson_is_dropped(tmp_path):
+    w, pid, rec = check(tmp_path, 150, WordySTT(), CheckLLM(is_lesson=False))
+    assert rec["status"] == "not_lesson" and w.recordings.listed(pid) == []
+
+
+def test_real_lesson_is_named_and_listed_then_becomes_notes(tmp_path):
+    w, pid, rec = check(tmp_path, 150, WordySTT(), CheckLLM())
+    listed = w.recordings.listed(pid)
+    assert listed[0]["name"] == "Maths lesson" and listed[0]["about"] == "calculating angles in triangles"
+    assert not w.recordings.audio_path(pid, rec["id"]).exists()  # words kept, recording deleted
+    lesson = w.lesson_from_recording(pid, rec["id"])
+    assert lesson["date"] == time.strftime("%Y-%m-%d", time.localtime(1794000000))
+    asyncio.run(w.process(pid, lesson["id"]))
+    assert w.store.lesson(pid, lesson["id"])["status"] == "ready"
+    assert w.recordings.listed(pid) == []  # used: gone from the list
+
+
+def test_voice_memos_in_the_folder_are_picked_up_once(tmp_path):
+    s = StudyStore(tmp_path)
+    a = s.add_profile("Alex", "1234")  # the only person, so recordings go to them
+    w = StudyWorker(s, WordySTT(), CheckLLM())
+    folder = tmp_path / "Buddy lessons"
+    folder.mkdir()
+    make_wav(folder / "Maths.wav", 5, mtime=time.time() - 60)
+    (folder / "notes.txt").write_text("not audio")
+    assert w.scan_folder(folder) == 1
+    assert w.scan_folder(folder) == 0
+    assert (folder / "Maths.wav").exists()  # your own file is left alone
+    assert len(w.recordings.all(a["id"])) == 1
+
+
+def test_pocket_buddy_can_send_a_recording(settings):
+    app = create_app(settings)
+    with TestClient(app) as c:
+        r = c.post("/study/api/profiles", json={"name": "Alex", "pin": "1234"}).json()
+        import io
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as w:
+            w.setnchannels(1), w.setsampwidth(2), w.setframerate(16000)
+            w.writeframes(np.zeros(16000 * 3, np.int16).tobytes())
+        got = c.post("/study/api/device/recording?recorded_at=1794000000", content=buf.getvalue())
+        assert got.status_code == 200
+        assert c.get("/study/api/recordings", headers={"X-Study-Token": r["token"]}).json()["mine"]
