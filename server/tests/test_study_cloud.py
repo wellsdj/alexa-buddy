@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 from buddy.practice import make_question, show_answer
 from tests.test_study import NOTES
 
-SPEC = importlib.util.spec_from_file_location("study_cloud", Path(__file__).resolve().parents[2] / "api" / "index.py")
+SPEC = importlib.util.spec_from_file_location("study_cloud", Path(__file__).resolve().parents[1] / "api" / "index.py")
 
 
 @pytest.fixture
