@@ -1,4 +1,4 @@
-"""Study Buddy online (studdy-buddy.vercel.app).
+"""Study Buddy online (studdy-buddy-uk.vercel.app).
 
 The same pages and question engine as on Buddy's Mac, but everything is kept online in Vercel Blob,
 so it works anywhere, even with the Mac switched off. Buddy's Mac still does the listening: it turns

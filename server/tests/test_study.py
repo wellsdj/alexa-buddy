@@ -290,7 +290,7 @@ def test_once_connected_recordings_go_to_the_website(settings, monkeypatch):
         assert c.get("/api/study/cloud").json()["connected"] is False
         settings.set_secret("STUDY_SYNC_KEY", "k")
         assert hub.study_worker.owner() == "cloud"
-        assert c.get("/study").headers["location"] == "https://studdy-buddy.vercel.app"
+        assert c.get("/study").headers["location"] == "https://studdy-buddy-uk.vercel.app"
         assert c.get("/study?local=1").status_code == 200
         monkeypatch.setattr(hub.study_worker, "push", fake_push)
         w = hub.study_worker

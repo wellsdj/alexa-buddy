@@ -43,7 +43,7 @@ DEFAULTS: dict[str, Any] = {
     "default_alarm_sound": 1,  # used when you don't pick one (0 = the desk unit's beeps)
     "strip_leds": 15,  # LEDs on the strip behind the grille (count them after cutting)
     "strip_brightness": 70,  # 0-255
-    "study_cloud_url": "https://studdy-buddy.vercel.app",  # Study Buddy online
+    "study_cloud_url": "https://studdy-buddy-uk.vercel.app",  # Study Buddy online
     "fact_check": True,  # check factual answers before saying them; retry with search / thinking if they fail
     "reword_replies": True,  # quick replies (timers, weather...) said in Claude's own words, not word-for-word
     "voices": [],  # up to 8 of {"name": ..., "id": ...}; "change your voice" cycles through them
