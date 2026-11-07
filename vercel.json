@@ -1,7 +1,7 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": null,
-  "buildCommand": "pwd && ls && rm -rf public && mkdir -p public && cp server/web/study.html public/index.html && cp server/web/study.css server/web/study.js public/",
+  "buildCommand": "rm -rf public && mkdir -p public && cp server/web/study.html public/index.html && cp server/web/study.css server/web/study.js public/",
   "outputDirectory": "public",
   "functions": {
     "api/index.py": {
