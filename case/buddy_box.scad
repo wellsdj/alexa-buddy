@@ -5,9 +5,9 @@
 part = "both";          // "base", "lid", "both" (print layout) or "none"
 
 // ---- The space inside (measure your parts and change these) ----
-in_w = 95;              // inside, left to right
-in_d = 55;              // inside, front to back (not counting the light slot)
-in_h = 35;              // inside, floor to underside of the lid
+in_w = 110;             // inside, left to right
+in_d = 70;              // inside, front to back (not counting the light slot)
+in_h = 40;              // inside, floor to underside of the lid
 
 wall = 2.0; floor_t = 2.0; R = 6;
 lid_t = 2.4; lip_h = 3; lip_w = 1.2; fit = 0.25;
