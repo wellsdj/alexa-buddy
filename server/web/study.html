@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#000000">
+<title>Study Buddy</title>
+<link rel="stylesheet" href="/static/study.css">
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="#/">Study Buddy</a>
+  <button id="me" class="me" hidden aria-haspopup="menu"></button>
+  <div id="me-menu" class="menu" role="menu" hidden>
+    <button data-act="switch" role="menuitem">Switch person</button>
+    <button data-act="delete" role="menuitem" class="danger">Delete my profile…</button>
+  </div>
+</header>
+
+<main id="view" aria-live="polite"></main>
+
+<!-- PIN pad -->
+<div id="pin" class="sheet" hidden>
+  <div class="sheet-card" role="dialog" aria-modal="true" aria-labelledby="pin-title">
+    <h2 id="pin-title"></h2>
+    <p id="pin-hint" class="muted"></p>
+    <div class="pin-dots" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+    <p id="pin-error" class="error" role="alert"></p>
+    <div class="pad">
+      <button>1</button><button>2</button><button>3</button>
+      <button>4</button><button>5</button><button>6</button>
+      <button>7</button><button>8</button><button>9</button>
+      <button data-k="cancel" class="ghost">Cancel</button><button>0</button><button data-k="back" class="ghost" aria-label="Delete">⌫</button>
+    </div>
+  </div>
+</div>
+
+<script src="/static/study.js"></script>
+</body>
+</html>

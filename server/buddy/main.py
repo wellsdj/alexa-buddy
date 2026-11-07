@@ -190,6 +190,114 @@ def create_app(settings: Settings | None = None, http=None, claude_http=None, st
         hub.spotify.disconnect()
         return {"ok": True}
 
+    # ---------- Study Buddy (its own sign-in: a profile and a PIN) ----------
+    from .study import MAX_UPLOAD_BYTES, StudyError
+    study = hub.study
+
+    def studying(request: Request) -> dict:
+        who = study.who(request.headers.get("x-study-token"))
+        if not who:
+            raise HTTPException(401, "Sign in again.")
+        return who
+
+    def study_call(fn, *a):
+        try:
+            return fn(*a)
+        except StudyError as e:
+            raise HTTPException(400, str(e))
+
+    @app.get("/study")
+    async def study_page():
+        return FileResponse(WEB_DIR / "study.html", headers={"Cache-Control": "no-cache"})
+
+    @app.get("/study/api/profiles")
+    async def study_profiles():
+        return {"profiles": study.profiles()}
+
+    @app.post("/study/api/profiles")
+    async def study_add_profile(body: dict):
+        p = study_call(study.add_profile, body.get("name", ""), str(body.get("pin", "")))
+        return {"profile": p, "token": study_call(study.login, p["id"], str(body.get("pin", "")))}
+
+    @app.post("/study/api/login")
+    async def study_login(body: dict):
+        token = study_call(study.login, body.get("profile", ""), str(body.get("pin", "")))
+        return {"token": token, "profile": study.who(token)}
+
+    @app.post("/study/api/logout")
+    async def study_logout(request: Request):
+        study.logout(request.headers.get("x-study-token", ""))
+        return {"ok": True}
+
+    @app.get("/study/api/me")
+    async def study_me(request: Request):
+        return {"profile": studying(request)}
+
+    @app.post("/study/api/me/delete")
+    async def study_delete_me(request: Request, body: dict):
+        who = studying(request)
+        study_call(study.login, who["id"], str(body.get("pin", "")))  # PIN again, to be sure
+        study.remove_profile(who["id"])
+        return {"ok": True}
+
+    @app.get("/study/api/lessons")
+    async def study_lessons(request: Request):
+        return {"lessons": study.lessons(studying(request)["id"])}
+
+    @app.get("/study/api/lessons/{lid}")
+    async def study_lesson(request: Request, lid: str):
+        return study_call(study.lesson, studying(request)["id"], lid)
+
+    @app.delete("/study/api/lessons/{lid}")
+    async def study_delete_lesson(request: Request, lid: str):
+        study_call(study.delete_lesson, studying(request)["id"], lid)
+        return {"ok": True}
+
+    @app.post("/study/api/lessons/{lid}/retry")
+    async def study_retry(request: Request, lid: str):
+        pid = studying(request)["id"]
+        lesson = study_call(study.lesson, pid, lid)
+        lesson.update(status="waiting", error="", progress=0)
+        study.save_lesson(pid, lesson)
+        hub.study_worker.add(pid, lid)
+        return {"ok": True}
+
+    @app.post("/study/api/lessons/text")
+    async def study_add_text(request: Request, body: dict):
+        pid = studying(request)["id"]
+        text = (body.get("text") or "").strip()
+        if len(text.split()) < 15:
+            raise HTTPException(400, "Paste a bit more than that: at least a few sentences from the lesson.")
+        lesson = study.new_lesson(pid, body.get("subject", ""), body.get("date", ""), body.get("title", ""), "text")
+        lesson["transcript"] = text[:120_000]
+        study.save_lesson(pid, lesson)
+        hub.study_worker.add(pid, lesson["id"])
+        return lesson
+
+    @app.post("/study/api/lessons/audio")
+    async def study_add_audio(request: Request):
+        """The recording is the request body itself; details come in the query string."""
+        pid = studying(request)["id"]
+        q = request.query_params
+        lesson = study.new_lesson(pid, q.get("subject", ""), q.get("date", ""), q.get("title", ""), "audio")
+        path = study.upload_path(pid, lesson["id"])
+        size = 0
+        with path.open("wb") as f:
+            async for chunk in request.stream():
+                size += len(chunk)
+                if size > MAX_UPLOAD_BYTES:
+                    f.close()
+                    path.unlink(missing_ok=True)
+                    study.delete_lesson(pid, lesson["id"])
+                    raise HTTPException(413, "That recording is too big (over 400 MB).")
+                f.write(chunk)
+        if size < 1000:
+            path.unlink(missing_ok=True)
+            study.delete_lesson(pid, lesson["id"])
+            raise HTTPException(400, "That file is empty.")
+        hub.study_worker.add(pid, lesson["id"])
+        return lesson
+
     # ---------- pages ----------
     @app.get("/")
     async def index():

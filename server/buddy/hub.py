@@ -45,6 +45,7 @@ from .listening import ContextJudge
 from .llm import GroqLLM
 from .memory import MemoryManager, MemoryStore
 from .alarm_sounds import AlarmSounds
+from .study import StudyStore, StudyWorker
 from .music import MusicPlayer
 from .spotify import Spotify
 from .stt import LocalSTT, STTError
@@ -607,6 +608,8 @@ class Hub:
         self.music = MusicPlayer(settings, self)  # Spotify through Buddy's own speaker
         self.spotify.music = self.music
         self.sounds = AlarmSounds(settings)  # your own alarm sounds
+        self.study = StudyStore(d)  # Study Buddy: lessons, notes and questions per person
+        self.study_worker = StudyWorker(self.study, self.stt, self.llm)
         self.brain.sounds = self.sounds
         self.conv = Conversation()
         self.sessions: dict[str, Session] = {}
@@ -649,6 +652,7 @@ class Hub:
             asyncio.create_task(asyncio.to_thread(self.stt.warm))
         asyncio.create_task(self.tts.eleven.refresh_quota())
         asyncio.create_task(self.weather.fetch())
+        self.study_worker.start()
 
     async def stop(self) -> None:
         await self.music.stop()

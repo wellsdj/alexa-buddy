@@ -9,7 +9,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
-<link rel="stylesheet" href="/static/style.css?v=chat8">
+<link rel="stylesheet" href="/static/style.css?v=chat9">
 </head>
 <body>
 <header class="top">
@@ -147,19 +147,52 @@
     </div>
 
     <div class="panel settings" id="panel-settings" role="tabpanel" hidden>
-      <header class="panel-head"><h2>Settings</h2><p>Keys, listening and brains.</p></header>
-      <fieldset>
-        <legend>API keys</legend>
-        <label>Claude <span class="note">Buddy's brain (pay as you go)</span> <span class="keystate" id="key-claude"></span>
-          <span class="row"><input type="password" id="claude-key" placeholder="sk-ant-…" autocomplete="off"><button class="btn small" data-save-key="ANTHROPIC_API_KEY" data-input="claude-key">Save</button></span></label>
-        <label>Groq <span class="note">optional, free: tells when you're talking to Buddy</span> <span class="keystate" id="key-groq"></span>
-          <span class="row"><input type="password" id="groq-key" placeholder="gsk_…" autocomplete="off"><button class="btn small" data-save-key="GROQ_API_KEY" data-input="groq-key">Save</button></span></label>
-        <label>ElevenLabs <span class="keystate" id="key-eleven"></span>
-          <span class="row"><input type="password" id="eleven-key" placeholder="sk_…" autocomplete="off"><button class="btn small" data-save-key="ELEVENLABS_API_KEY" data-input="eleven-key">Save</button></span></label>
-        <p class="note" id="eleven-quota"></p>
+      <header class="panel-head"><h2>Settings</h2><p>Tap a section, or search for a setting.</p></header>
+      <input type="search" id="set-search" class="set-search" placeholder="Search settings, e.g. “brightness”" aria-label="Search settings">
+      <a class="set-row study-link" href="/study" target="_blank" rel="noopener"><span><b>Study Buddy ↗</b><small>Lessons, notes and practice questions (opens a new tab)</small></span></a>
+      <nav class="set-menu" id="set-menu" aria-label="Settings sections">
+        <button type="button" class="set-row" data-open="you"><span><b>You &amp; home</b><small>Your name, Buddy's name, where you live</small></span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></button>
+        <button type="button" class="set-row" data-open="listening"><span><b>Listening &amp; mic</b><small>How easily Buddy wakes, mic boost, follow-ups, morning briefing</small></span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></button>
+        <button type="button" class="set-row" data-open="light"><span><b>Light</b><small>How many lights and how bright</small></span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></button>
+        <button type="button" class="set-row" data-open="music"><span><b>Music</b><small>Connect Spotify and choose where music plays</small></span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></button>
+        <button type="button" class="set-row" data-open="keys"><span><b>Keys</b><small>Claude, ElevenLabs and Groq keys</small></span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></button>
+        <button type="button" class="set-row" data-open="updates"><span><b>Update Buddy</b><small>Get the newest features</small></span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></button>
+        <button type="button" class="set-row" data-open="brains"><span><b>Advanced: brains</b><small>Which Claude and Groq models Buddy uses</small></span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></button>
+        <button type="button" class="set-row" data-open="security"><span><b>Advanced: security</b><small>An access code for the desk unit and this page</small></span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></button>
+      </nav>
+      <button type="button" class="set-back" id="set-back" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 6-6 6 6 6"/></svg>All settings</button>
+      <p class="note" id="set-nothing" hidden>No settings match that.</p>
+      <fieldset data-section="you" hidden>
+        <legend>You &amp; home</legend>
+        <label>Your name <input data-setting="user_name" type="text" placeholder="So Buddy can greet you"></label>
+        <label>Assistant name <input data-setting="assistant_name" type="text"></label>
+        <label>Home location
+          <span class="row"><input id="place-search" type="text" placeholder="Search a town…"><button class="btn small" id="place-go">Find</button></span>
+        </label>
+        <ul class="places" id="places"></ul>
+        <p class="note" id="place-current"></p>
       </fieldset>
-      <fieldset>
-        <legend>Spotify</legend>
+      <fieldset data-section="listening" hidden>
+        <legend>Listening &amp; mic</legend>
+        <label>Wake sensitivity <span class="note">lower = wakes more easily</span>
+          <input data-setting="wake_threshold" type="range" min="0.2" max="0.9" step="0.05"><output id="thr-out"></output></label>
+        <label>Double-check borderline wakes above
+          <input data-setting="wake_verify_threshold" type="range" min="0.05" max="0.5" step="0.01"><output id="vthr-out"></output></label>
+        <label>Desk unit mic boost <span class="note">raise it if Buddy's mic level barely moves</span>
+          <select data-setting="device_mic_shift"><option value="16">Quiet room, very close (×1)</option><option value="15">×2</option><option value="14">Normal (×4)</option><option value="13">×8</option><option value="12">Across the room (×16)</option></select></label>
+        <label>Pause that ends your sentence (ms) <input data-setting="end_of_speech_ms" type="number" min="400" max="2000" step="50"></label>
+        <label>Keep listening after a reply
+          <select data-setting="follow_up"><option value="off">Never</option><option value="questions">When Buddy asks a question</option><option value="always">Always</option></select></label>
+        <label class="check"><input data-setting="morning_briefing" type="checkbox"> Morning briefing after alarms</label>
+      </fieldset>
+      <fieldset data-section="light" hidden>
+        <legend>Light</legend>
+        <p class="note">The light behind the radio's grille (its data wire goes to GPIO 2). Count the little lights on your piece. Changes show straight away.</p>
+        <label>Number of lights <input data-setting="strip_leds" type="number" min="1" max="60" step="1"></label>
+        <label>Brightness <input data-setting="strip_brightness" type="range" min="5" max="255" step="5"><output id="strip-out"></output></label>
+      </fieldset>
+      <fieldset data-section="music" hidden>
+        <legend>Music</legend>
         <p class="note">Needs Spotify Premium. Music plays on your Spotify app or speaker; Buddy picks what and turns it down while it talks.</p>
         <ol class="steps">
           <li>Open <a href="https://developer.spotify.com/dashboard" target="_blank" rel="noopener">developer.spotify.com/dashboard</a>, log in and press <i>Create app</i>.</li>
@@ -176,31 +209,24 @@
         <label>Play on instead <span class="note">optional: part of another device's name, e.g. “MacBook” or “iPhone”. Empty = Buddy's speaker (or whichever Spotify app is active).</span>
           <input data-setting="spotify_device" type="text" placeholder="whichever is active"></label>
       </fieldset>
-      <fieldset>
-        <legend>You</legend>
-        <label>Your name <input data-setting="user_name" type="text" placeholder="So Buddy can greet you"></label>
-        <label>Assistant name <input data-setting="assistant_name" type="text"></label>
-        <label>Home location
-          <span class="row"><input id="place-search" type="text" placeholder="Search a town…"><button class="btn small" id="place-go">Find</button></span>
-        </label>
-        <ul class="places" id="places"></ul>
-        <p class="note" id="place-current"></p>
+      <fieldset data-section="keys" hidden>
+        <legend>Keys</legend>
+        <label>Claude <span class="note">Buddy's brain (pay as you go)</span> <span class="keystate" id="key-claude"></span>
+          <span class="row"><input type="password" id="claude-key" placeholder="sk-ant-…" autocomplete="off"><button class="btn small" data-save-key="ANTHROPIC_API_KEY" data-input="claude-key">Save</button></span></label>
+        <label>Groq <span class="note">optional, free: tells when you're talking to Buddy</span> <span class="keystate" id="key-groq"></span>
+          <span class="row"><input type="password" id="groq-key" placeholder="gsk_…" autocomplete="off"><button class="btn small" data-save-key="GROQ_API_KEY" data-input="groq-key">Save</button></span></label>
+        <label>ElevenLabs <span class="keystate" id="key-eleven"></span>
+          <span class="row"><input type="password" id="eleven-key" placeholder="sk_…" autocomplete="off"><button class="btn small" data-save-key="ELEVENLABS_API_KEY" data-input="eleven-key">Save</button></span></label>
+        <p class="note" id="eleven-quota"></p>
       </fieldset>
-      <fieldset>
-        <legend>Listening</legend>
-        <label>Wake sensitivity <span class="note">lower = wakes more easily</span>
-          <input data-setting="wake_threshold" type="range" min="0.2" max="0.9" step="0.05"><output id="thr-out"></output></label>
-        <label>Double-check borderline wakes above
-          <input data-setting="wake_verify_threshold" type="range" min="0.05" max="0.5" step="0.01"><output id="vthr-out"></output></label>
-        <label>Desk unit mic boost <span class="note">raise it if Buddy's mic level barely moves</span>
-          <select data-setting="device_mic_shift"><option value="16">Quiet room, very close (×1)</option><option value="15">×2</option><option value="14">Normal (×4)</option><option value="13">×8</option><option value="12">Across the room (×16)</option></select></label>
-        <label>Pause that ends your sentence (ms) <input data-setting="end_of_speech_ms" type="number" min="400" max="2000" step="50"></label>
-        <label>Keep listening after a reply
-          <select data-setting="follow_up"><option value="off">Never</option><option value="questions">When Buddy asks a question</option><option value="always">Always</option></select></label>
-        <label class="check"><input data-setting="morning_briefing" type="checkbox"> Morning briefing after alarms</label>
+      <fieldset data-section="updates" hidden>
+        <legend>Update Buddy</legend>
+        <p class="note">Get Buddy's newest features. Buddy restarts by itself; this page reconnects after a minute or two.</p>
+        <span class="row"><button class="btn primary small" id="update-now" type="button">Update Buddy now</button></span>
+        <p class="note" id="update-status"></p>
       </fieldset>
-      <fieldset>
-        <legend>Brains</legend>
+      <fieldset data-section="brains" hidden>
+        <legend>Advanced: brains</legend>
         <label>Everyday model (Claude) <input data-setting="claude_fast_model" type="text" list="claude-models"></label>
         <label>Deep-thinking model (Claude) <span class="note">used only after Buddy asks and you say yes</span>
           <input data-setting="claude_smart_model" type="text" list="claude-models"></label>
@@ -210,22 +236,10 @@
         <datalist id="model-list"></datalist>
         <p class="note" id="model-note"></p>
       </fieldset>
-      <fieldset>
-        <legend>Security</legend>
+      <fieldset data-section="security" hidden>
+        <legend>Advanced: security</legend>
         <label>Access token <span class="note">optional; if set, the ESP32 and this page need it</span>
           <input data-setting="device_token" type="text" placeholder="leave blank on a home network"></label>
-      </fieldset>
-      <fieldset>
-        <legend>Light strip</legend>
-        <p class="note">The LED strip behind the grille (data wire on GPIO 2). Count the LEDs on your piece. Changes show straight away.</p>
-        <label>Number of LEDs <input data-setting="strip_leds" type="number" min="1" max="60" step="1"></label>
-        <label>Brightness <input data-setting="strip_brightness" type="range" min="5" max="255" step="5"><output id="strip-out"></output></label>
-      </fieldset>
-      <fieldset>
-        <legend>Updates</legend>
-        <p class="note">Get Buddy's newest features. Buddy restarts by itself; this page reconnects after a minute or two.</p>
-        <span class="row"><button class="btn primary small" id="update-now" type="button">Update Buddy now</button></span>
-        <p class="note" id="update-status"></p>
       </fieldset>
     </div>
 

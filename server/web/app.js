@@ -665,6 +665,40 @@ function init() {
   $("ring-stop").onclick = () => stopRinging("button");
   $("ring-snooze").onclick = () => { send({ type: "text", text: "snooze" }); };
 
+  // Settings: a short menu of sections; tap one to see just that section, or search.
+  {
+    const panel = $("panel-settings"), menu = $("set-menu"), back = $("set-back"), search = $("set-search");
+    const studyLink = panel.querySelector(".study-link"), nothing = $("set-nothing");
+    const sections = [...panel.querySelectorAll("fieldset[data-section]")];
+    const show = (key) => {
+      search.value = "";
+      sections.forEach((f) => { f.hidden = f.dataset.section !== key; f.removeAttribute("data-match"); });
+      menu.hidden = studyLink.hidden = !!key;
+      back.hidden = !key; nothing.hidden = true;
+      search.hidden = !!key;
+      panel.closest(".drawer-body")?.scrollTo?.(0, 0);
+    };
+    menu.querySelectorAll("[data-open]").forEach((b) => b.onclick = () => show(b.dataset.open));
+    back.onclick = () => show(null);
+    search.oninput = () => {
+      const q = search.value.trim().toLowerCase();
+      if (!q) return show(null);
+      let any = false;
+      sections.forEach((f) => {
+        const legend = f.querySelector("legend").textContent.toLowerCase();
+        const items = [...f.querySelectorAll(":scope > label, :scope > p, :scope > ol")];
+        let hit = legend.includes(q);
+        items.forEach((el) => {
+          const m = el.textContent.toLowerCase().includes(q) || [...el.querySelectorAll("option")].some((o) => o.textContent.toLowerCase().includes(q));
+          el.toggleAttribute("data-hit", m || legend.includes(q));
+          hit = hit || m;
+        });
+        f.hidden = !hit; f.toggleAttribute("data-match", hit);
+        any = any || hit;
+      });
+      menu.hidden = studyLink.hidden = true; back.hidden = false; nothing.hidden = any;
+    };
+  }
   for (const tab of document.querySelectorAll("[role=tab]")) {
     tab.onclick = () => {
       document.querySelectorAll("[role=tab]").forEach((t) => t.setAttribute("aria-selected", String(t === tab)));
