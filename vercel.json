@@ -1,17 +1,36 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": null,
-  "buildCommand": "bash scripts/vercel-build.sh",
+  "buildCommand": "pwd && ls && rm -rf public && mkdir -p public && cp server/web/study.html public/index.html && cp server/web/study.css server/web/study.js public/",
   "outputDirectory": "public",
   "functions": {
-    "api/index.py": { "maxDuration": 120 }
+    "api/index.py": {
+      "maxDuration": 120
+    }
   },
   "rewrites": [
-    { "source": "/study/api/(.*)", "destination": "/api/index" },
-    { "source": "/static/(.*)", "destination": "/$1" },
-    { "source": "/study", "destination": "/index.html" }
+    {
+      "source": "/study/api/(.*)",
+      "destination": "/api/index"
+    },
+    {
+      "source": "/static/(.*)",
+      "destination": "/$1"
+    },
+    {
+      "source": "/study",
+      "destination": "/index.html"
+    }
   ],
   "headers": [
-    { "source": "/(.*)", "headers": [{ "key": "Cache-Control", "value": "no-cache" }] }
+    {
+      "source": "/(.*)",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "no-cache"
+        }
+      ]
+    }
   ]
 }
