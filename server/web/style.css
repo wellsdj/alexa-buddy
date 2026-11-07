@@ -21,7 +21,8 @@
   --s-speaking: #06c167;
   --s-ringing: #ffb020;
   --s-offline: #555;
-  --font: "Plus Jakarta Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", "Segoe UI", Arial, sans-serif;
+  --fade: linear-gradient(90deg, #c4243c 0%, #7a2a8c 50%, #2f6bff 100%);  /* dark red fading into blue: big words only */
   --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
   --col: 760px;
   color-scheme: dark;
@@ -31,11 +32,9 @@
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; }
 html { background: var(--bg); }
-/* Dark red fading into blue, behind everything. */
-html, body { background: linear-gradient(160deg, #4a0b16 0%, #22091f 42%, #0b1a46 100%) fixed; }
 body {
   display: flex; flex-direction: column; height: 100dvh; overflow: hidden;
-  color: var(--ink);
+  color: var(--ink); background: var(--bg);
   font: 15px/1.55 var(--font); letter-spacing: -0.005em;
   -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
 }
@@ -97,7 +96,7 @@ body:has(.dot:not([data-state="idle"]):not([data-state="offline"])) #state-label
 /* empty state */
 .chat .empty { align-self: stretch; max-width: none; margin: auto 0; padding: 8vh 0 4vh; animation: none; }
 .empty h1 { margin: 0; font-size: clamp(36px, 6vw, 56px); font-weight: 800; letter-spacing: -0.05em; line-height: 1; }
-.empty p { margin: 10px 0 0; font-size: clamp(20px, 2.6vw, 26px); font-weight: 500; color: rgba(255, 255, 255, 0.55); letter-spacing: -0.03em; }
+.empty p { margin: 10px 0 0; font-size: clamp(20px, 2.6vw, 26px); font-weight: 500; color: var(--faint); letter-spacing: -0.03em; }
 .suggest { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 36px; }
 .suggest button {
   text-align: left; padding: 16px 18px; border-radius: 16px; border: 0; cursor: pointer;
@@ -111,7 +110,7 @@ body:has(.dot:not([data-state="idle"]):not([data-state="offline"])) #state-label
 .dock { flex: none; position: relative; padding: 8px 20px max(14px, env(safe-area-inset-bottom)); }
 .composer {
   max-width: var(--col); margin: 0 auto; display: flex; align-items: center; gap: 6px;
-  padding: 6px; border-radius: 999px; background: rgba(0, 0, 0, 0.35); backdrop-filter: blur(12px);
+  padding: 6px; border-radius: 999px; background: var(--s2);
   box-shadow: inset 0 0 0 1px var(--line-2); transition: box-shadow 0.15s;
 }
 .composer:focus-within { box-shadow: inset 0 0 0 1.5px var(--muted); }
@@ -391,9 +390,14 @@ a.btn { text-decoration: none; }
 .set-back:hover { color: var(--ink); background: var(--s2); }
 .settings fieldset[data-match] label:not([data-hit]), .settings fieldset[data-match] > p:not([data-hit]), .settings fieldset[data-match] ol:not([data-hit]) { opacity: .35; }
 
-/* top bar: Study next to the controls; bars sit on the gradient */
-.top { border-bottom-color: rgba(255, 255, 255, 0.08); }
-.top-actions { display: flex; align-items: center; gap: 10px; }
-.study-btn { display: inline-flex; align-items: center; height: 36px; padding: 0 16px; border-radius: 999px; background: rgba(255, 255, 255, 0.1);
-             color: var(--ink); font-weight: 700; font-size: 14px; text-decoration: none; }
-.study-btn:hover { background: rgba(255, 255, 255, 0.18); }
+/* top bar: Study next to the controls */
+.top-actions { display: flex; align-items: center; gap: 14px; }
+.study-btn { color: var(--muted); font-weight: 600; font-size: 14px; text-decoration: none; }
+.study-btn:hover { color: var(--ink); }
+
+/* the big words fade from dark red into blue; everything else stays white */
+#assistant-name, .empty h1, .setup-head h2 {
+  background: var(--fade); -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+#assistant-name, .empty h1, .setup-head h2 { font-weight: 700; letter-spacing: -0.03em; }
+.empty h1, .setup-head h2 { width: fit-content; }

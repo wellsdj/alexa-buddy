@@ -35,8 +35,8 @@ async function whoView() {
   const { profiles } = await api("/profiles");
   document.body.classList.add("signin");
   view.innerHTML = `<section class="hero">
-    <h1>Study<br>Buddy</h1>
-    <p class="lead">Your lessons, turned into notes and practice questions. Who's revising?</p>
+    <h1 class="fade">Study<br>Buddy</h1>
+    <p class="lead">Who's revising?</p>
     <div class="people">
       ${profiles.map((p) => `<button class="person" data-id="${esc(p.id)}" data-name="${esc(p.name)}">
         <span class="avatar c${p.colour}">${esc(p.name[0].toUpperCase())}</span>${esc(p.name)}</button>`).join("")}
@@ -57,7 +57,7 @@ function addPersonView() {
   document.body.classList.remove("signin");
   view.innerHTML = `
     <a class="back" href="#/">← Back</a>
-    <h1>Add a person</h1>
+    <h1 class="fade" style="margin-top:20px">Add a person</h1>
     <p class="muted">Pick a 4-number PIN so nobody else sees your lessons.</p>
     <form id="f">
       <label class="field">Name <input name="name" maxlength="30" autocomplete="off" required></label>
@@ -137,11 +137,10 @@ async function homeView() {
   const { lessons } = await api("/lessons");
   const first = S.me.name.split(" ")[0];
   view.innerHTML = `
-    <h1>Hi ${esc(first)}</h1>
-    <p class="muted">${lessons.length ? "Your lessons, newest first." : "Add your first lesson to get notes and practice questions."}</p>
-    <a class="btn wide" href="#/add">+ Add a lesson</a>
+    <h1 class="fade">Hi ${esc(first)}</h1>
+    <a class="add-link" href="#/add">+ Add a lesson</a>
     ${lessons.length ? `<div class="lessons">${lessons.map(lessonCard).join("")}</div>`
-                     : `<div class="empty">No lessons yet.<br>Upload a recording of a lesson, or paste in some notes.</div>`}`;
+                     : `<p class="empty">No lessons yet. Add a recording of a lesson and Buddy makes notes and questions from it.</p>`}`;
   if (lessons.some(busy)) S.poll = setTimeout(() => location.hash === "#/" && homeView().catch(() => {}), 3000);
 }
 
@@ -152,8 +151,8 @@ function lessonCard(x) {
     <div class="t">${esc(lessonName(x))}</div>
     <div class="when">${esc(longDate(x.date))}</div>
     ${x.status === "ready" ? `<div class="about">${esc(aboutLine(x))}</div>
-      <div class="meta" style="margin-top:8px">${x.questions} practice questions</div>`
-      : `<div class="meta" style="margin-top:8px"><span class="tag ${cls}">${esc(label + progress)}</span></div>`}
+`
+      : `<div class="meta" style="margin-top:6px"><span class="tag ${cls}">${esc(label + progress)}</span></div>`}
     ${x.status === "listening" ? `<div class="bar"><i style="width:${x.progress}%"></i></div>` : ""}
     ${x.status === "failed" ? `<div class="meta">${esc(x.error)}</div>` : ""}
   </a>`;
@@ -162,8 +161,8 @@ function lessonCard(x) {
 async function addView() {
   view.innerHTML = `
     <a class="back" href="#/">← Lessons</a>
-    <h1>Add a lesson</h1>
-    <p class="muted">Choose the recording. Buddy works out the subject, the date and what it was about.</p>
+    <h1 class="fade" style="margin-top:20px">Add a lesson</h1>
+    <p class="muted">Buddy works out the subject, the date and what it was about.</p>
     <form id="f">
       <label class="drop" id="drop">
         <input type="file" name="file" accept="audio/*,.m4a,.mp3,.wav,.aac,.caf">
@@ -173,7 +172,7 @@ async function addView() {
       <p class="picked" id="picked" hidden></p>
       <label class="field">Title (optional) <input name="title" maxlength="80" placeholder="Leave empty and it's called e.g. “Maths lesson”"></label>
       <p class="note small">Ask your teacher before recording a lesson, and don't share recordings of other people.</p>
-      <button class="btn wide" id="go" style="margin-top:14px">Make my notes</button>
+      <button class="btn wide" id="go" style="margin-top:24px">Make my notes</button>
       <div class="bar" id="up" hidden><i style="width:0"></i></div>
       <p class="error" id="err"></p>
     </form>`;
@@ -228,7 +227,7 @@ async function lessonView(id, tab) {
   const x = await api(`/lessons/${encodeURIComponent(id)}`);
   const [cls, label] = STATUS[x.status] || ["", x.status];
   const head = `<a class="back" href="#/">← Lessons</a>
-    <h1 style="margin-top:14px">${esc(lessonName(x))}</h1>
+    <h1 class="fade" style="margin-top:20px">${esc(lessonName(x))}</h1>
     <div class="meta"><span>${esc(longDate(x.date))}</span>${x.duration_s ? `<span>· ${Math.round(x.duration_s / 60)} min recording</span>` : ""}</div>`;
   if (x.status !== "ready") {
     const working = busy(x);
@@ -247,8 +246,7 @@ async function lessonView(id, tab) {
   tab = tab || "notes";
   const tabs = [["notes", "Notes"], ["practice", `Practice (${x.questions.length})`], ["transcript", x.source === "audio" ? "Transcript" : "Text"]];
   view.innerHTML = `${head}
-    ${x.about ? `<p class="summary" style="margin-top:14px"><b>${esc(aboutLine(x))}.</b> ${esc(x.summary)}</p>` : `<p class="summary">${esc(x.summary)}</p>`}
-    <div class="chips">${x.topics.map((t) => `<span class="tag" title="${esc(t.summary)}">${esc(t.name)}</span>`).join("")}</div>
+    <p class="summary">${esc(x.about ? aboutLine(x) + "." : x.summary)}</p>
     <div class="tabs" role="tablist">${tabs.map(([k, n]) => `<button role="tab" data-tab="${k}" aria-selected="${k === tab}">${n}</button>`).join("")}</div>
     <section id="tab"></section>
     <p><button class="link" id="del">Delete this lesson</button></p>`;
