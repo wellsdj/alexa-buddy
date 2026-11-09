@@ -25,6 +25,12 @@ hinge_len = 70;
 // Cable notches (right side, near the back) and vents (left side)
 notch_w = 8; notch_d = 7;
 
+// Push button on the left side (12 mm panel-mount button; the hole is a touch bigger so the thread slides in)
+btn_d = 12.4;
+btn_boss_d = 19; btn_boss_t = 3;  // a thicker ring of plastic inside, so the nut has something solid to grip
+btn_z = 20;                       // height above the floor
+btn_y_from_back = 15;             // distance from the back wall
+
 label = "buddy"; label_size = 8; label_depth = 0.6;
 font = "Liberation Sans:style=Bold";
 $fn = 56;
@@ -43,7 +49,18 @@ module rrect(w, d, h, r) { translate([r, r, 0]) linear_extrude(h) offset(r) squa
 module knuckle(i) { translate([seg_x(i), ay, az]) rotate([0, 90, 0]) cylinder(r = kr, h = seg); }
 module pin_hole() { translate([-1, ay, az]) rotate([0, 90, 0]) cylinder(d = pin_d, h = W + 2, $fn = 24); }
 
+btn_y = D - btn_y_from_back;
 module base() {
+  difference() {
+    union() {
+      base_body();
+      translate([wall - 0.01, btn_y, floor_t + btn_z]) rotate([0, 90, 0]) cylinder(d = btn_boss_d, h = btn_boss_t);
+    }
+    translate([-1, btn_y, floor_t + btn_z]) rotate([0, 90, 0]) cylinder(d = btn_d, h = wall + btn_boss_t + 2);
+  }
+}
+
+module base_body() {
   difference() {
     union() {
       hull() {
