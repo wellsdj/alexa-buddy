@@ -31,6 +31,16 @@
 #define STRIP_MAX_LEDS 60      // the most it will drive (one metre of 60/m)
 #define STRIP_DEFAULT_LEDS 15  // until the web page says otherwise (about 25 cm)
 
+// Lesson recorder: a micro SD card reader (3.3 V SPI type) on the board's own SPI pins.
+// Hold the button 2-4 s and let go to start / stop a recording; it uploads by itself when home.
+// SD reader pin -> board: CS -> 10, MOSI -> 11, SCK -> 12, MISO -> 13, VCC -> 3V3, GND -> GND.
+#define SD_CS_PIN   10
+#define SD_MOSI_PIN 11
+#define SD_SCK_PIN  12
+#define SD_MISO_PIN 13
+#define REC_GAIN 2.0f          // lessons are heard from further away than you talking to Buddy
+#define REC_MIN_UPLOAD_S 60    // shorter recordings (accidental holds) are deleted instead of sent
+
 // Microphone loudness. The INMP441 is quiet, so its 24-bit samples are shifted down by
 // this much to 16 bits. Lower = louder. The server can change it live (web page ->
 // Settings -> Listening), so you rarely need to touch this.

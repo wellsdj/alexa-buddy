@@ -11,6 +11,8 @@
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <ESPmDNS.h>
+#include <SD.h>
+#include <SPI.h>
 #include <Preferences.h>
 #include <WebSocketsClient.h>
 #include <WiFi.h>
@@ -22,7 +24,7 @@
 
 #include "config.h"
 
-#define FW_VERSION "1.4.0"
+#define FW_VERSION "1.5.0"
 #define SAMPLE_RATE 16000
 #define MIC_FRAMES 320               // 20 ms per I2S read
 #define SEND_BYTES 1280              // 40 ms of 16-bit audio per WebSocket frame
@@ -67,6 +69,23 @@ static volatile RingMode ringMode = RING_NONE;
 static char ringId[8] = "";
 static uint8_t ringKind = K_ALARM;
 static uint32_t ringStartMs = 0;
+
+// ---- lesson recorder state
+static SPIClass sdSpi(FSPI);
+static bool sdOk = false;
+static StreamBufferHandle_t recStream = nullptr;
+static File recFile;
+static volatile bool recording = false;
+static volatile uint8_t recCmd = 0;          // 1 = start, 2 = stop (handled by recTask, which owns the SD card while recording)
+static uint32_t recEpoch = 0, recNum = 0, recStartMs = 0;
+static volatile uint32_t recBytes = 0, droppedRec = 0;
+static volatile uint32_t recErrorUntil = 0;  // quick red flicker when a recording can't start or the card fails
+static volatile uint8_t holdStage = 0;       // while the button is held: 2 = release to record, 3 = release to mute
+static volatile bool uploading = false;      // a recording is on its way to the Mac
+static volatile bool uploadSdBusy = false;   // the upload task is reading the SD card
+static volatile bool uploadAbort = false;
+static volatile bool canUpload = false;      // set by loop(): connected to Buddy and idle
+static uint32_t pendingNum[8], pendingStartMs[8];  // recordings made with no clock yet (booted away from Wi-Fi)
 
 static String cfgHost, cfgToken, resolvedHost;
 static uint16_t cfgPort = DEFAULT_SERVER_PORT, resolvedPort = DEFAULT_SERVER_PORT;
@@ -153,7 +172,11 @@ static void micTask(void *) {
       hpY = y;
       out[i] = (int16_t)constrain((int32_t)y, -32768, 32767);
     }
-    if (!micMuted && xStreamBufferSend(micStream, out, frames * 2, 0) < (size_t)frames * 2) droppedMic++;
+    if (recording) {  // a lesson: straight to the SD card, not to the server
+      if (xStreamBufferSend(recStream, out, frames * 2, 0) < (size_t)frames * 2) droppedRec++;
+    } else if (!micMuted && xStreamBufferSend(micStream, out, frames * 2, 0) < (size_t)frames * 2) {
+      droppedMic++;
+    }
   }
 }
 
@@ -321,9 +344,19 @@ static void led(uint8_t r, uint8_t g, uint8_t b) {
 static void updateLed() {
   uint32_t t = millis();
   float breath = (sinf(t / 1000.0f * 2.0f * PI * 0.6f) + 1.0f) * 0.5f;  // 0..1, ~0.6 Hz
-  if (ringMode != RING_NONE) {
+  if (holdStage == 2) {  // button held for 2 s: let go to start / stop a lesson recording
+    led(200, 0, 200);
+  } else if (holdStage == 3) {  // held for 4 s: let go to mute
+    led(180, 0, 0);
+  } else if (t < recErrorUntil) {  // couldn't record (no card, card full)
+    led(((t / 120) % 2) ? 255 : 0, 0, 0);
+  } else if (ringMode != RING_NONE) {
     bool on = (t / 250) % 2;
     led(on ? 255 : 40, on ? 150 : 20, 0);
+  } else if (recording) {  // recording a lesson: a slow red pulse
+    led((uint8_t)(70 + 185 * breath), 0, 0);
+  } else if (uploading) {  // sending a lesson home: teal
+    led(0, (uint8_t)(60 + 120 * breath), (uint8_t)(60 + 120 * breath));
   } else if (micMuted) {
     led(180, 0, 0);
   } else if (WiFi.status() != WL_CONNECTED || !wsConnected) {
@@ -388,9 +421,20 @@ static void stripUpdate() {
   float sec = t / 1000.0f;
   for (uint16_t k = 0; k < n; k++) {
     float r = 0, g = 0, b = 0;
-    if (ringMode != RING_NONE) {  // alarm: amber, pulsing
+    if (holdStage == 2) {  // button held: release to start / stop a lesson recording
+      r = 0.8f; b = 0.8f;
+    } else if (holdStage == 3) {  // held longer: release to mute
+      r = 0.6f;
+    } else if (t < recErrorUntil) {  // couldn't record
+      r = ((t / 120) % 2) ? 0.8f : 0;
+    } else if (ringMode != RING_NONE) {  // alarm: amber, pulsing
       float v = 0.35f + 0.65f * ((sinf(sec * 2 * PI * 2.0f) + 1) * 0.5f);
       r = v; g = v * 0.45f;
+    } else if (recording) {  // recording a lesson: a quiet red pulse
+      r = 0.12f + 0.2f * ((sinf(sec * 2 * PI * 0.5f) + 1) * 0.5f);
+    } else if (uploading) {  // sending a lesson home: teal, breathing
+      float v = 0.25f + 0.3f * ((sinf(sec * 2 * PI * 0.6f + k * 0.2f) + 1) * 0.5f);
+      g = v; b = v;
     } else if (micMuted) {  // muted: a quiet red
       r = 0.35f;
     } else if (WiFi.status() != WL_CONNECTED || !wsConnected) {  // can't reach Buddy: slow red blink
@@ -585,8 +629,10 @@ static void sendHello() {
   doc["heap"] = ESP.getFreeHeap();
   doc["muted"] = micMuted;
   doc["uptime"] = millis() / 1000;  // lets the server tell switching on from a Wi-Fi reconnect
+  doc["sd"] = sdOk;
+  doc["recording"] = (bool)recording;
   sendJson(doc);
-  if (micMuted) {
+  if (micMuted || recording) {
     JsonDocument m;
     m["type"] = "audio_mode";
     m["on"] = false;
@@ -630,6 +676,279 @@ static void wsEvent(WStype_t type, uint8_t *payload, size_t len) {
   }
 }
 
+// ------------------------------------------------------------------ lesson recorder
+// Hold the button 2-4 s and let go: recording starts onto the micro SD card (16 kHz mono WAV, about 2 MB a minute).
+// Do it again to stop. Away from Wi-Fi nothing needs the network. Back at home, finished recordings are sent to the
+// Buddy server (which checks they're real lessons) and deleted from the card once it has them.
+static void put16(uint8_t *p, uint16_t v) { memcpy(p, &v, 2); }
+static void put32(uint8_t *p, uint32_t v) { memcpy(p, &v, 4); }
+
+static void wavHeader(uint8_t *h, uint32_t dataBytes) {
+  memcpy(h, "RIFF", 4);
+  put32(h + 4, 36 + dataBytes);
+  memcpy(h + 8, "WAVEfmt ", 8);
+  put32(h + 16, 16);
+  put16(h + 20, 1);  // PCM
+  put16(h + 22, 1);  // mono
+  put32(h + 24, SAMPLE_RATE);
+  put32(h + 28, SAMPLE_RATE * 2);
+  put16(h + 32, 2);
+  put16(h + 34, 16);
+  memcpy(h + 36, "data", 4);
+  put32(h + 40, dataBytes);
+}
+
+static String recName(uint32_t epoch, uint32_t num, const char *ext) {
+  char b[48];
+  snprintf(b, sizeof(b), "/rec/%lu_%lu.%s", (unsigned long)epoch, (unsigned long)num, ext);
+  return String(b);
+}
+
+// A recording cut off by the battery dying has no sizes in its header yet: fix it up so it still plays.
+static void repairPartials() {
+  File dir = SD.open("/rec");
+  if (!dir) return;
+  String broken[8];
+  int n = 0;
+  for (File f = dir.openNextFile(); f && n < 8; f = dir.openNextFile()) {
+    String name = f.name();
+    if (!f.isDirectory() && name.endsWith(".part")) broken[n++] = name;
+    f.close();
+  }
+  dir.close();
+  for (int i = 0; i < n; i++) {
+    String path = "/rec/" + broken[i];
+    File f = SD.open(path, "r+");
+    if (!f) continue;
+    uint32_t data = f.size() > 44 ? (f.size() - 44) & ~1u : 0;
+    if (data < SAMPLE_RATE * 2) {  // under 1 s: nothing worth keeping
+      f.close();
+      SD.remove(path);
+      continue;
+    }
+    uint8_t h[44];
+    wavHeader(h, data);
+    f.seek(0);
+    f.write(h, 44);
+    f.close();
+    String fixed = path.substring(0, path.length() - 5) + ".wav";
+    SD.rename(path, fixed);
+    Serial.printf("[rec] repaired %s\n", fixed.c_str());
+  }
+}
+
+static void sdBegin() {
+  sdSpi.begin(SD_SCK_PIN, SD_MISO_PIN, SD_MOSI_PIN, SD_CS_PIN);
+  sdOk = SD.begin(SD_CS_PIN, sdSpi, 20000000) || SD.begin(SD_CS_PIN, sdSpi, 8000000);
+  if (sdOk) {
+    SD.mkdir("/rec");
+    repairPartials();
+    Serial.printf("[sd] card ready, %llu MB\n", SD.cardSize() / (1024ULL * 1024ULL));
+  } else {
+    Serial.println("[sd] no card found (is the reader wired up and the card in?)");
+  }
+}
+
+static void startRec() {
+  uploadAbort = true;  // the SD card is needed for recording: pause any upload first
+  for (int i = 0; i < 60 && uploadSdBusy; i++) vTaskDelay(pdMS_TO_TICKS(50));
+  if (uploadSdBusy || !sdOk || !recStream) {
+    recErrorUntil = millis() + 2500;
+    return;
+  }
+  String path = recName(recEpoch, recNum, "part");
+  recFile = SD.open(path, "w+");
+  if (!recFile) {
+    Serial.printf("[rec] couldn't create %s\n", path.c_str());
+    recErrorUntil = millis() + 2500;
+    return;
+  }
+  uint8_t h[44];
+  wavHeader(h, 0);
+  recFile.write(h, 44);
+  xStreamBufferReset(recStream);
+  recBytes = 0;
+  droppedRec = 0;
+  recStartMs = millis();
+  recording = true;
+  Serial.printf("[rec] recording to %s\n", path.c_str());
+}
+
+static void stopRec(bool failed) {
+  recording = false;
+  vTaskDelay(pdMS_TO_TICKS(60));  // let the mic task finish its last piece
+  static int16_t rest[1024];
+  size_t got;
+  while (!failed && (got = xStreamBufferReceive(recStream, rest, sizeof(rest), 0)) > 0) {
+    for (size_t i = 0; i < got / 2; i++) rest[i] = (int16_t)constrain((int32_t)(rest[i] * REC_GAIN), -32768, 32767);
+    recFile.write((uint8_t *)rest, got & ~1u);
+    recBytes += got & ~1u;
+  }
+  uint8_t h[44];
+  wavHeader(h, recBytes);
+  recFile.seek(0);
+  recFile.write(h, 44);
+  recFile.close();
+  String part = recName(recEpoch, recNum, "part"), wav = recName(recEpoch, recNum, "wav");
+  if (recBytes < (uint32_t)SAMPLE_RATE * 2 * 2) {  // under 2 s: a slip of the finger
+    SD.remove(part);
+    Serial.println("[rec] too short, discarded");
+    return;
+  }
+  SD.rename(part, wav);
+  Serial.printf("[rec] saved %s (%lu s, %lu dropped pieces)\n", wav.c_str(), (unsigned long)(recBytes / (SAMPLE_RATE * 2)),
+                (unsigned long)droppedRec);
+  if (failed) recErrorUntil = millis() + 4000;
+}
+
+static void recTask(void *) {
+  static int16_t chunk[2048];  // 4 KB
+  uint32_t lastFlush = 0;
+  for (;;) {
+    uint8_t cmd = recCmd;
+    if (cmd) {
+      recCmd = 0;
+      if (cmd == 1 && !recording) startRec();
+      else if (cmd == 2 && recording) stopRec(false);
+    }
+    if (!recording) {
+      vTaskDelay(pdMS_TO_TICKS(30));
+      continue;
+    }
+    size_t got = xStreamBufferReceive(recStream, chunk, sizeof(chunk), pdMS_TO_TICKS(40));
+    got &= ~1u;
+    if (!got) continue;
+    for (size_t i = 0; i < got / 2; i++) chunk[i] = (int16_t)constrain((int32_t)(chunk[i] * REC_GAIN), -32768, 32767);
+    if (recFile.write((uint8_t *)chunk, got) != got) {  // card full, or taken out
+      Serial.println("[rec] write failed, stopping");
+      stopRec(true);
+      continue;
+    }
+    recBytes += got;
+    if (millis() - lastFlush > 2000) {  // so little is lost if the power goes
+      recFile.flush();
+      lastFlush = millis();
+    }
+  }
+}
+
+static void toggleRecording() {
+  if (!sdOk) {
+    recErrorUntil = millis() + 2500;
+    Serial.println("[rec] no SD card");
+    return;
+  }
+  if (recording) {
+    recCmd = 2;
+    return;
+  }
+  prefs.putUInt("recN", prefs.getUInt("recN", 0) + 1);
+  recNum = prefs.getUInt("recN", 1);
+  recEpoch = timeValid() ? (uint32_t)time(nullptr) : 0;
+  if (!recEpoch) {  // no clock yet: remember when it started, work out the date once online
+    static int slot = 0;
+    pendingNum[slot % 8] = recNum;
+    pendingStartMs[slot % 8] = millis();
+    slot++;
+  }
+  recCmd = 1;
+}
+
+// Sends one finished recording to the Buddy server. Returns true if the server has it.
+static bool uploadFile(const String &name, uint32_t size) {
+  uint32_t num = 0, epoch = (uint32_t)atol(name.c_str());
+  int us = name.indexOf('_');
+  if (us > 0) num = (uint32_t)atol(name.c_str() + us + 1);
+  uint32_t dur = size > 44 ? (size - 44) / (SAMPLE_RATE * 2) : 0;
+  time_t now = time(nullptr);
+  time_t at = epoch;
+  if (!at) {  // made without a clock: date it from when this run started it, else from now
+    at = now - dur;
+    for (int i = 0; i < 8; i++)
+      if (pendingNum[i] == num && pendingNum[i]) at = now - (millis() - pendingStartMs[i]) / 1000;
+  }
+  WiFiClient c;
+  c.setTimeout(8);
+  if (!c.connect(resolvedHost.c_str(), resolvedPort, 5000)) return false;
+  String path = "/study/api/device/recording?recorded_at=" + String((long)at);
+  String hdr = "POST " + path + " HTTP/1.1\r\nHost: " + resolvedHost + ":" + String(resolvedPort) +
+               "\r\nContent-Type: audio/wav\r\nContent-Length: " + String(size) + "\r\nConnection: close\r\n";
+  if (cfgToken.length()) hdr += "X-Buddy-Token: " + cfgToken + "\r\n";
+  c.print(hdr + "\r\n");
+  File f = SD.open("/rec/" + name, FILE_READ);
+  if (!f) return false;
+  static uint8_t buf[4096];
+  uint32_t sent = 0;
+  bool ok = true;
+  while (sent < size) {
+    if (uploadAbort || !c.connected()) { ok = false; break; }
+    int n = f.read(buf, min<uint32_t>(sizeof(buf), size - sent));
+    if (n <= 0) { ok = false; break; }
+    int off = 0;
+    while (off < n && c.connected() && !uploadAbort) {
+      int w = c.write(buf + off, n - off);
+      if (w > 0) off += w;
+      else vTaskDelay(pdMS_TO_TICKS(5));
+    }
+    if (off < n) { ok = false; break; }
+    sent += n;
+  }
+  f.close();
+  uploadSdBusy = false;  // the SD card is free again; the rest is just waiting for the answer
+  if (!ok) { c.stop(); return false; }
+  uint32_t until = millis() + 60000;
+  while (!c.available() && c.connected() && millis() < until) vTaskDelay(pdMS_TO_TICKS(100));
+  String status = c.readStringUntil('\n');
+  c.stop();
+  Serial.printf("[upload] %s -> %s", name.c_str(), status.c_str());
+  return status.indexOf(" 200") > 0;
+}
+
+static void uploadTask(void *) {
+  uint32_t retryAt = 0;
+  for (;;) {
+    vTaskDelay(pdMS_TO_TICKS(4000));
+    if (!sdOk || recording || recCmd || !canUpload || ringMode != RING_NONE || millis() < retryAt || !timeValid()) continue;
+    String name;
+    uint32_t size = 0;
+    uploadAbort = false;
+    uploadSdBusy = true;
+    File dir = SD.open("/rec");
+    if (dir) {
+      for (File f = dir.openNextFile(); f; f = dir.openNextFile()) {
+        String n = f.name();
+        if (!f.isDirectory() && n.endsWith(".wav")) {
+          name = n;
+          size = f.size();
+          f.close();
+          break;
+        }
+        f.close();
+      }
+      dir.close();
+    }
+    if (!name.length()) {
+      uploadSdBusy = false;
+      continue;
+    }
+    if (size < 44 + (uint32_t)REC_MIN_UPLOAD_S * SAMPLE_RATE * 2) {  // an accidental hold, not a lesson
+      SD.remove("/rec/" + name);
+      uploadSdBusy = false;
+      continue;
+    }
+    uploading = true;
+    bool done = uploadFile(name, size);
+    uploadSdBusy = false;
+    uploading = false;
+    if (done) {
+      SD.remove("/rec/" + name);
+      retryAt = 0;
+    } else if (!uploadAbort) {
+      retryAt = millis() + 60000;  // the server said no (or went away): try again in a minute
+    }
+  }
+}
+
 // ------------------------------------------------------------------ connecting
 static bool resolveServer() {
   if (cfgHost.length() && cfgHost != "auto") {
@@ -663,6 +982,17 @@ static void startWebSocket() {
 
 static void maintainConnection() {
   static uint32_t wifiLostAt = 0;
+  static bool wasUp = WiFi.status() == WL_CONNECTED;  // already online at start-up: nothing to redo
+  bool up = WiFi.status() == WL_CONNECTED;
+  if (up && !wasUp) {  // just got onto Wi-Fi (booted away from home, or it dropped): start the clock and name lookup again
+    configTime(0, 0, "pool.ntp.org", "time.google.com", "time.cloudflare.com");
+    MDNS.end();
+    MDNS.begin(DEVICE_NAME);
+    resolvedHost = "";
+    lastConnectAttempt = 0;
+    Serial.printf("[wifi] online, IP %s\n", WiFi.localIP().toString().c_str());
+  }
+  wasUp = up;
   if (WiFi.status() != WL_CONNECTED) {
     if (!wifiLostAt) wifiLostAt = millis();
     if (millis() - wifiLostAt > 20000) {
@@ -681,9 +1011,17 @@ static void maintainConnection() {
 
 static void pumpMic() {
   static uint8_t buf[SEND_BYTES];
+  static bool wasRecording = false;
+  if (recording != wasRecording) {  // tell the server its microphone is off while a lesson is recorded
+    wasRecording = recording;
+    JsonDocument doc;
+    doc["type"] = "audio_mode";
+    doc["on"] = !recording && !micMuted;
+    sendJson(doc);
+  }
   while (xStreamBufferBytesAvailable(micStream) >= SEND_BYTES) {
     xStreamBufferReceive(micStream, buf, SEND_BYTES, 0);
-    if (wsConnected && !micMuted) ws.sendBIN(buf, SEND_BYTES);
+    if (wsConnected && !micMuted && !recording) ws.sendBIN(buf, SEND_BYTES);
   }
 }
 
@@ -699,15 +1037,13 @@ static void setMuted(bool muted) {
 
 static void handleButton() {
   static uint32_t downAt = 0;
-  static bool handledLong = false;
   bool down = digitalRead(BUTTON_PIN) == LOW;
   uint32_t now = millis();
-  if (down && !downAt) {
-    downAt = now;
-    handledLong = false;
-  }
-  if (down && downAt && !handledLong) {
-    if (now - downAt > 10000) {
+  if (down && !downAt) downAt = now;
+  if (down && downAt) {
+    uint32_t held = now - downAt;
+    holdStage = held >= 4000 ? 3 : held >= 2000 ? 2 : 0;  // the light shows what letting go will do
+    if (held > 10000) {
       Serial.println("[wifi] forgetting Wi-Fi, reopening setup hotspot");
       WiFiManager wm;
       wm.resetSettings();
@@ -718,13 +1054,20 @@ static void handleButton() {
   if (!down && downAt) {
     uint32_t held = now - downAt;
     downAt = 0;
+    holdStage = 0;
     if (held < 40) return;  // bounce
-    if (held >= 3000) {
+    if (held >= 4000) {  // 4-10 s: mute / unmute
       setMuted(!micMuted);
+      return;
+    }
+    if (held >= 2000) {  // 2-4 s: start / stop recording a lesson
+      toggleRecording();
       return;
     }
     if (ringMode != RING_NONE) {
       stopRinging("button");
+    } else if (recording) {
+      // a tap while recording a lesson does nothing (hold 2 s to stop)
     } else {
       JsonDocument doc;
       doc["type"] = "button";
@@ -747,6 +1090,9 @@ static void sendStats() {
   doc["dropped_mic"] = droppedMic;
   doc["muted"] = micMuted;
   doc["alarms"] = fireCount;
+  doc["sd"] = sdOk;
+  doc["recording"] = (bool)recording;
+  doc["rec_seconds"] = recording ? (millis() - recStartMs) / 1000 : 0;
   sendJson(doc);
 }
 
@@ -780,8 +1126,17 @@ void setup() {
   Serial.printf("[audio] speaker buffer %u KB, free heap %u KB\n",
                 (unsigned)(xStreamBufferSpacesAvailable(spkStream) / 1024), (unsigned)(ESP.getFreeHeap() / 1024));
   setupI2S();
+  sdBegin();
+  if (sdOk) {
+    size_t recBuf = ESP.getFreeHeap() > 220000 ? 24 * 1024 : 12 * 1024;  // about 0.7 s of microphone
+    recStream = xStreamBufferCreate(recBuf, 1);
+  }
   xTaskCreatePinnedToCore(micTask, "mic", 6144, nullptr, 6, nullptr, 0);
   xTaskCreatePinnedToCore(playTask, "play", 6144, nullptr, 6, nullptr, 1);
+  if (sdOk) {
+    xTaskCreatePinnedToCore(recTask, "rec", 6144, nullptr, 3, nullptr, 1);
+    xTaskCreatePinnedToCore(uploadTask, "upload", 8192, nullptr, 1, nullptr, 1);
+  }
 
   // Wi-Fi: first boot (or after a 10 s button hold) opens the "Buddy-Setup" hotspot.
   WiFi.mode(WIFI_STA);
@@ -800,7 +1155,14 @@ void setup() {
   wm.setConfigPortalTimeout(300);
   wm.setConnectTimeout(25);
   wm.setTitle("Buddy setup");
-  if (!wm.autoConnect(SETUP_AP_NAME, SETUP_AP_PASSWORD)) {
+  // Away from home (school) the saved network isn't there. If one was saved, don't open the setup hotspot
+  // or give up: carry on without Wi-Fi so lessons can be recorded, and join it when it appears.
+  bool hadWifi = wm.getWiFiIsSaved();
+  if (hadWifi) {
+    wm.setEnableConfigPortal(false);
+    wm.setConnectTimeout(12);
+  }
+  if (!wm.autoConnect(SETUP_AP_NAME, SETUP_AP_PASSWORD) && !hadWifi) {
     Serial.println("[wifi] no network configured in time; restarting");
     delay(1000);
     ESP.restart();
@@ -818,7 +1180,10 @@ void setup() {
     prefs.putString("token", cfgToken);
   }
   WiFi.setAutoReconnect(true);
-  Serial.printf("[wifi] connected, IP %s, RSSI %d\n", WiFi.localIP().toString().c_str(), WiFi.RSSI());
+  if (WiFi.status() == WL_CONNECTED)
+    Serial.printf("[wifi] connected, IP %s, RSSI %d\n", WiFi.localIP().toString().c_str(), WiFi.RSSI());
+  else
+    Serial.println("[wifi] not in range: working offline (lessons can still be recorded)");
 
   configTime(0, 0, "pool.ntp.org", "time.google.com", "time.cloudflare.com");
   MDNS.begin(DEVICE_NAME);
@@ -835,6 +1200,7 @@ void loop() {
     doc["seq"] = acceptSeq;
     sendJson(doc);
   }
+  canUpload = wsConnected && serverState == "idle";
   handleButton();
   checkAlarms();
   maintainConnection();
