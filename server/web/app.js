@@ -590,6 +590,9 @@ async function loadStatus() {
   stats.push(["Buddy's volume", `${S.settings.volume ?? "?"} of 10`]);
   const dev = devices[0]?.info || {};
   if (dev.rssi) stats.push(["Desk unit Wi-Fi", `${dev.rssi} dBm${dev.rssi < -75 ? " (weak)" : ""} · heap ${Math.round((dev.heap || 0) / 1024)} KB`]);
+  if (dev.fw) stats.push(["Desk unit software", `${dev.fw}` + (dev.sd === undefined ? " (older: can't record lessons)"
+    : dev.sd ? " · SD card found" + (dev.recording ? " · recording a lesson now" : "")
+    : " · SD card NOT found (check the 4 signal wires, 3V, GND and that the card is in)")]);
   if (dev.dropped_spk != null) stats.push(["Desk unit audio gaps", `speaker ${dev.dropped_spk} · mic ${dev.dropped_mic ?? 0}`]);
   const snd = st.alarm_sounds || {};
   stats.push(["Alarm sounds", snd.folder ? (snd.sounds.length ? snd.sounds.map((n, i) => `${i + 1}: ${n}`).join(", ")
