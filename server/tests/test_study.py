@@ -161,8 +161,8 @@ class CheckLLM(FakeLLM):
 
     async def chat(self, messages, **kw):
         self.prompts.append(messages[0]["content"])
-        if "is_lesson" in messages[0]["content"]:
-            return SimpleNamespace(content=json.dumps({"is_lesson": self.is_lesson, "subject": "Maths",
+        if "Give it a name" in messages[0]["content"]:
+            return SimpleNamespace(content=json.dumps({"subject": "Maths",
                                                        "about": "calculating angles in triangles."}))
         return SimpleNamespace(content=json.dumps(NOTES))
 
@@ -186,19 +186,19 @@ def check(tmp_path, seconds, stt, llm):
     return w, a["id"], w.recordings.get(a["id"], rec["id"])
 
 
-def test_short_recordings_are_not_lessons(tmp_path):
-    w, pid, rec = check(tmp_path, 90, WordySTT(), CheckLLM())
+def test_recordings_under_10_seconds_are_dropped(tmp_path):
+    w, pid, rec = check(tmp_path, 8, WordySTT(), CheckLLM())
     assert rec["status"] == "too_short" and w.recordings.listed(pid) == []
 
 
-def test_recording_with_hardly_any_words_is_dropped(tmp_path):
-    w, pid, rec = check(tmp_path, 150, WordySTT(words=2), CheckLLM())
-    assert rec["status"] == "unclear" and w.recordings.listed(pid) == []
+def test_anything_over_10_seconds_is_kept(tmp_path):
+    w, pid, rec = check(tmp_path, 12, WordySTT(words=2), CheckLLM())
+    assert rec["status"] == "ready" and len(w.recordings.listed(pid)) == 1
 
 
-def test_chatter_that_isnt_a_lesson_is_dropped(tmp_path):
-    w, pid, rec = check(tmp_path, 150, WordySTT(), CheckLLM(is_lesson=False))
-    assert rec["status"] == "not_lesson" and w.recordings.listed(pid) == []
+def test_silent_recording_is_still_kept(tmp_path):
+    w, pid, rec = check(tmp_path, 12, WordySTT(words=0), CheckLLM())
+    assert rec["status"] == "ready" and w.recordings.listed(pid)[0]["about"] == "couldn't make out any words"
 
 
 def test_real_lesson_is_named_and_listed_then_becomes_notes(tmp_path):

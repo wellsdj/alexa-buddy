@@ -33,8 +33,7 @@ SR = 16000
 CHUNK_MIN_S, CHUNK_MAX_S = 18, 28  # long recordings are cut at quiet moments into pieces this long
 MAX_TRANSCRIPT_CHARS = 120_000  # about two hours of talking
 MAX_UPLOAD_BYTES = 400 * 1024 * 1024
-MIN_LESSON_S = 120  # recordings shorter than 2 minutes aren't lessons
-MIN_LESSON_WORDS = 150  # and ones where hardly any words come out (in a pocket, say) aren't either
+MIN_LESSON_S = 10  # anything 10 seconds or longer is kept, whatever it's about
 INBOX_FOLDER = "Buddy lessons"  # voice memos put in a folder with this name on the Mac are picked up too
 AUDIO_EXT = {".m4a", ".mp3", ".wav", ".aac", ".caf", ".aif", ".aiff", ".flac", ".ogg", ".mp4", ".qta"}
 
@@ -461,7 +460,7 @@ class StudyWorker:
         return " ".join(words)[:MAX_TRANSCRIPT_CHARS], int(len(audio) / SR)
 
     async def check_recording(self, pid: str, rid: str) -> None:
-        """Long enough? Real lesson talk? If so it goes in the list, named after its subject and day."""
+        """10 seconds or longer? Then it goes in the list, named after its subject and day."""
         try:
             rec = self.recordings.get(pid, rid)
         except StudyError:
@@ -477,18 +476,18 @@ class StudyWorker:
                 rec["status"] = "too_short"
                 return
             rec["transcript"], rec["duration_s"] = await self._transcribe_file(audio_file)
-            if len(rec["transcript"].split()) < MIN_LESSON_WORDS:
-                rec["status"] = "unclear"  # hardly any words: in a pocket, or an accident
-                return
             sample = " ".join(rec["transcript"].split()[:2500])
-            r = await self.llm.chat([{"role": "user", "content": CHECK_PROMPT.format(text=sample)}],
-                                    tier="fast", json_mode=True, max_tokens=300)
-            verdict = _parse_json(r.content)
-            if not verdict.get("is_lesson"):
-                rec["status"] = "not_lesson"
-                return
+            verdict = {}
+            if sample:
+                try:  # just names it; every recording is kept
+                    r = await self.llm.chat([{"role": "user", "content": CHECK_PROMPT.format(text=sample)}],
+                                            tier="fast", json_mode=True, max_tokens=300)
+                    verdict = _parse_json(r.content)
+                except Exception:
+                    verdict = {}
             rec["subject"] = _clean_name(str(verdict.get("subject", "")))
-            rec["about"] = str(verdict.get("about", "")).strip().rstrip(".")[:80]
+            rec["about"] = str(verdict.get("about", "")).strip().rstrip(".")[:80] or (
+                "" if sample else "couldn't make out any words")
             rec["name"] = f"{rec['subject']} lesson" if rec["subject"] else "Lesson"
             rec["status"] = "ready"
         except StudyError as e:

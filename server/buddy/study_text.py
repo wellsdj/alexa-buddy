@@ -6,9 +6,8 @@ import hashlib
 import json
 import re
 
-CHECK_PROMPT = """Here is the start of an automatic transcript of a recording made in a school. Decide whether it is
-a lesson where something is being taught or discussed (not just chatter, noise or a recording made by accident).
-Reply with JSON only: {{"is_lesson": true or false, "subject": "the school subject, one or two words, e.g. Maths",
+CHECK_PROMPT = """Here is the start of an automatic transcript of a recording made at school. Give it a name.
+Reply with JSON only: {{"subject": "the school subject, one or two words, e.g. Maths (your best guess)",
 "about": "what it was about in under 8 words, starting with a small letter"}}
 
 Transcript:

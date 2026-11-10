@@ -24,7 +24,7 @@
 
 #include "config.h"
 
-#define FW_VERSION "1.5.1"
+#define FW_VERSION "1.5.2"
 #define SAMPLE_RATE 16000
 #define MIC_FRAMES 320               // 20 ms per I2S read
 #define SEND_BYTES 1280              // 40 ms of 16-bit audio per WebSocket frame
@@ -80,6 +80,8 @@ static volatile uint8_t recCmd = 0;          // 1 = start, 2 = stop (handled by 
 static uint32_t recEpoch = 0, recNum = 0, recStartMs = 0;
 static volatile uint32_t recBytes = 0, droppedRec = 0;
 static volatile uint32_t recErrorUntil = 0;  // quick red flicker when a recording can't start or the card fails
+static volatile uint32_t recOkUntil = 0;     // bright green for 3 s: saved / sent
+static volatile uint32_t recBadUntil = 0;    // bright red for 3 s: too short (deleted) / couldn't send
 static volatile uint8_t holdStage = 0;       // while the button is held: 2 = release to record, 3 = release to mute
 static volatile bool uploading = false;      // a recording is on its way to the Mac
 static volatile bool uploadSdBusy = false;   // the upload task is reading the SD card
@@ -350,6 +352,10 @@ static void updateLed() {
     led(180, 0, 0);
   } else if (t < recErrorUntil) {  // couldn't record (no card, card full)
     led(((t / 120) % 2) ? 255 : 0, 0, 0);
+  } else if (t < recOkUntil) {  // saved / sent
+    led(0, 255, 0);
+  } else if (t < recBadUntil) {  // too short / couldn't send
+    led(255, 0, 0);
   } else if (ringMode != RING_NONE) {
     bool on = (t / 250) % 2;
     led(on ? 255 : 40, on ? 150 : 20, 0);
@@ -428,6 +434,10 @@ static void stripUpdate() {
       r = 0.6f;
     } else if (t < recErrorUntil) {  // couldn't record
       r = ((t / 120) % 2) ? 0.8f : 0;
+    } else if (t < recOkUntil) {  // saved / sent: bright green
+      g = 0.9f;
+    } else if (t < recBadUntil) {  // too short / couldn't send: bright red
+      r = 0.9f;
     } else if (ringMode != RING_NONE) {  // alarm: amber, pulsing
       float v = 0.35f + 0.65f * ((sinf(sec * 2 * PI * 2.0f) + 1) * 0.5f);
       r = v; g = v * 0.45f;
@@ -792,15 +802,17 @@ static void stopRec(bool failed) {
   recFile.write(h, 44);
   recFile.close();
   String part = recName(recEpoch, recNum, "part"), wav = recName(recEpoch, recNum, "wav");
-  if (recBytes < (uint32_t)SAMPLE_RATE * 2 * 2) {  // under 2 s: a slip of the finger
+  if (recBytes < (uint32_t)REC_MIN_UPLOAD_S * SAMPLE_RATE * 2) {  // too short to keep
     SD.remove(part);
     Serial.println("[rec] too short, discarded");
+    recBadUntil = millis() + 3000;
     return;
   }
   SD.rename(part, wav);
   Serial.printf("[rec] saved %s (%lu s, %lu dropped pieces)\n", wav.c_str(), (unsigned long)(recBytes / (SAMPLE_RATE * 2)),
                 (unsigned long)droppedRec);
   if (failed) recErrorUntil = millis() + 4000;
+  else recOkUntil = millis() + 3000;
 }
 
 static void recTask(void *) {
@@ -945,7 +957,9 @@ static void uploadTask(void *) {
     if (done) {
       SD.remove("/rec/" + name);
       retryAt = 0;
+      recOkUntil = millis() + 3000;
     } else if (!uploadAbort) {
+      recBadUntil = millis() + 3000;
       retryAt = millis() + 60000;  // the server said no (or went away): try again in a minute
     }
   }

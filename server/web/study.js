@@ -188,7 +188,7 @@ function howItWorks() {
   const step = (n, icon, t, d) => `<div class="step"><span class="step-icon">${icon}</span><div><b>${n}. ${t}</b><p class="muted small">${d}</p></div></div>`;
   return `<div class="steps-card">
     ${step(1, `<svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>`, "Record a lesson",
-      "Use Voice Memos on your phone (ask your teacher first), or the pocket Buddy. Longer than 2 minutes.")}
+      "Use Voice Memos on your phone (ask your teacher first), or the pocket Buddy. Longer than 10 seconds.")}
     ${step(2, `<svg viewBox="0 0 24 24"><path d="M3 7h6l2 2h10v10H3z"/></svg>`, "Put it in “Buddy lessons”",
       "AirDrop it to the Mac and drop it in the Buddy lessons folder on the Desktop. Buddy checks it's a lesson and names it.")}
     ${step(3, `<svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>`, "Start revising",
@@ -244,7 +244,7 @@ async function addView() {
     <a class="back" href="#/">← Lessons</a>
     <h1 class="fade" style="margin-top:20px">Choose a recording</h1>
     <p class="muted small">${data.mine
-      ? `Recordings from your pocket Buddy appear here by themselves${data.folder ? `, and so do voice memos you put in the “${esc(data.folder_name)}” folder` : ""}. Only real lessons over 2 minutes are kept.`
+      ? `Recordings from your pocket Buddy appear here by themselves${data.folder ? `, and so do voice memos you put in the “${esc(data.folder_name)}” folder` : ""}. Anything over 10 seconds is kept.`
       : `Recordings from the pocket Buddy go to someone else. <button class="link" id="mine">Send them to me instead</button>`}</p>
     <div class="recs" id="recs">${recs.length ? recs.map(recRow).join("")
       : `<p class="empty">No recordings yet.${data.mine && !data.folder ? ` To add voice memos from your phone, make a folder called “${esc(data.folder_name)}” on this Mac's Desktop and put them in it.` : ""}</p>`}</div>
