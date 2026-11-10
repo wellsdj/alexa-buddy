@@ -17,7 +17,7 @@ subject and date, and it shows up in Study Buddy.
 Card: any micro SD, FAT32 (the usual factory format). The board makes a folder called `rec` on it.
 
 ## Using it
-- **Hold the button 2-4 seconds, then let go**: starts a recording. The light pulses red while it records.
+- **Hold the button 2-4 seconds, then let go**: starts a recording. The light pulses purple while it records.
 - **Do the same again**: stops it. (A tap does nothing while recording, so it can't be stopped by accident.)
 - While you hold, the light shows what letting go will do: **magenta** = record / stop, **red** (after 4 s) = mute.
 - Quick red flicker = it couldn't record (no card in, or the card is full).

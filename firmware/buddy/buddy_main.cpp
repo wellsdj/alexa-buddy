@@ -24,7 +24,7 @@
 
 #include "config.h"
 
-#define FW_VERSION "1.5.0"
+#define FW_VERSION "1.5.1"
 #define SAMPLE_RATE 16000
 #define MIC_FRAMES 320               // 20 ms per I2S read
 #define SEND_BYTES 1280              // 40 ms of 16-bit audio per WebSocket frame
@@ -353,8 +353,9 @@ static void updateLed() {
   } else if (ringMode != RING_NONE) {
     bool on = (t / 250) % 2;
     led(on ? 255 : 40, on ? 150 : 20, 0);
-  } else if (recording) {  // recording a lesson: a slow red pulse
-    led((uint8_t)(70 + 185 * breath), 0, 0);
+  } else if (recording) {  // recording a lesson: a slow purple pulse
+    uint8_t v = 70 + (uint8_t)(185 * breath);
+    led(v * 0.6f, 0, v);
   } else if (uploading) {  // sending a lesson home: teal
     led(0, (uint8_t)(60 + 120 * breath), (uint8_t)(60 + 120 * breath));
   } else if (micMuted) {
@@ -430,8 +431,9 @@ static void stripUpdate() {
     } else if (ringMode != RING_NONE) {  // alarm: amber, pulsing
       float v = 0.35f + 0.65f * ((sinf(sec * 2 * PI * 2.0f) + 1) * 0.5f);
       r = v; g = v * 0.45f;
-    } else if (recording) {  // recording a lesson: a quiet red pulse
-      r = 0.12f + 0.2f * ((sinf(sec * 2 * PI * 0.5f) + 1) * 0.5f);
+    } else if (recording) {  // recording a lesson: a quiet purple pulse
+      float v = 0.12f + 0.2f * ((sinf(sec * 2 * PI * 0.5f) + 1) * 0.5f);
+      r = v * 0.6f; b = v;
     } else if (uploading) {  // sending a lesson home: teal, breathing
       float v = 0.25f + 0.3f * ((sinf(sec * 2 * PI * 0.6f + k * 0.2f) + 1) * 0.5f);
       g = v; b = v;
