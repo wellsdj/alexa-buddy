@@ -67,6 +67,16 @@ Every stage waits for the stage before it to finish completely.
 | e | **Faster Haiku.** Thinking off. A shorter system prompt with prompt caching. Answers of one or two spoken sentences. A low `max_tokens`. | `fast_haiku` (on) | Faster Haiku first token. Check the answers still sound as good. |
 | f | **Interruption.** If you talk while Buddy is speaking: stop playback, cancel the Haiku stream and clear the TTS buffer. | `barge_in` (on) | Buddy goes quiet within about 200 ms. **Risk:** its own voice could set it off (no echo cancelling yet). |
 
+**No gap after the first sentence (part of a).** Buddy shouldn't say sentence 1, go quiet, then say sentence 2. Here's how it will start speaking:
+1. Haiku writes much faster than Buddy talks: about 2 seconds of speech arrive every 0.1–0.2 s.
+2. Buddy starts speaking once two things are true:
+   - the first sentence's audio has arrived;
+   - the 2nd sentence has started arriving, or the answer is finished. One-sentence answers don't wait.
+3. While Buddy speaks, the Mac keeps at least about 0.4 s of voice queued ahead. If it ever runs short, the next part is held back until there's enough again, rather than playing in bits.
+4. The log line shows "gaps" (any moment Buddy ran out of audio mid-answer). This should stay at 0.
+
+Settings: `start_after_sentences` (default 1, plus the start of the next one) and `min_audio_ahead_ms` (400). If there are still gaps, raise either setting. That costs about 100–200 ms more wait at the start.
+
 Also: the **half-second hold** can shrink to about 150 ms once audio is streaming steadily (setting `play_hold_ms`). **Risk:** stutter on weak Wi-Fi. I'll tell you if it happens.
 
 ### Options for d (transcribing while you speak)
