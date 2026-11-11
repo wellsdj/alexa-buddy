@@ -205,3 +205,18 @@ On each lesson page, a player like the one in your picture, in Buddy's style.
 - **Online (Vercel):** storing audio there may need Vercel Blob storage, which can cost money. I'll ask before turning that on. Until then, audio plays on the Mac page only.
 
 **Check:** it works on the Mac page and on your phone (touch dragging). Boost doesn't distort. Downloads open in the Music app.
+
+---
+
+# Later: "Connected" badge instead of "Ready"
+
+Status: **not started.**
+
+The top left of the Buddy page shows "Ready" (`app.js`, idle state). Replace it with an icon of the Buddy box and a badge:
+- 🟢 **Connected**, in green: the ESP32 is online and talking to the Mac.
+- 🔴 **Disconnected – not plugged in**, in red: no ESP32 connected, or none for over ~10 s.
+
+Details:
+- It updates by itself the moment the ESP32 connects or drops, with no page refresh.
+- Buddy's state (listening, thinking, speaking) moves into the small line under the badge.
+- Hover or tap the badge to see the ESP32's Wi-Fi strength and firmware version.
