@@ -31,8 +31,7 @@ btn_boss_d = 19; btn_boss_t = 3;  // a thicker ring of plastic inside, so the nu
 btn_z = 20;                       // height above the floor
 btn_y_from_back = 15;             // distance from the back wall
 
-label = "buddy"; label_size = 8; label_depth = 0.6;
-font = "Liberation Sans:style=Bold";
+logo_size = 16; logo_depth = 0.6;   // the winking Buddy face on the lid, 16 mm square
 $fn = 56;
 
 W = in_w + 2*wall;
@@ -92,6 +91,22 @@ module base_body() {
   translate([wall + 3, wall + led_gap, floor_t - 0.01]) cube([W - 2*wall - 6, led_plate, slit_z + slit_h + 6]);
 }
 
+
+// The Buddy logo: a rounded square sunk into the lid, with the face (open eye, wink, smile) left standing.
+// Drawn on a 100-unit grid (same as the logo picture), y pointing to the back of the box.
+function qpts(p0, p1, p2, n = 12) = [for (i = [0 : n]) let (t = i / n)
+  (1 - t) * (1 - t) * p0 + 2 * (1 - t) * t * p1 + t * t * p2];
+module stroke(pts, w) { for (i = [0 : len(pts) - 2]) hull() { translate(pts[i]) circle(d = w, $fn = 20); translate(pts[i + 1]) circle(d = w, $fn = 20); } }
+function L(x, y) = [x - 50, 50 - y];   // picture coordinates -> centred, y up
+module logo2d(size) {
+  scale(size / 88) difference() {
+    offset(r = 30, $fn = 48) square(28, center = true);
+    hull() { translate(L(36, 38)) circle(d = 10, $fn = 24); translate(L(36, 46)) circle(d = 10, $fn = 24); }  // open eye
+    stroke(qpts(L(55, 46), L(63, 37), L(71, 46)), 7);   // wink
+    stroke(qpts(L(38, 68), L(50, 76), L(62, 68)), 6);   // smile
+  }
+}
+
 module lid() {   // modelled where it sits on the box
   iw = W - 2*wall - 2*fit; id = D - 2*wall - 2*fit;
   difference() {
@@ -119,8 +134,7 @@ module lid() {   // modelled where it sits on the box
       for (ring = [[6, 3.2], [12, 6.4]]) for (k = [0 : ring[0] - 1])
         rotate(k * 360 / ring[0]) translate([ring[1], 0, 0]) cylinder(d = 1.6, h = lid_t + 2);
     }
-    translate([W/2, 13, H + lid_t - label_depth]) linear_extrude(label_depth + 1)
-      text(label, size = label_size, font = font, halign = "center", valign = "center");
+    translate([W/2, 13, H + lid_t - logo_depth]) linear_extrude(logo_depth + 1) logo2d(logo_size);
   }
 }
 
