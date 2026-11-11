@@ -163,7 +163,7 @@ Status: **not started.** I've checked that the free model works, but no code is 
   2. Buddy saves a "voiceprint" in its private data folder. It never goes to GitHub.
   3. Other people can do the same, if you want Buddy to know them by name.
 - **Then each turn,** Buddy checks the voice at the same time as it transcribes, so it adds no delay. It notes who spoke: you, another known person, or someone unknown.
-- **Set up on the Buddy page:** a new "Your voice" tab, with a name box, the sentences to read and a progress bar. Recordings can be deleted. The Mic test shows "sounds like Andrew (0.72)" on each line, so you can check it works.
+- **Set up on the Buddy page:** a new "Your voice" tab, with a name box, the sentences to read and a progress bar. Recordings can be deleted. The Mic test shows "sounds like you (0.72)" on each line, so you can check it works.
 - **What Buddy does with it** is to be decided later. Options:
   - only answer you
   - only you can change alarms
