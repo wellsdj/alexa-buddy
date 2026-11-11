@@ -3,6 +3,7 @@
 Status: **not started.** I've checked that the free model works, but no code is written.
 
 - **Model:** CAM++. It's free, runs on the Mac and is about 29 MB. It uses the same speech library Buddy already has, so there are no new paid services.
+- **Your recording:** `New ai training.m4a`. It's 5 min 5 s, mono, recorded on your laptop, with only you talking. It is **not** stored in GitHub, because voice recordings stay private, so keep your own copy on the laptop to upload.
 - **Use a recording you already have.** About 5 minutes of only you talking is plenty. A clip recorded on Buddy's own mic, such as a Pocket Buddy recording, works best.
   1. Upload it on the "Your voice" tab.
   2. Buddy cuts out the quiet bits and makes your voiceprint from it. Nothing to read out.
