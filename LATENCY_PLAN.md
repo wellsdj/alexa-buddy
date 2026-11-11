@@ -132,3 +132,20 @@ Covers both web pages: Buddy (`server/web/index.html`, `app.js`, `style.css`) an
    - Make sure nothing you use was removed.
    - Run the tests.
 5. **One commit per page.** You check each one before I move on.
+
+---
+
+# Later: more ideas
+
+Status: **not started.**
+
+1. **Fix the broken bits first**, before the speed work.
+   - Put back the missing `async def _accept(...)` line in `hub.py`. Without it, a quiet "hey buddy" that gets checked silently crashes, and Buddy can get stuck and stop waking up.
+   - Fix the 9 tests that already fail.
+2. **Find the "light comes on, then goes off" bug.** You say a quiet "hey buddy" and the light comes on, but Buddy doesn't take in what you say and the light goes off again.
+   - My guess: the wake word heard you, but your voice was too quiet for the speech detector (it needs a speech score of 0.5). So Buddy thinks nobody is talking and gives up after 6 s.
+   - Check it in the Activity tab and in the timing logs, then fix it. Options: a lower speech threshold just after a wake, or more mic gain.
+3. **Echo cancelling.** The Mac removes Buddy's own voice from the mic sound. Then interruption (change f) only reacts to *you*, not to Buddy hearing itself.
+4. **A speed panel on the Buddy page.** It shows each turn's timings (from Step 1), with the average of the last 10.
+5. **Updating the ESP32 over Wi-Fi.** Put new firmware on Buddy from the Mac, with no USB cable, which helps once it's in the box. It falls back to the old firmware if the update fails.
+6. **Ready-made audio for common replies** such as "Done", "Timer set" and "Okay". They are made once and saved, so they play instantly and save ElevenLabs credits.
