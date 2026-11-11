@@ -106,3 +106,29 @@ When all the changes are done, the report will include:
 - a before-and-after table of each stage's time
 - every setting and its default
 - every problem that is still open
+
+---
+
+# Later: tidy up Buddy and Study Buddy
+
+Status: **not started.**
+
+Covers both web pages: Buddy (`server/web/index.html`, `app.js`, `style.css`) and Study Buddy (`study.html`, `study.js`, `study.css`, plus the online copy on Vercel).
+
+1. **Remove what isn't needed**
+   - Text: long explanations, repeated hints and labels that say the obvious.
+   - Information: settings and status details you never use. Move rarely used items under an "Advanced" section rather than delete them.
+   - Code: unused functions, old settings, dead CSS and leftover code in the server and the pages.
+     - Example: the broken `_accept` code in `hub.py` gets fixed or removed.
+2. **Make important things stand out**
+   - Make important things bigger and **bold**: Buddy's state, the last thing heard and said, errors, and today's lesson or questions in Study Buddy.
+   - Make less important things smaller and lighter.
+3. **Make buttons feel like real buttons**
+   - Make them bigger and easier to press on a phone, with a clear button shape and colour.
+   - When pressed, they visibly push down, and they change straight away. A spinner shows if something takes longer than a moment.
+   - The same button style is used everywhere.
+4. **Check**
+   - Take before-and-after screenshots of every page, on a phone and on the Mac.
+   - Make sure nothing you use was removed.
+   - Run the tests.
+5. **One commit per page.** You check each one before I move on.
