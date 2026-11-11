@@ -10,7 +10,7 @@ const S = {
 };
 const STATE_TEXT = {
   offline: ["Offline", "Can't reach the Buddy server. It retries automatically."],
-  idle: ["Ready", "Say “hey buddy” with hands-free on, hold the mic, or type."],
+  idle: ["Ready", "Hold the mic or type."],
   listening: ["Listening…", "Go ahead, I'm listening."],
   thinking: ["Thinking…", "Working on it."],
   speaking: ["Speaking", "Press stop to interrupt."],
@@ -263,7 +263,7 @@ async function setHandsFree(on) {
   try {
     if (on) await Mic.start();
     S.handsFree = on;
-    $("handsfree").setAttribute("aria-pressed", String(on));
+    $("handsfree")?.setAttribute("aria-pressed", String(on));
     send({ type: "audio_mode", on });
     if (!on && !S.ptt) Mic.stop();
     toast(on ? "Hands-free on: say “hey buddy”." : "Hands-free off.");
@@ -648,7 +648,7 @@ function init() {
   document.addEventListener("pointerdown", () => Audio_.ensure(), { once: true });
   $("orb").onclick = () => { send({ type: "stop_speaking" }); Audio_.stop(); };
   $("stop").onclick = () => { send({ type: "stop_speaking" }); Audio_.stop(); };
-  $("handsfree").onclick = () => setHandsFree(!S.handsFree);
+  if ($("handsfree")) $("handsfree").onclick = () => setHandsFree(!S.handsFree);
   const ptt = $("ptt");
   ptt.addEventListener("pointerdown", (e) => { e.preventDefault(); pttDown(); });
   ptt.addEventListener("pointerup", pttUp);

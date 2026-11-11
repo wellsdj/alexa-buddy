@@ -9,7 +9,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap">
-<link rel="stylesheet" href="/static/style.css?v=chat13">
+<link rel="stylesheet" href="/static/style.css?v=chat14">
 </head>
 <body>
 <header class="top">
@@ -59,15 +59,12 @@
     <button class="btn primary" id="ring-stop">Stop</button>
   </div>
   <form class="composer" id="ask-form" autocomplete="off">
-    <button type="button" class="chip-toggle" id="handsfree" aria-pressed="false" title="Hands-free: say “hey buddy”">
-      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10v4M8 6v12M12 3v18M16 7v10M20 10v4"/></svg><span>Hands-free</span>
-    </button>
     <input id="ask" type="text" placeholder="Message Buddy" aria-label="Message">
     <button type="button" class="round ghost" id="stop" aria-label="Stop talking" title="Stop"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="2"/></svg></button>
     <button type="button" class="round ghost" id="ptt" aria-label="Hold to talk" title="Hold to talk (or hold Space)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z"/><path d="M19 11a7 7 0 0 1-14 0M12 18v3"/></svg></button>
     <button type="submit" class="round primary send" aria-label="Send"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"/></svg></button>
   </form>
-  <p class="hint" id="state-hint">Say “hey buddy” with hands-free on, hold the mic, or type.</p>
+  <p class="hint" id="state-hint">Hold the mic or type.</p>
 </footer>
 
 <div class="scrim" id="scrim" hidden></div>
@@ -284,6 +281,6 @@
 </aside>
 
 <div class="toast" id="toast" role="status" hidden></div>
-<script src="/static/app.js?v=chat8"></script>
+<script src="/static/app.js?v=chat9"></script>
 </body>
 </html>
