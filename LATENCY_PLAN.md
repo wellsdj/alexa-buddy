@@ -8,6 +8,7 @@ Status: **not started.** I've checked that the free model works, but no code is 
   1. Upload it on the "Your voice" tab.
   2. Buddy cuts out the quiet bits and makes your voiceprint from it. Nothing to read out.
   3. Your recording is from your laptop mic, which sounds a bit different from Buddy's mic. So after uploading, add a short top-up: about 30 s spoken to the desk unit. It makes recognition more reliable.
+     - The fake maths lesson (10 Nov) can't be used for this. Buddy deletes a recording once it has turned it into words, and the ESP32 deletes it from the SD card after sending it. The top-up is recorded live on the "Your voice" tab instead.
 - **No training needed.** You only record yourself once:
   1. Read about 8 short sentences to the desk unit, from where you usually sit. That's about 30 seconds.
   2. Buddy saves a "voiceprint" in its private data folder. It never goes to GitHub.
