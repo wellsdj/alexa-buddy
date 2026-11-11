@@ -212,9 +212,11 @@ On each lesson page, a player like the one in your picture, in Buddy's style.
 
 Status: **not started.**
 
-The top left of the Buddy page shows "Ready" (`app.js`, idle state). Replace it with an icon of the Buddy box and a badge:
-- 🟢 **Connected**, in green: the ESP32 is online and talking to the Mac.
-- 🔴 **Disconnected – not plugged in**, in red: no ESP32 connected, or none for over ~10 s.
+The top left of the Buddy page shows "Ready" (`app.js`, idle state). Replace it with an animated Buddy face (the winking logo style) and a badge:
+- 🟢 **Connected**, in green: a **happy face**. It does a little bounce and a wink when the ESP32 connects, then blinks now and then.
+- 🔴 **Disconnected**, in red: a **sad face**. The mouth turns down and it droops a little, with a slow sad blink.
+- The face switches with a short animation (about 0.4 s) the moment the state changes.
+- Made in plain CSS and SVG, so it's light and adds no new files to download.
 
 Details:
 - It updates by itself the moment the ESP32 connects or drops, with no page refresh.
