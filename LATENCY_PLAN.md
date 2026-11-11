@@ -174,3 +174,34 @@ Status: **not started.**
 4. **A speed panel on the Buddy page.** It shows each turn's timings (from Step 1), with the average of the last 10.
 5. **Updating the ESP32 over Wi-Fi.** Put new firmware on Buddy from the Mac, with no USB cable, which helps once it's in the box. It falls back to the old firmware if the update fails.
 6. **Ready-made audio for common replies** such as "Done", "Timer set" and "Okay". They are made once and saved, so they play instantly and save ElevenLabs credits.
+
+---
+
+# Later: listen to your lessons (Study Buddy audio player)
+
+Status: **not started.**
+
+On each lesson page, a player like the one in your picture, in Buddy's style.
+
+**Looks:**
+- Black background, with the lesson title in Krona One using the pink-to-blue gradient.
+- The purple Buddy logo where the music note is.
+- Rounded white controls.
+
+**Controls:**
+- **Playbar:** drag the dot to any point. Elapsed and total time shown, e.g. 0:45 / 1:00.
+- **← / → arrow keys:** jump back or forward 5 s. Space plays and pauses.
+- **⏮ ⏭ buttons:** a tap jumps 5 s. Holding them goes to the previous or next lesson.
+- **⏸ / ▶:** play and pause.
+- **🔁:** repeat.
+- **⋯ menu** (replaces shuffle):
+  - **Download** the recording.
+  - **Boost volume** (×1, ×2, ×3), for quiet classroom recordings.
+  - Playback speed (0.75× to 2×).
+
+**What has to change:** right now Buddy **deletes the recording** once it has the words, to keep your voice private. For this to work:
+- Recordings are **kept** on the Mac, in the private data folder, never in GitHub.
+- Each one has a **Delete recording** button. An optional setting deletes them after X days.
+- **Online (Vercel):** storing audio there may need Vercel Blob storage, which can cost money. I'll ask before turning that on. Until then, audio plays on the Mac page only.
+
+**Check:** it works on the Mac page and on your phone (touch dragging). Boost doesn't distort. Downloads open in the Music app.
