@@ -6,6 +6,7 @@ Status: **not started.** I've checked that the free model works, but no code is 
 - **Use a recording you already have.** About 5 minutes of only you talking is plenty. A clip recorded on Buddy's own mic, such as a Pocket Buddy recording, works best.
   1. Upload it on the "Your voice" tab.
   2. Buddy cuts out the quiet bits and makes your voiceprint from it. Nothing to read out.
+  3. Your recording is from your laptop mic, which sounds a bit different from Buddy's mic. So after uploading, add a short top-up: about 30 s spoken to the desk unit. It makes recognition more reliable.
 - **No training needed.** You only record yourself once:
   1. Read about 8 short sentences to the desk unit, from where you usually sit. That's about 30 seconds.
   2. Buddy saves a "voiceprint" in its private data folder. It never goes to GitHub.
