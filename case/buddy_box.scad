@@ -31,7 +31,9 @@ btn_boss_d = 19; btn_boss_t = 3;  // a thicker ring of plastic inside, so the nu
 btn_z = 20;                       // height above the floor
 btn_y_from_back = 15;             // distance from the back wall
 
-logo_size = 16; logo_depth = 0.6;   // the winking Buddy face on the lid, 16 mm square
+logo_size = 14; logo_depth = 0.6;   // the winking Buddy face on the lid, 14 mm square
+logo_y = 21;                        // centre of the face, from the front edge
+word_h = 4.5; word_y = 9;           // "BUDDY" under it (Nulshock Bold, saved as outlines in buddy_text.svg)
 $fn = 56;
 
 W = in_w + 2*wall;
@@ -134,7 +136,9 @@ module lid() {   // modelled where it sits on the box
       for (ring = [[6, 3.2], [12, 6.4]]) for (k = [0 : ring[0] - 1])
         rotate(k * 360 / ring[0]) translate([ring[1], 0, 0]) cylinder(d = 1.6, h = lid_t + 2);
     }
-    translate([W/2, 13, H + lid_t - logo_depth]) linear_extrude(logo_depth + 1) logo2d(logo_size);
+    translate([W/2, logo_y, H + lid_t - logo_depth]) linear_extrude(logo_depth + 1) logo2d(logo_size);
+    translate([W/2, word_y, H + lid_t - logo_depth]) linear_extrude(logo_depth + 1)
+      scale(word_h / 10) translate([-28.5, -25.3]) import("buddy_text.svg");   // centres the 57 x 10 outlines
   }
 }
 
