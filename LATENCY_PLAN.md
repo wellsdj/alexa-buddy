@@ -1,3 +1,24 @@
+# FIRST: voice recognition (knows who is speaking)
+
+Status: **not started.** I've checked that the free model works, but no code is written.
+
+- **Model:** CAM++. It's free, runs on the Mac and is about 29 MB. It uses the same speech library Buddy already has, so there are no new paid services.
+- **Use a recording you already have.** About 5 minutes of only you talking is plenty. A clip recorded on Buddy's own mic, such as a Pocket Buddy recording, works best.
+  1. Upload it on the "Your voice" tab.
+  2. Buddy cuts out the quiet bits and makes your voiceprint from it. Nothing to read out.
+- **No training needed.** You only record yourself once:
+  1. Read about 8 short sentences to the desk unit, from where you usually sit. That's about 30 seconds.
+  2. Buddy saves a "voiceprint" in its private data folder. It never goes to GitHub.
+  3. Other people can do the same, if you want Buddy to know them by name.
+- **Then each turn,** Buddy checks the voice at the same time as it transcribes, so it adds no delay. It notes who spoke: you, another known person, or someone unknown.
+- **Set up on the Buddy page:** a new "Your voice" tab, with a name box, the sentences to read and a progress bar. Recordings can be deleted. The Mic test shows "sounds like you (0.72)" on each line, so you can check it works.
+- **What Buddy does with it** is to be decided later. Options:
+  - only answer you
+  - only you can change alarms
+  - personal memories for each person
+
+---
+
 # Plan: make Buddy answer faster
 
 Goal: the time from the end of your speech to Buddy's first sound goes from 1.5–2 s to **800 ms or less**, with no change you can hear in the answers.
@@ -150,21 +171,3 @@ Status: **not started.**
 4. **A speed panel on the Buddy page.** It shows each turn's timings (from Step 1), with the average of the last 10.
 5. **Updating the ESP32 over Wi-Fi.** Put new firmware on Buddy from the Mac, with no USB cable, which helps once it's in the box. It falls back to the old firmware if the update fails.
 6. **Ready-made audio for common replies** such as "Done", "Timer set" and "Okay". They are made once and saved, so they play instantly and save ElevenLabs credits.
-
----
-
-# Later: voice recognition (knows who is speaking)
-
-Status: **not started.** I've checked that the free model works, but no code is written.
-
-- **Model:** CAM++. It's free, runs on the Mac and is about 29 MB. It uses the same speech library Buddy already has, so there are no new paid services.
-- **No training needed.** You only record yourself once:
-  1. Read about 8 short sentences to the desk unit, from where you usually sit. That's about 30 seconds.
-  2. Buddy saves a "voiceprint" in its private data folder. It never goes to GitHub.
-  3. Other people can do the same, if you want Buddy to know them by name.
-- **Then each turn,** Buddy checks the voice at the same time as it transcribes, so it adds no delay. It notes who spoke: you, another known person, or someone unknown.
-- **Set up on the Buddy page:** a new "Your voice" tab, with a name box, the sentences to read and a progress bar. Recordings can be deleted. The Mic test shows "sounds like you (0.72)" on each line, so you can check it works.
-- **What Buddy does with it** is to be decided later. Options:
-  - only answer you
-  - only you can change alarms
-  - personal memories for each person
