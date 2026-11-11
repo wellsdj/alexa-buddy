@@ -1,3 +1,4 @@
+@font-face { font-family: "Krona One"; src: url(/static/fonts/krona-one.woff2) format("woff2"); font-display: swap; }  /* OFL, see fonts/OFL-KronaOne.txt */
 /* Buddy: a black, bold, quiet chat. Everything else lives in the Controls drawer.
    The little status dot uses the same colours as the desk unit's light. */
 
@@ -51,7 +52,8 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
   padding: 0 max(20px, env(safe-area-inset-left)); border-bottom: 1px solid var(--line);
 }
 .brand { display: flex; align-items: center; gap: 14px; min-width: 0; }
-#assistant-name { font-weight: 800; font-size: 22px; letter-spacing: -0.04em; }
+#assistant-name { font: 400 19px/1 "Krona One", var(--font); text-transform: uppercase; letter-spacing: .02em; }
+.brand .logo { width: 30px; height: 30px; flex: none; margin-right: -4px; }
 .status {
   display: inline-flex; align-items: center; gap: 8px; height: 30px; padding: 0 12px 0 10px;
   border-radius: 999px; background: var(--s2); color: var(--muted); font-size: 13px; font-weight: 500;
@@ -399,5 +401,7 @@ a.btn { text-decoration: none; }
 #assistant-name, .empty h1, .setup-head h2 {
   background: var(--fade); -webkit-background-clip: text; background-clip: text; color: transparent;
 }
-#assistant-name, .empty h1, .setup-head h2 { font-weight: 700; letter-spacing: -0.03em; }
+#assistant-name, .empty h1, .setup-head h2 { font-family: "Krona One", var(--font); font-weight: 400; text-transform: uppercase;
+  letter-spacing: .02em; overflow-wrap: anywhere; }
+.empty h1, .setup-head h2 { line-height: 1.2; }
 .empty h1, .setup-head h2 { width: fit-content; }

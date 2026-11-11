@@ -1,7 +1,7 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": null,
-  "buildCommand": "if [ -d server/web ]; then W=server/web; else W=web; fi; rm -rf public && mkdir -p public && cp $W/study.html public/index.html && cp $W/study.css $W/study.js public/",
+  "buildCommand": "if [ -d server/web ]; then W=server/web; else W=web; fi; rm -rf public && mkdir -p public && cp $W/study.html public/index.html && cp $W/study.css $W/study.js public/ && cp -r $W/fonts public/",
   "outputDirectory": "public",
   "functions": {
     "api/index.py": {

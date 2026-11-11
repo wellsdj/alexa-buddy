@@ -1,3 +1,4 @@
+@font-face { font-family: "Krona One"; src: url(/static/fonts/krona-one.woff2) format("woff2"); font-display: swap; }  /* OFL, see fonts/OFL-KronaOne.txt */
 /* Study Buddy: black, quiet, lots of space. Only the big words get colour (dark red fading into blue). */
 :root {
   --bg: #000; --s1: #0b0b0b; --s2: #141414; --s3: #1e1e1e; --s4: #2a2a2a;
@@ -5,6 +6,7 @@
   --ink: #fff; --muted: #9a9a9a; --faint: #5c5c5c;
   --green: #06c167; --red: #ff5a4e; --purple: #a78bfa;
   --fade: linear-gradient(90deg, #c4243c 0%, #7a2a8c 50%, #2f6bff 100%);
+  --title: "Krona One", var(--font);
   --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", "Segoe UI", Arial, sans-serif;
   color-scheme: dark;
 }
@@ -21,10 +23,12 @@ a { color: var(--ink); }
 /* top bar */
 .top { position: sticky; top: 0; z-index: 5; height: 56px; display: flex; align-items: center; justify-content: space-between;
        padding: 0 20px; background: var(--bg); }
-.top-left { display: flex; align-items: baseline; gap: 18px; }
+.top-left { display: flex; align-items: center; gap: 18px; }
 .to-buddy { color: var(--faint); text-decoration: none; font-size: 14px; }
 .to-buddy:hover { color: var(--ink); }
-.brand { font-weight: 700; font-size: 17px; letter-spacing: -.02em; text-decoration: none; }
+.brand { display: inline-flex; align-items: center; gap: 9px; align-self: center; font: 14px/1 var(--title); text-transform: uppercase;
+         letter-spacing: .02em; text-decoration: none; }
+.brand .logo { width: 22px; height: 22px; flex: none; }
 .me { display: inline-flex; align-items: center; gap: 8px; height: 32px; padding: 0; border: 0; background: none;
       cursor: pointer; font-size: 14px; color: var(--muted); }
 .me:hover { color: var(--ink); }
@@ -34,7 +38,8 @@ a { color: var(--ink); }
 .danger { color: var(--red); }
 
 main { max-width: 640px; margin: 0 auto; padding: 32px 20px 96px; }
-h1 { font-size: 34px; line-height: 1.1; letter-spacing: -.03em; font-weight: 700; margin: 0 0 6px; }
+h1 { font: 400 clamp(22px, 6.2vw, 30px)/1.2 var(--title); text-transform: uppercase; letter-spacing: .01em; margin: 0 0 8px;
+     overflow-wrap: anywhere; }
 h2 { font-size: 18px; margin: 32px 0 10px; }
 h3 { font-size: 15px; margin: 24px 0 6px; font-weight: 600; }
 .muted { color: var(--muted); }
@@ -47,7 +52,7 @@ h3 { font-size: 15px; margin: 24px 0 6px; font-weight: 600; }
 /* sign in */
 body.signin .top { display: none; }
 .hero { min-height: 100dvh; display: flex; flex-direction: column; justify-content: center; padding: 48px 0; }
-.hero h1 { font-size: clamp(52px, 12vw, 96px); line-height: .95; letter-spacing: -.045em; margin: 0; }
+.hero h1 { font-size: clamp(40px, 11vw, 80px); line-height: 1.02; letter-spacing: 0; margin: 0; }
 .hero .lead { color: var(--muted); font-size: 17px; margin: 18px 0 0; }
 .people { display: flex; flex-wrap: wrap; gap: 28px; margin-top: 56px; }
 .person { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 0; border: 0; background: none;
