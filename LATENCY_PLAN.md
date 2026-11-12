@@ -144,6 +144,9 @@ Covers both web pages: Buddy (`server/web/index.html`, `app.js`, `style.css`) an
    - Information: settings and status details you never use. Move rarely used items under an "Advanced" section rather than delete them.
    - Code: unused functions, old settings, dead CSS and leftover code in the server and the pages.
      - Example: the broken `_accept` code in `hub.py` gets fixed or removed.
+   - **Remove Groq completely**, from the code and from Settings:
+     - The Groq key box, the Groq model settings (`fast_model`, `smart_model`, `fallback_models`), `GroqLLM` in `llm.py` and its tests.
+     - The only job it still has: deciding if a sentence that says "buddy" mid-sentence (or room talk) is meant for Buddy (`listening.py`). Without a Groq key it already falls back to simple phrase rules. After removal: either phrase rules only, or Haiku does that check. Haiku costs a tiny bit per check, so I'll ask you which.
 2. **Make important things stand out**
    - Make important things bigger and **bold**: Buddy's state, the last thing heard and said, errors, and today's lesson or questions in Study Buddy.
    - Make less important things smaller and lighter.
