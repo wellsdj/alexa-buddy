@@ -84,6 +84,7 @@
     <button role="tab" data-tab="weather" aria-selected="false">Weather</button>
     <button role="tab" data-tab="voices" aria-selected="false">Voices</button>
     <button role="tab" data-tab="settings" aria-selected="false">Settings</button>
+    <button role="tab" data-tab="speed" aria-selected="false">Speed</button>
     <button role="tab" data-tab="activity" aria-selected="false">Activity</button>
     <button role="tab" data-tab="mictest" aria-selected="false">Mic test</button>
     <button role="tab" data-tab="yourvoice" aria-selected="false">Your voice</button>
@@ -307,6 +308,17 @@
       </div>
     </div>
 
+    <div class="panel" id="panel-speed" role="tabpanel" hidden>
+      <header class="panel-head"><h2>Speed</h2><p>How long from when you stop talking to when Buddy starts answering.</p></header>
+      <section class="speed-hero">
+        <div><span class="speed-label">Last answer</span><b class="speed-big" id="speed-last">–</b></div>
+        <div><span class="speed-label">Average of last 10</span><b class="speed-big" id="speed-avg">–</b></div>
+      </section>
+      <p class="note">Goal: under 0.8 s. <span class="speed-dot good"></span>fast <span class="speed-dot ok"></span>okay <span class="speed-dot slow"></span>slow</p>
+      <ul class="speed-key" id="speed-key"></ul>
+      <ol class="speed-list" id="speed-list"></ol>
+    </div>
+
     <div class="panel" id="panel-activity" role="tabpanel" hidden>
       <header class="panel-head"><h2>Activity</h2><p>What Buddy is doing right now, and everything it heard.</p></header>
       <section class="mic-box" aria-label="Microphone">
@@ -326,6 +338,6 @@
 </aside>
 
 <div class="toast" id="toast" role="status" hidden></div>
-<script src="/static/app.js?v=chat12"></script>
+<script src="/static/app.js?v=chat13"></script>
 </body>
 </html>

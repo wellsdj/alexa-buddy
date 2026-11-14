@@ -134,6 +134,21 @@ def span(label: str):
 
 
 # ---------- report ----------
+def recent(path: Path, last: int = 20) -> list[dict]:
+    """The last spoken turns, newest first (for the Speed tab)."""
+    rows = []
+    if path.exists():
+        for line in path.read_text().splitlines()[-max(last * 3, 50):]:
+            try:
+                r = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if r.get("total") is not None:
+                r.pop("marks_ms", None)
+                rows.append(r)
+    return rows[-last:][::-1]
+
+
 def report(path: Path, last: int = 10) -> str:
     rows = []
     if path.exists():

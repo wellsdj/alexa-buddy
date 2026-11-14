@@ -221,7 +221,8 @@ function onEvent(m) {
     case "transcript": addChat(m); break;
     case "mic_test": micTestEvent(m); break;
     case "voice_enroll": vidEvent(m); break;
-    case "log": addLog(m.entry); if (m.entry.event === "turn") loadStatusSoon(); break;
+    case "log": addLog(m.entry); if (m.entry.event === "turn") loadStatusSoon();
+      if (m.entry.event === "timing" && !$("panel-speed").hidden) loadSpeed(); break;
     case "alarms": loadAlarms(); break;
     case "memory": loadMemory(); break;
     case "settings": loadSettings(); loadStatus(); break;
@@ -528,6 +529,37 @@ function micTestEvent(m) {
   }
 }
 
+// ---------------------------------------------------------------- speed tab
+const SPEED_PARTS = [
+  ["wait", "waiting for you to finish", "#6b7280"], ["ears", "writing down your words", "#8b5cf6"],
+  ["think", "quick thinking", "#38bdf8"], ["haiku", "Claude answering", "#f59e0b"],
+  ["check", "fact-check", "#f43f5e"], ["search", "web search", "#ec4899"], ["reword", "rewording", "#a3e635"],
+  ["voice", "voice starting", "#22c55e"], ["hold", "lining up the sound", "#14b8a6"],
+];
+function secs(ms) { return ms == null ? "–" : (ms / 1000).toFixed(ms < 10000 ? 1 : 0) + " s"; }
+function speedClass(ms) { return ms == null ? "" : ms <= 800 ? "good" : ms <= 1500 ? "ok" : "slow"; }
+async function loadSpeed() {
+  let d;
+  try { d = await api("/api/speed?last=20"); } catch { return; }
+  const turns = d.turns || [];
+  const last = turns[0]?.total, ten = turns.slice(0, 10).map((t) => t.total);
+  const avg = ten.length ? Math.round(ten.reduce((a, b) => a + b, 0) / ten.length) : null;
+  for (const [id, ms] of [["speed-last", last], ["speed-avg", avg]]) {
+    $(id).textContent = secs(ms);
+    $(id).className = "speed-big " + speedClass(ms);
+  }
+  $("speed-key").replaceChildren(...SPEED_PARTS.map(([, label, c]) => el("li", {}, el("i", { style: `background:${c}` }), label)));
+  $("speed-list").replaceChildren(...(turns.length ? turns.map((t) => {
+    const parts = SPEED_PARTS.filter(([k]) => t[k] > 0);
+    const sum = parts.reduce((a, [k]) => a + t[k], 0) || 1;
+    return el("li", {},
+      el("div", { class: "speed-row" }, el("span", {}, t.text ? `“${t.text}”` : "(spoken turn)"),
+        el("b", { class: speedClass(t.total) }, secs(t.total))),
+      el("div", { class: "speed-bar", title: parts.map(([k, label]) => `${label}: ${t[k]} ms`).join("\n") },
+        ...parts.map(([k, label, c]) => el("i", { style: `width:${(100 * t[k] / sum).toFixed(1)}%;background:${c}`, title: `${label}: ${t[k]} ms` }))));
+  }) : [el("li", { class: "speed-empty" }, d.on ? "Talk to Buddy and each answer shows up here." : "Timing is switched off (timing_log in Settings).")]));
+}
+
 // One Stop button at the bottom of the controls, whichever page started the mic.
 function micLive() {
   const on = S.micTest;
@@ -828,6 +860,7 @@ function init() {
       if (tab.dataset.tab === "weather") loadWeather();
       if (tab.dataset.tab === "activity") loadStatus();
       if (tab.dataset.tab === "yourvoice") loadVoiceID();
+      if (tab.dataset.tab === "speed") loadSpeed();
       if (tab.dataset.tab !== "yourvoice" && vidRecording) vidRec(false);
       if (tab.dataset.tab !== "mictest" && S.micTest && !vidRecording) micTest(false);
     };

@@ -437,3 +437,23 @@ a.btn { text-decoration: none; }
 .mic-live-text { flex: 1; font-weight: 700; font-size: 15px; }
 .mic-live .btn { min-width: 96px; font-size: 16px; }
 @keyframes mic-live { 50% { opacity: .35; transform: scale(.8); } }
+
+/* Speed tab */
+.speed-hero { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.speed-hero > div { background: var(--s2); border-radius: 16px; padding: 16px; display: grid; gap: 4px; }
+.speed-label { font-size: 13px; color: var(--muted); font-weight: 600; }
+.speed-big { font-size: 40px; font-weight: 800; letter-spacing: -0.04em; line-height: 1.1; }
+.speed-big.good, .speed-dot.good { color: #46d37a; }
+.speed-big.ok, .speed-dot.ok { color: #f0b429; }
+.speed-big.slow, .speed-dot.slow { color: #ff6b6b; }
+.speed-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: currentColor; margin: 0 4px 0 10px; }
+.speed-key { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 12.5px; color: var(--muted); }
+.speed-key i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
+.speed-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.speed-list li { background: var(--s2); border-radius: 14px; padding: 12px 14px; display: grid; gap: 8px; }
+.speed-row { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; }
+.speed-row span { color: var(--muted); font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.speed-row b { font-size: 18px; flex: none; }
+.speed-bar { display: flex; height: 10px; border-radius: 6px; overflow: hidden; background: var(--s3); }
+.speed-bar i { display: block; height: 100%; }
+.speed-empty { color: var(--muted); font-size: 15px; }

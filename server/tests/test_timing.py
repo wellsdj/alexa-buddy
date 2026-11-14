@@ -100,3 +100,15 @@ def test_the_report_opens_in_the_browser(settings):
     with TestClient(create_app(settings=settings)) as c:
         r = c.get("/api/timings")
     assert r.status_code == 200 and "TOTAL" in r.text
+
+
+def test_speed_tab_gets_the_latest_turns_first(settings):
+    from fastapi.testclient import TestClient
+    from buddy.main import create_app
+    with (settings.data_dir / "timings.jsonl").open("w") as f:
+        for n, total in enumerate((2000, 1500, 900)):
+            f.write(json.dumps({"turn": n, "text": f"q{n}", "total": total, "marks_ms": {"x": 1}}) + "\n")
+        f.write(json.dumps({"turn": 9, "total": None}) + "\n")  # not spoken: left out
+    with TestClient(create_app(settings=settings)) as c:
+        d = c.get("/api/speed").json()
+    assert [t["total"] for t in d["turns"]] == [900, 1500, 2000] and "marks_ms" not in d["turns"][0]

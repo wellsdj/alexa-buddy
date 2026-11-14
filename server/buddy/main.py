@@ -544,6 +544,13 @@ def create_app(settings: Settings | None = None, http=None, claude_http=None, st
         from fastapi.responses import PlainTextResponse
         return PlainTextResponse(report(settings.data_dir / "timings.jsonl", max(1, min(last, 200))))
 
+    @app.get("/api/speed")
+    async def speed(last: int = 20):
+        """Recent spoken turns for the Speed tab: how long from the end of your speech to Buddy's voice."""
+        from .timing import recent
+        return {"turns": recent(settings.data_dir / "timings.jsonl", max(1, min(last, 100))),
+                "on": bool(settings["timing_log"])}
+
     @app.get("/api/log")
     async def get_log():
         return list(hub.log)
