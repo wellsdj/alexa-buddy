@@ -61,7 +61,8 @@ class Endpointer:
     """
 
     def __init__(self, silence_ms: int = 800, no_speech_s: float = 6.0, max_s: float = 15.0,
-                 on: float = 0.5, off: float = 0.35, start_chunks: int = 2, keep: float = 0.5):
+                 on: float = 0.5, off: float = 0.35, start_chunks: int = 2, keep: float = 0.5,
+                 ignore_s: float = 0.0):
         """on: how speech-like a sound must be to START counting as talking (lower for quiet voices).
         keep / off: once talking, a sound must reach keep to count as still talking, and anything under
         off counts as quiet. Kept separate so a gentle start doesn't let room noise keep it listening."""
@@ -76,11 +77,15 @@ class Endpointer:
         self.started = False
         self.speech_chunks = 0
         self.peak = 0.0  # the most speech-like moment heard (shows why a quiet voice was missed)
+        # The first moment isn't listened to (the chime, and the last of Buddy's own voice in the room).
+        self.ignore_chunks = int(ignore_s / self.chunk_s)
 
     def update(self, probs: list[float]) -> str | None:
         """Returns None while listening, else 'end', 'timeout' or 'max'."""
         for p in probs:
             self.chunks += 1
+            if self.chunks <= self.ignore_chunks:
+                p = 0.0
             self.peak = max(self.peak, p)
             if p >= (self.keep if self.started else self.on):
                 self.voiced_run += 1

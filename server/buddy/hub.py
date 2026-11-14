@@ -355,6 +355,8 @@ class Session:
             self._ring_listen(pcm, probs)
         if self.state == "speaking":
             self._barge_listen(pcm, probs)
+        if wake is not None and self.state == "speaking" and self._saying_own_name():
+            wake = None  # it heard itself say "buddy"
         if wake is not None:
             quiet = self._quiet_before()
             # While Buddy talks its own voice fills the room, so a clear "hey buddy" interrupts anyway.
@@ -446,7 +448,7 @@ class Session:
         talking = bool(probs) and max(probs) > 0.6
         step = len(pcm) / SR
         self.barge_voiced = self.barge_voiced + step if talking else max(0.0, self.barge_voiced - step / 2)
-        if self.barge_voiced >= 0.6 and not self.barge_checking:
+        if self.barge_voiced >= 0.8 and not self.barge_checking:
             self.barge_checking = True
             asyncio.create_task(self._barge_check(np.concatenate(self.barge_buf)))
 
@@ -455,7 +457,8 @@ class Session:
             who = await self.hub.who_spoke(audio)
         finally:
             self.barge_checking = False
-        if who.get("name") and self.state == "speaking":
+        sure = float(who.get("score", 0)) >= float(self.hub.settings["voice_id_threshold"]) + 0.05
+        if who.get("name") and sure and self.state == "speaking":
             self.hub.record("interrupted", session=self.id, by=who["name"], score=who.get("score"))
             await self.stop_speaking()
             # Listen from a moment ago, so the words they said over Buddy are kept.
@@ -497,7 +500,7 @@ class Session:
 
     # ---------- listening ----------
     async def start_listening(self, preroll_s: float = 0.0, silent: str | None = None, earcon: bool = True,
-                              ptt: bool = False, no_speech_s: float = 6.0) -> None:
+                              ptt: bool = False, no_speech_s: float = 6.0, ignore_s: float = 0.0) -> None:
         s = self.hub.settings
         self.silent = silent
         self.mentioned = False
@@ -514,7 +517,8 @@ class Session:
         # room talk) keep the stricter default so the TV or the radio doesn't keep them going.
         on = 0.5 if silent else min(0.5, max(0.1, float(s["listen_sensitivity"])))
         self.endpointer = Endpointer(silence_ms=int(s["end_of_speech_ms"]), no_speech_s=no_speech_s,
-                                     max_s=float(s["max_listen_s"]) + preroll_s, on=on, off=0.35, keep=0.5)
+                                     max_s=float(s["max_listen_s"]) + preroll_s, on=on, off=0.35, keep=0.5,
+                                     ignore_s=ignore_s)
         if preroll_s:
             n = int(preroll_s * SR / VAD_CHUNK)
             self.endpointer.update(list(self.vad_history)[-n:])
@@ -775,9 +779,24 @@ class Session:
             # No look-back here: the moment before is Buddy's own voice, which made it think you'd
             # already spoken and answer itself. Give them a bit longer to start instead.
             self.asked_text, self.asked_at = text_of(), time.time()
-            await self.start_listening(earcon=True, no_speech_s=8.0)
+            await self.start_listening(earcon=True, no_speech_s=8.0, ignore_s=0.35)
         else:
             await self.set_state(after)  # "thinking" after a "one sec" line: the answer is on its way
+
+    def _saying_own_name(self) -> bool:
+        """Is Buddy saying its own name (or "buddy") right about now? Then that "hey buddy" was itself."""
+        text, started = self.speaking_text, self.speak_started
+        if not text:
+            return False
+        name = re.escape(str(self.hub.settings["assistant_name"]).lower())
+        spots = [m.start() for m in re.finditer(rf"\b(buddy|{name})\b", text.lower())]
+        if not spots:
+            return False
+        if started is None:
+            return any(i < 60 for i in spots)
+        total = max(self.speak_total_s, len(text) / 14.0)
+        at = int(len(text) * min(1.0, max(0.0, time.monotonic() - started - 0.3) / total))
+        return any(abs(i - at) < 45 for i in spots)  # within about 3 seconds
 
     def _where_we_got_to(self) -> None:
         """Cut off mid-answer: remember what was being said (to tell its echo from their words) and

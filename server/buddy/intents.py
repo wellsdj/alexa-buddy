@@ -167,7 +167,8 @@ def match(text: str, now: datetime, context: dict | None = None) -> Intent | Non
     if len(t.split()) <= 12 and re.search(
             r"\b(carry on|go on|keep going|as you were|(say|finish|tell me) what you were (saying|going to say)|"
             r"what were you (saying|going to say)|"
-            r"you were saying|where were we|continue( please)?|sorry,? (carry|go) on)\b", t):
+            r"you were saying|where were we|continue( please)?|sorry,? (carry|go) on|resume|"
+            r"(pick (it )?up|start( again)?|go on) (from )?where you (left off|stopped|were))\b", t):
         return Intent("carry_on")
     voice = _voice(t)
     if voice:

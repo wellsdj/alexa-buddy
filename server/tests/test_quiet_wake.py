@@ -166,3 +166,35 @@ def test_a_false_cut_in_carries_on_instead_of_the_nothing_sound(settings):
     asyncio.run(run())
     assert sounds(ws) == []
     assert spoken == ["First bit. Second bit is here."]
+
+
+def test_buddy_saying_its_own_name_doesnt_interrupt_it(settings):
+    from types import SimpleNamespace
+    hub, s, ws, spoken = setup(settings, "")
+
+    async def run():
+        s.state = "speaking"
+        s.speaking_text, s.speak_started, s.speak_total_s = "I'm Buddy, nice to meet you.", None, 0.0
+        await s._on_audio(np.zeros(512, np.int16), SimpleNamespace(confident=True, score=0.9), [0.0])
+    asyncio.run(run())
+    assert s.state == "speaking"
+
+
+def test_hey_buddy_mid_answer_interrupts_and_carry_on_resumes(settings):
+    from types import SimpleNamespace
+    hub, s, ws, spoken = setup(settings, "carry on")
+
+    async def run():
+        s.state = "speaking"
+        s.speaking_text, s.speak_started, s.speak_total_s = "Paris is lovely. The tower is tall.", None, 0.0
+        await s._on_audio(np.zeros(512, np.int16), SimpleNamespace(confident=True, score=0.9), [0.0])
+        assert s.state == "listening"
+        await hub.process_audio(s, np.zeros(32000, np.int16), 1.0)
+    asyncio.run(run())
+    assert spoken[-1] == "Paris is lovely. The tower is tall."
+
+
+def test_the_chime_doesnt_count_as_a_reply():
+    from buddy.vad import Endpointer
+    ep = Endpointer(silence_ms=600, no_speech_s=8.0, on=0.3, ignore_s=0.35)
+    assert ep.update([0.9] * 10 + [0.0] * 30) is None and not ep.started
