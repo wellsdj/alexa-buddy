@@ -61,12 +61,15 @@ class Endpointer:
     """
 
     def __init__(self, silence_ms: int = 800, no_speech_s: float = 6.0, max_s: float = 15.0,
-                 on: float = 0.5, off: float = 0.35, start_chunks: int = 2):
+                 on: float = 0.5, off: float = 0.35, start_chunks: int = 2, keep: float = 0.5):
+        """on: how speech-like a sound must be to START counting as talking (lower for quiet voices).
+        keep / off: once talking, a sound must reach keep to count as still talking, and anything under
+        off counts as quiet. Kept separate so a gentle start doesn't let room noise keep it listening."""
         self.chunk_s = CHUNK / 16000
         self.silence_chunks = max(1, int(silence_ms / 1000 / self.chunk_s))
         self.no_speech_chunks = int(no_speech_s / self.chunk_s)
         self.max_chunks = int(max_s / self.chunk_s)
-        self.on, self.off, self.start_chunks = on, off, start_chunks
+        self.on, self.off, self.start_chunks, self.keep = on, off, start_chunks, max(on, keep)
         self.chunks = 0
         self.voiced_run = 0
         self.silent_run = 0
@@ -79,13 +82,15 @@ class Endpointer:
         for p in probs:
             self.chunks += 1
             self.peak = max(self.peak, p)
-            if p >= self.on:
+            if p >= (self.keep if self.started else self.on):
                 self.voiced_run += 1
                 self.silent_run = 0
                 self.speech_chunks += 1
                 if self.voiced_run >= self.start_chunks:
                     self.started = True
-            elif p < self.off:
+            elif self.started and p >= self.on:
+                self.speech_chunks += 1  # a quiet voice: still talking (doesn't count as quiet either)
+            elif p < (self.off if self.started else self.on):
                 self.voiced_run = 0
                 self.silent_run += 1
             if self.started and self.silent_run >= self.silence_chunks:

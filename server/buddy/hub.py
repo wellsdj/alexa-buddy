@@ -510,7 +510,7 @@ class Session:
         # room talk) keep the stricter default so the TV or the radio doesn't keep them going.
         on = 0.5 if silent else min(0.5, max(0.1, float(s["listen_sensitivity"])))
         self.endpointer = Endpointer(silence_ms=int(s["end_of_speech_ms"]), no_speech_s=no_speech_s,
-                                     max_s=float(s["max_listen_s"]) + preroll_s, on=on, off=min(0.35, on - 0.05))
+                                     max_s=float(s["max_listen_s"]) + preroll_s, on=on, off=0.35, keep=0.5)
         if preroll_s:
             n = int(preroll_s * SR / VAD_CHUNK)
             self.endpointer.update(list(self.vad_history)[-n:])

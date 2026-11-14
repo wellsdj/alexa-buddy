@@ -144,3 +144,9 @@ def test_sound_effects_can_be_switched_off(settings):
     settings.update({"sound_effects": False})
     listen(hub, s, [0.0] * int(6.2 / 0.032), woken=True)
     assert sounds(ws) == []
+
+
+def test_room_noise_doesnt_keep_it_listening_after_you_stop():
+    talk_then_noise = [0.9] * 20 + [0.32] * 40  # a fan or the radio, a bit speech-like
+    ep = Endpointer(silence_ms=600, no_speech_s=6.0, on=0.3)
+    assert ep.update(talk_then_noise) == "end"  # ends after 0.6 s, not when the noise stops
