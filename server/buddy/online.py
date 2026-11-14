@@ -48,7 +48,8 @@ SNAPSHOT_JS = r"""
     n += 1;
     el.setAttribute('data-buddy-n', String(n));
     const tag = el.tagName.toLowerCase();
-    const label = (el.getAttribute('aria-label') || el.innerText || el.value || el.placeholder ||
+    const secret = el.type === 'password' || /cc-|card|cvv|cvc/i.test(el.autocomplete || el.name || '');
+    const label = (el.getAttribute('aria-label') || el.innerText || (secret ? (el.value ? '(filled in)' : '') : el.value) || el.placeholder ||
                    el.title || el.name || el.id || '').replace(/\s+/g, ' ').trim().slice(0, 80);
     let kind = el.getAttribute('role') || tag;
     if (tag === 'input') kind = 'input:' + (el.type || 'text');
@@ -146,7 +147,20 @@ class Browser:
         return self.page.locator(f'[data-buddy-n="{int(n)}"]').first
 
     async def click(self, n: int) -> None:
-        await self._el(n).click(timeout=8000)
+        """Click like a person; if something's in the way, scroll to it and try harder."""
+        el = self._el(n)
+        try:
+            await el.click(timeout=5000)
+        except Exception:  # noqa: BLE001 - covered by a banner, off screen, animating...
+            try:
+                await el.scroll_into_view_if_needed(timeout=3000)
+                box = await el.bounding_box()
+                if box:
+                    await self.page.mouse.click(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+                else:
+                    await el.click(timeout=5000, force=True)
+            except Exception:  # noqa: BLE001
+                await el.evaluate("e => e.click()")
         await self._settle()
 
     async def type(self, n: int, text: str, enter: bool = False) -> None:
@@ -180,6 +194,11 @@ TOOLS = [
      "enter=true presses Enter after (e.g. for a search box).",
      "parameters": {"type": "object", "properties": {"n": {"type": "integer"}, "text": {"type": "string"},
                                                      "enter": {"type": "boolean"}}, "required": ["n", "text"]}}},
+    {"type": "function", "function": {"name": "fill_login", "description": "Log in with the user's saved login for "
+     "this site: fills box user_n with their username/email and box password_n with their password (you never see "
+     "it). Then click the log in button yourself.",
+     "parameters": {"type": "object", "properties": {"user_n": {"type": "integer"}, "password_n": {"type": "integer"}},
+                    "required": ["password_n"]}}},
     {"type": "function", "function": {"name": "choose", "description": "Pick an option in drop-down n.",
      "parameters": {"type": "object", "properties": {"n": {"type": "integer"}, "option": {"type": "string"}},
                     "required": ["n", "option"]}}},
@@ -220,9 +239,11 @@ different attempts, and then say exactly what you tried and what stopped you.
 (e.g. which of several times) or something is missing.
 - Anything that commits them (booking, paying, ordering, sending, signing up, cancelling) needs ask_user with \
 final=true first, saying exactly what will happen and the price. Only after a yes, click it.
-- Never type passwords or card details. If you need a login, use ask_user to ask them to log in themselves in \
-the browser window on their Mac and to say "done" when they have. If payment details are needed, ask them to \
-fill those in themselves the same way.
+- Logging in: use fill_login (their saved login for that site). If there isn't one saved, use ask_user to ask \
+them to log in themselves in the browser window on their Mac (or save the login in Buddy's settings under \
+Website logins) and say "done". Logins stay remembered in this browser afterwards.
+- Never type passwords or card details yourself. If payment details are needed, ask them to fill those in \
+themselves in the browser window.
 - Don't accept extra paid add-ons, insurance or newsletters unless asked.
 - When finished, call finish with a short spoken summary (what, when, where, price, reference number if any).
 Today is {today}. The user's home: {home}. Who asked: {who}."""
@@ -243,6 +264,8 @@ class OnlineAgent:
                                           visible=bool(settings.get("online_show_browser", True)))
         self.job: Job | None = None
         self.say = None  # async (text, wait_for_answer: bool): the hub speaks it out loud
+        self.logins = None  # LoginStore: saved website logins (passwords never go to Claude)
+        self.on_busy = None  # (bool): a job started / ended (the board shows a slow pink light)
         self.history: list[Job] = []
 
     @property
@@ -260,6 +283,8 @@ class OnlineAgent:
             return f"Already busy with: {self.job.task}. Say stop first if you want something else."
         self.job = Job(task=task, who=who)
         self.job.task_handle = asyncio.create_task(self._run(self.job, today, home))
+        if self.on_busy:
+            self.on_busy(True)
         return "started"
 
     def answer(self, text: str) -> None:
@@ -321,6 +346,8 @@ class OnlineAgent:
             await self._speak(f"Sorry, something went wrong online, so I stopped: {str(e)[:120]}")
         finally:
             self.history = (self.history + [job])[-20:]
+            if self.on_busy:
+                self.on_busy(False)
 
     async def _loop(self, job: Job, today: str, home: str) -> None:
         system = SYSTEM.format(today=today or time.strftime("%A %d %B %Y"), home=home or "unknown",
@@ -390,14 +417,29 @@ class OnlineAgent:
                 if not it:
                     return "No such number on the page: look again."
                 if "password" in it["kind"] or "password" in it["meta"].lower():
-                    return ("Never type passwords. Use ask_user to ask them to log in themselves in the browser "
-                            "window on the Mac, then look again.")
+                    return "Don't type passwords: use fill_login for this box."
                 if CARD.search(f"{it['label']} {it['meta']}"):
                     return ("Never type card or bank details. Use ask_user to ask them to fill those in themselves "
                             "in the browser window, then look again.")
                 job.steps.append(f"typed into {it['label'][:30]}")
                 await b.type(it["n"], str(a.get("text", "")), bool(a.get("enter")))
                 return await b.look()
+            if name == "fill_login":
+                found = self.logins.find(b.page.url) if self.logins else None
+                if not found:
+                    return ("No saved login for this site. Use ask_user to ask them to log in themselves in the "
+                            "browser window on the Mac (or save it in Buddy's settings, Website logins), then look again.")
+                site, login = found
+                pw = b.item(a.get("password_n", 0))
+                if not pw or "password" not in f"{pw['kind']} {pw['meta']}".lower():
+                    return "password_n isn't a password box: look again."
+                if a.get("user_n"):
+                    if not b.item(a["user_n"]):
+                        return "user_n isn't on the page: look again."
+                    await b.type(a["user_n"], login.get("username", ""))
+                await b.type(pw["n"], login.get("password", ""))
+                job.steps.append(f"filled in the saved login for {site}")
+                return f"Filled in the saved login for {site} (username {login.get('username', '')}). Now click log in."
             if name == "choose":
                 it = b.item(a.get("n", 0))
                 if not it:

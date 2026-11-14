@@ -68,7 +68,7 @@ def test_books_only_after_a_yes_and_never_types_passwords(tmp_path):
              ("ask_user", {"question": "Court 2 at 6pm for £8. Shall I book it?", "final": True}),
              ("click", {"n": 3}), ("look", {}), ("finish", {"summary": "Booked court 2 at 6pm, £8."})]
     msg, said, llm, agent = run_job(tmp_path, calls, ["yes please"])
-    assert any("Never type passwords" in s for s in llm.seen)
+    assert any("Don't type passwords" in s for s in llm.seen)
     assert any("finishes something for real" in s for s in llm.seen)  # the first click was refused
     assert msg == "Booked court 2 at 18:00"
     assert said == ["Court 2 at 6pm for £8. Shall I book it?", "Booked court 2 at 6pm, £8."]
@@ -82,3 +82,48 @@ def test_a_no_means_nothing_is_booked(tmp_path):
              ("click", {"n": 3}), ("finish", {"summary": "Okay, I didn't book anything.", "success": False})]
     msg, said, llm, agent = run_job(tmp_path, calls, ["no, not yet"])
     assert msg == "" and "NOT a yes" in llm.seen[2] and "finishes something" in llm.seen[3]
+
+
+LOGIN = """<html><title>Log in</title><body>
+<input name=email placeholder=Email><input type=password name=pw>
+<button onclick="document.getElementById('m').innerText='hi '+document.querySelector('[name=email]').value+
+' '+(document.querySelector('[name=pw]').value=='s3cret!'?'ok':'bad')">Log in</button><p id=m></p></body></html>"""
+
+
+def test_logs_in_with_a_saved_login_without_claude_seeing_the_password(tmp_path):
+    from buddy.logins import LoginStore
+    page = tmp_path / "login.html"
+    page.write_text(LOGIN)
+    store = LoginStore(tmp_path)
+    store.save("localhost", "me@example.com", "s3cret!")
+    calls = [("open_url", {"url": page.as_uri()}), ("fill_login", {"user_n": 1, "password_n": 2}),
+             ("click", {"n": 3}), ("finish", {"summary": "Logged in."})]
+    llm = Script(calls)
+    agent = OnlineAgent({"online_on": True}, llm, Browser(tmp_path / "profile", visible=False))
+    agent.logins = store
+    agent.say = lambda t, l: asyncio.sleep(0)
+
+    async def go():
+        try:
+            await agent.browser.start()
+        except Exception as e:  # noqa: BLE001
+            pytest.skip(f"no browser here: {str(e)[:80]}")
+        store.find = lambda url: ("example site", {"username": "me@example.com", "password": "s3cret!"})
+        agent.start("log in")
+        await agent.job.task_handle
+        text = await agent.browser.page.inner_text("#m", timeout=2000)
+        await agent.browser.close()
+        return text
+    assert asyncio.run(go()) == "hi me@example.com ok"
+    assert not any("s3cret" in str(x) for x in llm.seen)  # Claude never saw it
+    assert any("Filled in the saved login" in str(x) for x in llm.seen)
+
+
+def test_saved_logins_match_the_site():
+    from buddy.logins import LoginStore
+    import tempfile
+    store = LoginStore(tempfile.mkdtemp())
+    store.save("https://www.clubspark.lta.org.uk/somewhere", "me", "pw")
+    assert store.find("https://login.clubspark.lta.org.uk/auth")[0] == "clubspark.lta.org.uk"
+    assert store.find("https://example.com") is None
+    assert store.list() == [{"site": "clubspark.lta.org.uk", "username": "me"}]

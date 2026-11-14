@@ -24,7 +24,7 @@
 
 #include "config.h"
 
-#define FW_VERSION "1.7.0"
+#define FW_VERSION "1.7.1"
 #define SAMPLE_RATE 16000
 #define MIC_FRAMES 320               // 20 ms per I2S read
 #define SEND_BYTES 1280              // 40 ms of 16-bit audio per WebSocket frame
@@ -96,6 +96,7 @@ static uint32_t lastConnected = 0, lastConnectAttempt = 0;
 static bool wantScan = false, wantJoin = false;  // Wi-Fi change by voice (see wifiTasks)
 static String joinSsid, joinPass, joinResult;
 static String serverState = "offline";
+static volatile bool working = false;  // Buddy is doing a job in the background (online): slow pink fade
 static bool shouldSaveConfig = false;
 
 // ------------------------------------------------------------------ small helpers
@@ -404,6 +405,10 @@ static void updateLed() {
   } else if (serverState == "speaking") {
     uint8_t v = 40 + (uint8_t)min(215.0f, speakLevel * 900.0f);  // pulses with the voice
     led(0, v, v * 0.45f);
+  } else if (working) {  // a job in the background: pink, fading slowly in and out
+    float w = (sinf(t / 1000.0f * 2.0f * PI * 0.3f) + 1.0f) * 0.5f;
+    uint8_t v = 15 + (uint8_t)(200 * w);
+    led(v, v * 0.25f, v * 0.55f);
   } else {
     led(0, 0, 0);
   }
@@ -491,6 +496,9 @@ static void stripUpdate() {
       float reach = min(1.0f, 0.15f + speakLevel * 6.0f) * (mid + 1);
       float v = (fabsf(k - mid) <= reach) ? 1.0f : 0.12f;
       g = v; b = v * 0.45f;
+    } else if (working) {  // a job in the background: pink, fading slowly in and out together
+      float v = 0.05f + 0.6f * ((sinf(sec * 2 * PI * 0.3f) + 1) * 0.5f);
+      r = v; g = v * 0.25f; b = v * 0.55f;
     }
     want[k][0] = r; want[k][1] = g; want[k][2] = b;
   }
@@ -656,6 +664,8 @@ static void handleJson(uint8_t *payload, size_t len) {
     Serial.printf("[alarms] schedule updated: %d fire times\n", n);
   } else if (!strcmp(type, "alarm_stop")) {
     stopRinging(doc["reason"] | (doc["quiet"] | false ? "snooze" : "voice"));
+  } else if (!strcmp(type, "working")) {
+    working = doc["on"] | false;
   } else if (!strcmp(type, "aec")) {
     bool on = doc["on"] | true;
     if (on && !aecOn) aec.restart();

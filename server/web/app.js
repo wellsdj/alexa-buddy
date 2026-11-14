@@ -819,6 +819,36 @@ function init() {
     document.querySelector('[data-open="studyweb"]').addEventListener("click", refresh);
   }
 
+  // Website logins for Buddy's online jobs: list (no passwords), add, remove.
+  {
+    const list = $("login-list"), status = $("login-status");
+    const draw = (logins) => {
+      list.replaceChildren(...logins.map((l) => {
+        const row = document.createElement("div");
+        row.className = "row";
+        const text = document.createElement("span");
+        text.textContent = `${l.site}${l.username ? " · " + l.username : ""}`;
+        const del = document.createElement("button");
+        del.className = "btn small"; del.type = "button"; del.textContent = "Remove";
+        del.onclick = async () => draw((await api(`/api/logins/${encodeURIComponent(l.site)}`, { method: "DELETE" })).logins);
+        row.append(text, del);
+        return row;
+      }));
+      if (!logins.length) list.textContent = "No logins saved yet.";
+    };
+    const refresh = async () => { try { draw((await api("/api/logins")).logins); } catch { /* offline */ } };
+    $("login-save").onclick = async () => {
+      try {
+        const r = await api("/api/logins", { method: "POST", body: { site: $("login-site").value,
+          username: $("login-user").value, password: $("login-pass").value } });
+        $("login-pass").value = ""; $("login-site").value = ""; $("login-user").value = "";
+        status.textContent = `Saved the login for ${r.saved}.`;
+        draw(r.logins);
+      } catch (e) { status.textContent = e.message; }
+    };
+    document.querySelector('[data-open="logins"]').addEventListener("click", refresh);
+  }
+
   // Settings: a short menu of sections; tap one to see just that section, or search.
   {
     const panel = $("panel-settings"), menu = $("set-menu"), back = $("set-back"), search = $("set-search");

@@ -368,7 +368,8 @@ class Session:
         if wake is not None:
             quiet = self._quiet_before()
             # While Buddy talks its own voice fills the room, so a clear "hey buddy" interrupts anyway.
-            if wake.confident and (quiet or self.state == "speaking") and (
+            # With strict_wake, a clear "hey buddy" counts even straight after other talking.
+            if wake.confident and (quiet or self.state == "speaking" or self.hub.settings["strict_wake"]) and (
                     self.state in ("idle", "speaking") or self.ringing):
                 was_off = self.state == "idle" and not self.ringing
                 await self.hub.broadcast_ui({"type": "event", "kind": "wake", "session": self.id,
@@ -384,7 +385,9 @@ class Session:
                 self.woken = was_off  # cutting in isn't waking it: no "didn't hear you" sound
                 self.cut_in = not was_off and not self.ringing
                 return
-            if self.state == "idle" and self._verify_allowed(now):
+            if self.state == "idle" and self.hub.settings["strict_wake"]:
+                pass  # light off: only a clear "hey buddy" counts, nothing is checked or written down
+            elif self.state == "idle" and self._verify_allowed(now):
                 self.verify_times.append(now)
                 if quiet:  # a soft or unclear "hey buddy" out of nowhere: check what was said
                     await self.start_listening(preroll_s=2.2, silent="wake", earcon=False)
@@ -393,6 +396,7 @@ class Session:
                     self.mentioned = True
                 return
         if (self.role == "device" and self.state == "idle" and not self.ringing and now >= self.quiet_until
+                and not self.hub.settings["strict_wake"]
                 and self.hub.room_listening_active() and probs and max(probs) > 0.6):
             await self.start_listening(preroll_s=0.6, silent="room", earcon=False, no_speech_s=3.0)
 
@@ -788,7 +792,7 @@ class Session:
             # No look-back here: the moment before is Buddy's own voice, which made it think you'd
             # already spoken and answer itself. Give them a bit longer to start instead.
             self.asked_text, self.asked_at = text_of(), time.time()
-            await self.start_listening(earcon=True, no_speech_s=8.0, ignore_s=0.35)
+            await self.start_listening(earcon=True, no_speech_s=8.0, ignore_s=0.5)
             self.follow_up = "question" if text_of().rstrip().endswith("?") else "after"
         else:
             await self.set_state(after)  # "thinking" after a "one sec" line: the answer is on its way
@@ -922,6 +926,10 @@ class Hub:
         from .online import OnlineAgent
         self.online = OnlineAgent(settings, self.brain.llm)
         self.online.say = self.online_say
+        from .logins import LoginStore
+        self.logins = LoginStore(settings.data_dir)
+        self.online.logins = self.logins
+        self.online.on_busy = lambda on: self._soon(self.broadcast({"type": "working", "on": on}, role="device"))
         self.brain.online = self.online
         self.last_scan: list[dict] = []
         self.wifi_current = ""
@@ -1023,6 +1031,7 @@ class Hub:
                            "strip_brightness": int(self.settings["strip_brightness"])})
         if s.role == "device":
             await s.send_json({"type": "aec", "on": bool(self.settings.get("echo_cancel", True))})
+            await s.send_json({"type": "working", "on": self.online.busy})
             await self.push_schedule(s)
             if self.just_switched_on(s):
                 await s.play_startup_sound()

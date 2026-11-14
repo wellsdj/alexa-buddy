@@ -503,6 +503,24 @@ def create_app(settings: Settings | None = None, http=None, claude_http=None, st
             asyncio.create_task(hub.weather.fetch(force=True))
         return {"applied": applied}
 
+    # ---------- website logins (for Buddy's online jobs; passwords are never sent back) ----------
+    @app.get("/api/logins")
+    async def get_logins():
+        return {"logins": hub.logins.list()}
+
+    @app.post("/api/logins")
+    async def post_login(body: dict):
+        try:
+            site = hub.logins.save(str(body.get("site", "")), str(body.get("username", "")), str(body.get("password", "")))
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+        return {"saved": site, "logins": hub.logins.list()}
+
+    @app.delete("/api/logins/{site}")
+    async def delete_login(site: str):
+        hub.logins.remove(site)
+        return {"logins": hub.logins.list()}
+
     @app.post("/api/secrets")
     async def post_secret(body: dict):
         name = body.get("name")
