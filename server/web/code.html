@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Secret Code</title>
+<style>
+:root{--bg:#0f1115;--card:#1a1d24;--fg:#f2f3f5;--muted:#9aa0aa;--accent:#7c5cff}
+*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:var(--bg);color:var(--fg);font-family:system-ui,-apple-system,sans-serif;padding:16px}
+.card{background:var(--card);border-radius:16px;padding:32px;max-width:420px;width:100%;text-align:center}
+h1{margin:0 0 8px;font-size:26px}p{color:var(--muted);margin:0 0 24px}
+button{background:var(--accent);color:#fff;border:0;border-radius:10px;padding:14px 22px;font-size:17px;cursor:pointer;margin:6px}
+button.alt{background:#2b2f39}
+.step{display:none}.step.on{display:block}
+.code{font-size:34px;font-weight:700;letter-spacing:2px;color:#7dffb0;margin:12px 0}
+.dots{color:var(--muted);font-size:13px;margin-top:20px}
+</style></head><body>
+<!-- A test page for Buddy going online: click through a few steps to get the code. -->
+<div class="card">
+<div class="step on" id="s1"><h1>Secret Code</h1><p>Click through a few steps to get your secret code.</p><button onclick="go(2)">Start</button></div>
+<div class="step" id="s2"><h1>Step 2</h1><p>Which door do you open?</p><button onclick="go(3)">Blue door</button><button class="alt" onclick="go(3)">Green door</button></div>
+<div class="step" id="s3"><h1>Step 3</h1><p>Are you a human or a robot?</p><button onclick="go(4)">Human</button><button class="alt" onclick="go(4)">Robot</button></div>
+<div class="step" id="s4"><h1>Almost there</h1><p>Press the button to reveal your code.</p><button onclick="go(5)">Reveal code</button></div>
+<div class="step" id="s5"><h1>Your code</h1><div class="code">smellyfish</div><p>Well done!</p><button class="alt" onclick="go(1)">Start again</button></div>
+<div class="dots" id="dots">Step 1 of 5</div>
+</div>
+<script>function go(n){document.querySelectorAll('.step').forEach(e=>e.classList.remove('on'));document.getElementById('s'+n).classList.add('on');document.getElementById('dots').textContent='Step '+n+' of 5'}</script>
+</body></html>
