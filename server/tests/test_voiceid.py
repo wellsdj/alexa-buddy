@@ -43,9 +43,9 @@ def test_long_recording_is_cut_into_speech_pieces():
 def test_knows_who_is_talking(vid):
     vid.add_audio("Sam", voice(200, 20))
     vid.add_audio("Alex", voice(600, 20, seed=2))
-    assert vid.identify(voice(200, 3, seed=5))["name"] == "Sam"
-    assert vid.identify(voice(600, 3, seed=6))["name"] == "Alex"
-    stranger = vid.identify(voice(1100, 3, seed=7))
+    assert vid.identify(voice(200, 3, seed=5), trust_s=0)["name"] == "Sam"
+    assert vid.identify(voice(600, 3, seed=6), trust_s=0)["name"] == "Alex"
+    stranger = vid.identify(voice(1100, 3, seed=7), trust_s=0)
     assert stranger["name"] == "" and stranger["score"] < 0.35
 
 
@@ -68,7 +68,7 @@ def test_saved_between_restarts_and_can_be_deleted(vid, tmp_path):
     assert r["pieces"] >= 2 and r["match"] > 0.9
     again = VoiceID(tmp_path)
     assert [p["name"] for p in again.status()["people"]] == ["Sam"]
-    assert again.identify(voice(200, 3, seed=9))["name"] == "Sam"
+    assert again.identify(voice(200, 3, seed=9), trust_s=0)["name"] == "Sam"
     assert again.remove("Sam") and not again.remove("Sam")
     assert VoiceID(tmp_path).status()["people"] == []
 
@@ -86,5 +86,15 @@ def test_nothing_saved_means_nobody_recognised(tmp_path, monkeypatch):
     monkeypatch.setattr(VoiceID, "installed", lambda self: True)
     calls = []
     monkeypatch.setattr(VoiceID, "embed", lambda self, pcm: calls.append(1))
-    assert VoiceID(tmp_path).identify(voice(200, 3)) == {"name": "", "score": 0.0, "best": ""}
+    assert VoiceID(tmp_path).identify(voice(200, 3)) == {"name": "", "score": 0.0, "best": "", "learning": ""}
     assert calls == []  # and it doesn't even run the model
+
+
+def test_a_new_voice_isnt_named_until_there_is_enough_of_it(vid):
+    vid.add_audio("Sam", voice(200, 20))  # 20 s: not enough yet
+    r = vid.identify(voice(200, 3, seed=5), trust_s=60)
+    assert r["name"] == "" and r["learning"] == "Sam"
+    for _ in range(14):  # it keeps learning as Sam talks: 14 more sentences of about 3 s
+        vid.add_print("Sam", r["print"], r["seconds"])
+    assert vid.identify(voice(200, 3, seed=6), trust_s=60)["name"] == "Sam"
+    assert vid.status(60)["people"][0]["trusted"]

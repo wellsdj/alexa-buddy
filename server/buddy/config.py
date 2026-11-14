@@ -60,6 +60,9 @@ DEFAULTS: dict[str, Any] = {
     "timing_log": True,  # one line per spoken turn with how long each stage took (data/timings.jsonl)
     "voice_id_on": True,  # notice who is speaking (needs a saved voice on the "Your voice" tab)
     "voice_id_threshold": 0.35,  # how alike a voice must be to count as that person (0-1)
+    "voice_trust_seconds": 60,  # a new voice is only named once Buddy has heard this much of it
+    "voice_learn_on": True,  # keep learning voices from everyday talk (makes recognition better over time)
+    "greet_by_voice": True,  # "Hey <name>!" when someone it knows starts talking; "Who's this?" for a new voice
     "max_listen_s": 15,
     "snooze_minutes": 9,
     "morning_briefing": True,

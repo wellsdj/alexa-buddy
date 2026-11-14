@@ -63,6 +63,7 @@ SORRY = ["Sorry about that!", "Sorry, that was my alarm.", "Sorry about that."]
 AS_I_WAS_SAYING = ["Sorry about that! As I was saying,", "Oh sorry, where was I? Right,",
                    "Sorry about that. Anyway, as I was saying,"]
 YOU_WERE_SAYING = ["Oh sorry, you were saying?", "Sorry about that! What were you saying?", "Sorry! Go on, you were saying?"]
+QUIET_INTENTS = ("off", "stop", "empty", "snooze", "error", "llm_error", "repeat", "carry_on", "more_memory")
 STILL_WORKING = ["Hmm, one sec.", "Bear with me.", "Just a sec.", "Hang on a moment."]
 # Played once when the desk unit is switched on: 16 kHz mono 16-bit.
 _STARTUP_FILE = Path(__file__).resolve().parent.parent / "sounds" / "startup.pcm"
@@ -101,6 +102,7 @@ class Session:
         self.mic_test_until = 0.0
         self.enroll_name = ""  # Your voice tab: add what's said in the mic test to this person's voice
         self.speaker: dict = {}  # who said the sentence being answered
+        self.turn_audio: np.ndarray | None = None  # what they said, to learn their voice from
         self.mt_buf: list[np.ndarray] = []
         self.mt_silence = 0
         self.mt_busy = False
@@ -227,7 +229,8 @@ class Session:
             await self.mic_test_viewer.send_json({
                 "type": "event", "kind": "mic_test", "text": text, "final": final, "ms": ms,
                 "engine": self.hub.stt.status().get("engine", ""), "seconds": round(len(audio) / SR, 1),
-                **({"speaker": who.get("name", ""), "voice_score": who.get("score", 0.0)} if who else {}), **stats})
+                **({"speaker": who.get("name", ""), "learning": who.get("learning", ""),
+                    "voice_score": who.get("score", 0.0)} if who else {}), **stats})
 
     # ---------- audio in ----------
     def feed(self, pcm_bytes: bytes) -> None:
@@ -628,6 +631,9 @@ class Hub:
         self.judge = ContextJudge(settings, self.listener)
         self.stt = stt or LocalSTT(settings)
         self.voiceid = VoiceID(settings.data_dir)  # knows who is speaking
+        self.asked_who: dict | None = None  # asked a new voice "who's this?": their held answer and voice
+        self.greeted: dict[str, float] = {}  # name -> when Buddy last said hello to them
+        self.heard: dict[str, float] = {}  # name -> when Buddy last heard their voice
         self.awake = True  # "off" sets this to False until the next "hey buddy"
         self.device_gone_at: dict[str, float] = {}
         self.ring_started: dict = {}  # alarm id -> when it started ringing
@@ -795,12 +801,37 @@ class Hub:
             self.record("awake" if on else "asleep")
             self._soon(self.broadcast_ui({"type": "event", "kind": "settings"}))
 
+    async def _learn_voice(self, who: dict) -> None:
+        """Learning as people talk: someone still being learnt gets every sentence added until Buddy has
+        enough to name them; someone it knows well gets clear matches added, so it keeps up with their
+        voice (a cold, a new mic...). Also notes who's around."""
+        if not who:
+            return
+        name = who.get("name") or who.get("learning")
+        if name:
+            self.heard[name] = time.time()
+        v = who.get("print")
+        if v is None or not self.settings["voice_learn_on"]:
+            return
+        thr = float(self.settings["voice_id_threshold"])
+        if who.get("learning") or (who.get("name") and who.get("score", 0) >= thr + 0.15):
+            was = self.voiceid.trusted(name, float(self.settings["voice_trust_seconds"]))
+            await asyncio.to_thread(self.voiceid.add_print, name, v, float(who.get("seconds", 0)))
+            if not was and self.voiceid.trusted(name, float(self.settings["voice_trust_seconds"])):
+                self.record("voice_now_known", name=name)
+
+    def present(self, minutes: float = 15) -> list[str]:
+        """People whose voices Buddy heard in the last few minutes."""
+        cutoff = time.time() - minutes * 60
+        return [n for n, t in sorted(self.heard.items(), key=lambda x: -x[1]) if t >= cutoff]
+
     async def who_spoke(self, audio: np.ndarray) -> dict:
         """{"name": ..., "score": ...} for whoever said this ("" if unknown); {} when voice ID is off."""
         if not self.settings["voice_id_on"] or not self.voiceid.people or not self.voiceid.installed():
             return {}
         try:
-            return await asyncio.to_thread(self.voiceid.identify, audio, float(self.settings["voice_id_threshold"]))
+            return await asyncio.to_thread(self.voiceid.identify, audio, float(self.settings["voice_id_threshold"]),
+                                           float(self.settings["voice_trust_seconds"]))
         except Exception as e:  # noqa: BLE001 - never let this stop an answer
             log.info("voice ID skipped: %s", e)
             return {}
@@ -824,6 +855,8 @@ class Hub:
         stt_ms = int((time.monotonic() - t0) * 1000)
         timing.mark("stt_done")
         s.speaker = await who_task
+        s.turn_audio = audio
+        await self._learn_voice(s.speaker)
         if s.interrupted_text and time.time() - s.interrupted_at < 20 and text.strip():
             cleaned = intents.strip_echo(text, s.interrupted_text)
             if cleaned != text:
@@ -836,8 +869,9 @@ class Hub:
             self.record("capture", session=s.id, heard=text, speech_s=round(speech_s, 2),
                         loudest_db=round(20 * np.log10(max(peak, 1.0) / 32768), 1),
                         level_db=round(rms_dbfs(audio), 1), clipped=bool(peak >= 32000), mode=silent or "normal",
-                        **({"speaker": s.speaker.get("name") or "unknown", "voice_score": s.speaker.get("score")}
-                           if s.speaker else {}))
+                        **({"speaker": s.speaker.get("name") or (f"{s.speaker['learning']} (still learning)"
+                                                                 if s.speaker.get("learning") else "unknown"),
+                            "voice_score": s.speaker.get("score")} if s.speaker else {}))
         if silent == "wake":
             # A soft "hey buddy" out of nowhere. If the words are clearly something else, ignore it;
             # if they're unclear, wake up anyway to be sure.
@@ -953,10 +987,16 @@ class Hub:
 
     async def _respond(self, s: Session, text: str, stt_ms: int = 0) -> None:
         speaker, s.speaker = s.speaker, {}
+        audio, s.turn_audio = s.turn_audio, None
         await self.broadcast_ui({"type": "event", "kind": "transcript", "session": s.id, "role": "user", "text": text,
                                  **({"speaker": speaker.get("name", "")} if speaker else {})})
+        if await self._answer_to_who(s, text, audio):
+            return
+        starting = not self.conv.history or time.time() - self.conv.last_active > 600
         ctx = {"ringing": s.ringing or next((d.ringing for d in self.devices() if d.ringing), None),
-               "say": s.interim}
+               "say": s.interim, "present": self.present(),
+               # Who's talking: their name, or "unknown voice" when it heard someone it doesn't know yet.
+               "speaker": speaker.get("name") or ("unknown voice" if speaker.get("score", 0) > 0 else "")}
         work = asyncio.create_task(self.brain.handle(text, self.conv, ctx))
         try:
             # Still nothing after a few seconds (and no "one sec" yet)? Say so, rather than leave a silence.
@@ -987,6 +1027,8 @@ class Hub:
             reply.text = random.choice(SORRY) + " " + reply.text
         for act in reply.actions:
             await self.apply_action(s, act)
+        if starting and reply.text and reply.intent not in QUIET_INTENTS and self.settings["greet_by_voice"]:
+            self._greet(reply, speaker, audio)
         self.record("turn", session=s.id, heard=text, said=reply.text, intent=reply.intent, model=reply.model,
                     stt_ms=stt_ms, brain_ms=reply.ms)
         await self.broadcast_ui({"type": "event", "kind": "transcript", "session": s.id, "role": "assistant",
@@ -999,6 +1041,55 @@ class Hub:
             elif reply.intent not in ("music",):
                 await self.note(s, f'Heard "{text}" but had nothing to say back.')
             await s.set_state("idle")
+
+    def _greet(self, reply: Reply, speaker: dict, audio: np.ndarray | None) -> None:
+        """Start of a conversation. Someone it knows: "Hey Wells!" (at most once an hour each). A voice it
+        doesn't know: hold the answer and ask "Oh, hello! Who's this?" first."""
+        name = speaker.get("name", "")
+        if speaker.get("learning"):
+            return  # already asked who they are; still learning their voice
+        if name:
+            if time.time() - self.greeted.get(name, 0) > 3600:
+                self.greeted[name] = time.time()
+                reply.text = random.choice([f"Hey {name}!", f"Hi {name}!", f"Alright {name}?"]) + " " + reply.text
+            return
+        # Only ask when it really heard a voice (score > 0) and it wasn't close to anyone saved.
+        if speaker and speaker.get("score", 0) > 0 and audio is not None:
+            self.asked_who = {"text": reply.text, "follow_up": reply.follow_up, "audio": audio, "at": time.time(),
+                              "best": speaker.get("best", ""), "score": speaker.get("score", 0)}
+            reply.text, reply.follow_up = "Oh, hello! Who's this?", True
+            self.record("asked_who", score=speaker.get("score"), closest=speaker.get("best"))
+
+    async def _answer_to_who(self, s: Session, text: str, audio: np.ndarray | None) -> bool:
+        """The reply to "who's this?": remember their voice under that name, then give the answer they were
+        waiting for. Returns False if it wasn't a name (then it's treated as a new request)."""
+        asked, self.asked_who = self.asked_who, None
+        if not asked or time.time() - asked["at"] > 90:
+            return False
+        name = intents.name_answer(text)
+        if not name:
+            return False
+        known = name.lower() in {n.lower() for n in self.voiceid.people}
+        if known:
+            name = next(n for n in self.voiceid.people if n.lower() == name.lower())
+        learnt = 0.0
+        for pcm in (asked["audio"], audio):
+            if pcm is None:
+                continue
+            try:
+                r = await asyncio.to_thread(self.voiceid.add_audio, name, pcm, "talking to Buddy")
+                learnt += r["seconds"]
+            except VoiceIDError:
+                pass  # too short to learn from
+        self.record("voice_learnt", name=name, seconds=round(learnt, 1), already_known=known)
+        self.greeted[name] = time.time()
+        hello = (f"Oh, sorry {name}, I didn't recognise you!" if known else f"Nice to meet you, {name}!")
+        if not learnt and not known:
+            hello += " I'll learn your voice as we chat."
+        said = " ".join(x for x in (hello, asked["text"]) if x)
+        await self.broadcast_ui({"type": "event", "kind": "transcript", "session": s.id, "role": "assistant", "text": said})
+        await s.speak(said, then_listen=asked["follow_up"])
+        return True
 
     async def apply_action(self, s: Session, act: dict) -> None:
         kind = act.get("type")
@@ -1305,5 +1396,5 @@ class Hub:
             "spotify": self.spotify.status(),
             "music": self.music.status(),
             "alarm_sounds": self.sounds.status(),
-            "voiceid": self.voiceid.status(),
+            "voiceid": self.voiceid.status(float(self.settings["voice_trust_seconds"])),
         }

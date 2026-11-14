@@ -79,6 +79,34 @@ _OFF = re.compile(
     r"goodbye|off|already))*")
 
 
+# Words that mean the answer to "who's this?" isn't a name.
+NOT_NAMES = {
+    "what", "who", "why", "how", "when", "where", "which", "can", "could", "would", "will", "should", "is", "are",
+    "do", "does", "did", "the", "a", "an", "no", "nope", "nobody", "noone", "nothing", "never", "mind", "stop",
+    "off", "sorry", "okay", "ok", "not", "telling", "you", "your", "buddy", "set", "play", "tell", "turn", "alarm",
+    "timer", "weather", "time", "please", "thanks", "thank", "yes", "yeah", "hmm", "um", "uh", "just", "again",
+    "doesn't", "matter", "secret", "guess", "someone", "somebody", "friend", "me", "him", "her", "them", "it",
+    "that", "this", "here", "there", "now", "today", "tomorrow", "volume", "music", "song", "remind", "what's",
+}
+
+
+def name_answer(text: str) -> str | None:
+    """The name in an answer to "who's this?": "It's Sam", "I'm Sam Jones", "Sam here", "Sam". None if
+    it isn't a name (they asked something else, or said "never mind")."""
+    t = strip_wake(text).strip().lower()
+    t = re.sub(r"[.!?,]+", " ", t)
+    t = re.sub(r"\b(oh|um+|uh+|er+m?|hi|hiya|hello|hey|yeah|yes|well|so|sorry)\b", " ", t)
+    t = re.sub(r" (here|speaking|again)$", "", " ".join(t.split()))
+    m = re.fullmatch(r"(?:it'?s|it is|this is|i'?m|i am|my name'?s|my name is|call me|you can call me|its)?\s*"
+                     r"([a-z][a-z'-]+(?: [a-z][a-z'-]+)?)", t)
+    if not m:
+        return None
+    words = m.group(1).split()
+    if any(w in NOT_NAMES for w in words) or any(len(w) < 2 for w in words):
+        return None
+    return " ".join(w[:1].upper() + w[1:] for w in words)
+
+
 def is_off(text: str) -> bool:
     """Short "go away" type sentences, in lots of wordings. Never things like "turn off my alarm"."""
     t = _norm(text) if text else ""

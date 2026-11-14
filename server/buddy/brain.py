@@ -113,13 +113,15 @@ class Conversation:
     dropped: list[str] = field(default_factory=list)
     interrupted: str = ""  # the rest of an answer that got cut off, for "carry on"  # topics the user asked Buddy to leave alone
 
-    def add(self, role: str, content: str, note: str = "") -> None:
-        """note: private background for later turns (e.g. "I searched the web for ..."), never spoken."""
+    def add(self, role: str, content: str, note: str = "", speaker: str = "") -> None:
+        """note: private background for later turns (e.g. "I searched the web for ..."), never spoken.
+        speaker: who said it, when Buddy knew their voice (several people can talk to Buddy)."""
         if not content:
             return
-        self.history.append({"role": role, "content": content, **({"note": note} if note else {})})
+        self.history.append({"role": role, "content": content, **({"note": note} if note else {}),
+                             **({"speaker": speaker} if speaker else {})})
         self.history = self.history[-8:]
-        self.transcript.append({"role": role, "content": content})
+        self.transcript.append({"role": role, "content": f"[{speaker}] {content}" if speaker else content})
         self.last_active = time.time()
 
 
@@ -316,7 +318,7 @@ class Brain:
             reply.text = await self._reword(text, reply.text)
         if self.missed and reply.text and reply.intent not in ("off", "stop", "repeat", "think_offer"):
             reply.text = await self._mention_missed(text, reply.text)
-        conv.add("user", text)
+        conv.add("user", text, speaker=ctx.get("speaker", ""))
         if reply.text:
             notes = [f'I searched the web for "{q}" and found: {r[:350]}' for q, r in ctx.get("searched", [])]
             if ctx.get("thought"):
@@ -694,16 +696,24 @@ class Brain:
         if force_search:
             system += ("\nYour last answer to this didn't pass a fact-check. Use web_search to get current, reliable "
                        "facts before answering, and only say what the results support.")
+        if ctx.get("speaker") or ctx.get("present"):
+            system += ("\nSeveral people can talk to you; you know them by voice. Their lines start with their name "
+                       "in brackets, or [unknown voice]. Keep track of who said what, answer the person talking now, "
+                       "and use what each person told you for them, not for someone else.")
+            if ctx.get("present"):
+                system += f"\nHeard in the last 15 minutes: {', '.join(ctx['present'])}."
         if conv.dropped:
             system += ("\nTopics the user asked you to drop (don't bring them up again unless they do): "
                        + "; ".join(conv.dropped[-6:]) + ".")
         messages = [{"role": "system", "content": system}]
         for m in conv.history[-6:]:
             content = m["content"]
+            if m.get("speaker"):
+                content = f"[{m['speaker']}] {content}"
             if m.get("note"):
                 content = f"(Background note, not spoken: {m['note']})\n{content}"
             messages.append({"role": m["role"], "content": content})
-        messages.append({"role": "user", "content": text})
+        messages.append({"role": "user", "content": f"[{ctx['speaker']}] {text}" if ctx.get("speaker") else text})
         tools = TOOLS if allow_think else [t for t in TOOLS if t["function"]["name"] != "think_harder"]
         try:
             return await self._tool_loop(messages, conv, ctx, tier, tools, text)

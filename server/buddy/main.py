@@ -618,7 +618,7 @@ def create_app(settings: Settings | None = None, http=None, claude_http=None, st
     # ---------- your voice (voice recognition) ----------
     @app.get("/api/voiceid")
     async def voiceid_status():
-        return hub.voiceid.status()
+        return hub.voiceid.status(float(settings["voice_trust_seconds"]))
 
     @app.post("/api/voiceid/install")
     async def voiceid_install():
@@ -630,7 +630,7 @@ def create_app(settings: Settings | None = None, http=None, claude_http=None, st
                     log.warning("voice model download failed: %s", e)
             asyncio.create_task(run())
             hub.voiceid.installing = True
-        return hub.voiceid.status()
+        return hub.voiceid.status(float(settings["voice_trust_seconds"]))
 
     @app.post("/api/voiceid/upload")
     async def voiceid_upload(request: Request):
@@ -669,7 +669,7 @@ def create_app(settings: Settings | None = None, http=None, claude_http=None, st
     async def voiceid_delete(name: str):
         if not hub.voiceid.remove(name):
             raise HTTPException(404, "No saved voice with that name.")
-        return hub.voiceid.status()
+        return hub.voiceid.status(float(settings["voice_trust_seconds"]))
 
     # ---------- weather ----------
     @app.get("/api/weather")

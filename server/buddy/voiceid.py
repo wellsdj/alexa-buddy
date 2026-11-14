@@ -36,6 +36,9 @@ PIECE_S = 4.0  # long recordings are cut into pieces this long, one voiceprint e
 MIN_PIECE_S = 1.5  # shorter than this says too little about a voice
 MAX_SAMPLES = 120  # per person; the oldest go first
 MIN_ID_S = 0.8  # shorter sentences aren't checked ("off", "stop")
+# A new voice is only named once Buddy has this much of their speech. Tested on the user's recording:
+# recognition stops improving at about 30-60 s (96% of 2 s clips, no strangers named).
+TRUST_S = 60.0
 
 
 class VoiceIDError(Exception):
@@ -205,25 +208,50 @@ class VoiceID:
             self._save()
         return True
 
-    def identify(self, pcm: np.ndarray, threshold: float = 0.35) -> dict:
-        """Who is speaking? {"name": "" if unknown, "score": best match 0..1, "best": closest name}."""
+    def trusted(self, name: str, trust_s: float = TRUST_S) -> bool:
+        return self.people.get(name, {}).get("seconds", 0.0) >= trust_s
+
+    def identify(self, pcm: np.ndarray, threshold: float = 0.35, trust_s: float = TRUST_S) -> dict:
+        """Who is speaking? {"name": a trusted match or "", "score": 0..1, "best": the closest name,
+        "learning": a match whose voice is still being learnt (not enough speech yet to name them),
+        "print": this sentence's voiceprint, "seconds": how much speech it was}."""
+        empty = {"name": "", "score": 0.0, "best": "", "learning": ""}
         if not self._centroids or len(pcm) < MIN_ID_S * SR or not self.installed():
-            return {"name": "", "score": 0.0, "best": ""}
+            return empty
         voice = pcm[-int(10 * SR):]  # the last 10 s is plenty
         if not has_speech(voice, 0.25):
-            return {"name": "", "score": 0.0, "best": ""}
+            return empty
         v = self.embed(voice)
         scores = {name: float(v @ c) for name, c in self._centroids.items()}
         best = max(scores, key=scores.get)
         score = round(scores[best], 2)
-        return {"name": best if score >= threshold else "", "score": score, "best": best}
+        match = best if score >= threshold else ""
+        trusted = bool(match) and self.trusted(match, trust_s)
+        return {"name": match if trusted else "", "score": score, "best": best,
+                "learning": match if match and not trusted else "", "print": v, "seconds": len(voice) / SR}
 
-    def status(self) -> dict:
+    def add_print(self, name: str, v: np.ndarray, seconds: float, source: str = "learnt while talking") -> None:
+        """Add one sentence's voiceprint to someone already saved (learning as they talk)."""
+        with self._lock:
+            p = self.people.get(name)
+            if not p:
+                return
+            p["samples"] = (p["samples"] + [[round(float(x), 5) for x in v]])[-MAX_SAMPLES:]
+            p["seconds"] = round(p.get("seconds", 0.0) + seconds, 1)
+            p.setdefault("sources", [])
+            if source not in p["sources"]:
+                p["sources"].append(source)
+            self._refresh()
+            self._save()
+
+    def status(self, trust_s: float = TRUST_S) -> dict:
         return {
             "installed": self.installed(),
             "installing": self.installing,
             "model_mb": MODEL_MB,
             "error": self.last_error,
+            "trust_seconds": trust_s,
             "people": [{"name": n, "samples": len(p["samples"]), "seconds": p.get("seconds", 0.0),
-                        "sources": p.get("sources", [])} for n, p in sorted(self.people.items())],
+                        "sources": p.get("sources", []), "trusted": self.trusted(n, trust_s)}
+                       for n, p in sorted(self.people.items())],
         }

@@ -517,6 +517,7 @@ function micTestEvent(m) {
     if (m.text.trim()) {
       const who = m.speaker === undefined ? null
         : m.speaker ? el("span", { class: "who" }, `sounds like ${m.speaker} (${m.voice_score})`)
+        : m.learning ? el("span", { class: "who unknown" }, `probably ${m.learning}, still learning their voice (${m.voice_score})`)
         : el("span", { class: "who unknown" }, `voice not recognised (${m.voice_score})`);
       $("mt-lines").append(el("li", {}, m.text, el("span", { class: "meta" }, ` ${m.seconds}s of speech · ${m.ms} ms · ${m.engine}`), ...(who ? [who] : [])));
     } else {
@@ -552,7 +553,9 @@ async function loadVoiceID() {
   if (st.installing) vidPoll = setTimeout(loadVoiceID, 2000);
   if (!$("vid-name").value) $("vid-name").value = S.settings?.user_name || "";
   $("vid-people").replaceChildren(...(st.people.length ? st.people.map((p) => el("li", {},
-    el("div", {}, el("b", {}, p.name), el("small", {}, `${Math.round(p.seconds)} s of speech · ${p.sources.join(", ")}`)),
+    el("div", {}, el("b", {}, p.name),
+      el("small", {}, p.trusted ? `Knows this voice ✓ · ${Math.round(p.seconds)} s of speech · ${p.sources.join(", ")}`
+        : `Still learning: ${Math.round(p.seconds)} of ${st.trust_seconds} s heard. It learns more each time they talk.`)),
     el("button", { class: "btn small ghost", type: "button", onclick: async () => {
       if (!confirm(`Delete ${p.name}'s saved voice?`)) return;
       try { await api("/api/voiceid/" + encodeURIComponent(p.name), { method: "DELETE" }); loadVoiceID(); toast("Deleted"); }
