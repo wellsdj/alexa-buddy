@@ -103,6 +103,7 @@ class Session:
         self.mic_test_until = 0.0
         self.enroll_name = ""  # Your voice tab: add what's said in the mic test to this person's voice
         self.speaker: dict = {}  # who said the sentence being answered
+        self.early: dict | None = None  # words being written down at the first pause (before the end)
         self.live_task: asyncio.Task | None = None  # an ElevenLabs connection opened early (warm)
         self.turn_audio: np.ndarray | None = None  # what they said, to learn their voice from
         self.mt_buf: list[np.ndarray] = []
@@ -315,6 +316,8 @@ class Session:
             result = self.endpointer.update(probs)
             if result:
                 await self._finish_capture(result)
+            else:
+                self._maybe_transcribe_early()
             return
 
         if not self.hands_free:
@@ -346,6 +349,32 @@ class Session:
         if (self.role == "device" and self.state == "idle" and not self.ringing and now >= self.quiet_until
                 and self.hub.room_listening_active() and probs and max(probs) > 0.6):
             await self.start_listening(preroll_s=0.6, silent="room", earcon=False, no_speech_s=3.0)
+
+    def _maybe_transcribe_early(self) -> None:
+        """At the first short pause, start writing down what's been said so far. If they don't carry on,
+        the words are ready the moment the end-of-speech wait is over; if they do, it's thrown away."""
+        ep, s = self.endpointer, self.hub.settings
+        if not (ep and ep.started and s["early_transcribe"]) or not self.capture:
+            return
+        if ep.silent_run * ep.chunk_s * 1000 < 250:
+            return
+        if self.early and self.early["speech_chunks"] == ep.speech_chunks:
+            return  # already started on exactly this
+        if self.early:
+            self.early["task"].cancel()  # an earlier pause: they carried on talking after it
+        audio = np.concatenate(self.capture)
+        self.early = {"speech_chunks": ep.speech_chunks, "samples": len(audio),
+                      "task": asyncio.create_task(self.hub.stt.transcribe(audio, "", ep.speech_seconds))}
+
+    def _take_early(self) -> "asyncio.Task | None":
+        """The early transcription, if nothing new was said after it started."""
+        early, self.early = self.early, None
+        if not early:
+            return None
+        if self.endpointer and early["speech_chunks"] == self.endpointer.speech_chunks:
+            return early["task"]
+        early["task"].cancel()  # they carried on talking: it's missing words
+        return None
 
     def _ring_listen(self, pcm: np.ndarray, probs: list[float]) -> None:
         """While an alarm rings: when someone says something short, check whether it was "stop" or
@@ -404,6 +433,9 @@ class Session:
         self.silent = silent
         self.mentioned = False
         self.captured = 0
+        if self.early:
+            self.early["task"].cancel()
+        self.early = None
         self.ptt = ptt
         pre = self._take_preroll(preroll_s) if preroll_s else np.zeros(0, dtype=np.int16)
         self.capture = [pre] if len(pre) else []
@@ -438,8 +470,12 @@ class Session:
         now = time.monotonic()
         quiet_s = self.endpointer.silent_run * self.endpointer.chunk_s if (self.endpointer and reason == "end") else 0.0
         timer = timing.TurnTimer(speech_end=now - quiet_s, endpoint=now) if self.hub.settings["timing_log"] else None
+        early = self._take_early()
         self.capture = []
         if reason == "timeout" or len(audio) < SR * 0.3:
+            if self.early:
+                self.early["task"].cancel()
+                self.early = None
             if not silent and self.endpointer:
                 self.hub.record("no_speech", session=self.id, waited_s=round(len(audio) / SR, 1),
                                 loudest_speech=round(self.endpointer.peak, 2),
@@ -454,7 +490,7 @@ class Session:
         else:
             await self.set_state("thinking")
             await self.earcon("end")
-        asyncio.create_task(self.hub.process_audio(self, audio, speech_s, silent, mentioned, timer=timer))
+        asyncio.create_task(self.hub.process_audio(self, audio, speech_s, silent, mentioned, timer=timer, early=early))
 
     # ---------- warm connections ----------
     def warm_up(self) -> None:
@@ -937,13 +973,20 @@ class Hub:
             return {}
 
     async def process_audio(self, s: Session, audio: np.ndarray, speech_s: float, silent: str | None = None,
-                            mentioned: bool = False, timer: "timing.TurnTimer | None" = None) -> None:
+                            mentioned: bool = False, timer: "timing.TurnTimer | None" = None,
+                            early: "asyncio.Task | None" = None) -> None:
         if timer:
             timing.current.set(timer)  # every stage of this turn marks its time on it
         t0 = time.monotonic()
         who_task = asyncio.create_task(self.who_spoke(audio))  # alongside the transcribing: no extra wait
         try:
-            text = await self.stt.transcribe(audio, "", speech_s)
+            try:
+                # Started at the first pause (and they didn't carry on): usually done already.
+                text = await early if early is not None else await self.stt.transcribe(audio, "", speech_s)
+                if early is not None:
+                    timing.note("early_transcript", True)
+            except asyncio.CancelledError:
+                text = await self.stt.transcribe(audio, "", speech_s)
         except STTError as e:
             log.warning("STT failed: %s", e)
             self.record("error", where="stt", error=str(e))

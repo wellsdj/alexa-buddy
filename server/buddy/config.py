@@ -53,7 +53,8 @@ DEFAULTS: dict[str, Any] = {
     "wake_threshold": 0.5,
     "wake_verify_threshold": 0.15,
     "follow_up": "questions",  # off | questions | always
-    "end_of_speech_ms": 800,
+    "end_of_speech_ms": 600,  # quiet this long = you've finished (was 800; lower is faster but may cut you off)
+    "early_transcribe": True,  # start writing down your words at the first pause, before the end is decided
     # Just after "hey buddy", how speech-like a sound must be to count as you talking (0-1). Was 0.5,
     # which missed quiet voices: the light came on, then went off after 6 s.
     "listen_sensitivity": 0.3,

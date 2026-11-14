@@ -55,3 +55,28 @@ def test_listening_uses_the_gentler_setting_but_silent_checks_dont(settings):
     assert s.endpointer.on == 0.3
     asyncio.run(s.start_listening(silent="room", earcon=False))
     assert s.endpointer.on == 0.5
+
+
+def listen(hub, s, chunks):
+    """Feed the listening session one 32 ms chunk per speech score."""
+    async def run():
+        await s.start_listening(earcon=False)
+        for p in chunks:
+            await s._on_audio(np.full(512, 300, np.int16), None, [p])
+            await asyncio.sleep(0.005)
+        await asyncio.sleep(0.2)
+    asyncio.run(run())
+
+
+def test_words_are_written_down_at_the_first_pause(settings):
+    hub, s, ws, spoken = setup(settings, "what time is it")
+    listen(hub, s, [0.9] * 30 + [0.05] * 25)  # talk, then stop
+    assert len(hub.stt.apis.stt_requests) == 1  # the early one was used: no second go
+    assert spoken and ":" in spoken[0]
+
+
+def test_carrying_on_after_a_pause_throws_the_early_words_away(settings):
+    hub, s, ws, spoken = setup(settings, "what time")
+    hub.stt.apis.transcripts.append("what time is it")
+    listen(hub, s, [0.9] * 20 + [0.05] * 10 + [0.9] * 20 + [0.05] * 25)  # a pause mid-sentence
+    assert spoken and ":" in spoken[0]  # the whole sentence was answered, not "what time"
