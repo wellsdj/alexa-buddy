@@ -1228,7 +1228,7 @@ class Hub:
             await s.set_state("idle")
             return
         s.relistened = False
-        if (getattr(s, "follow_up", "") == "after" and not (s.speaker or {}).get("name")
+        if (getattr(s, "follow_up", "") == "after" and not (s.speaker or {}).get("name") and not self.conv.pending
                 and not intents.has_wake(text) and self.settings.secret("GROQ_API_KEY")):
             # Listening on after a statement, and it's not a voice Buddy knows: the TV or people chatting?
             since = time.time() - self.last_spoke_at if self.last_spoke_at else 1e9

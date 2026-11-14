@@ -350,8 +350,8 @@ What you remember about the user (numbers are ids for editing):
 {memories}"""
 
 
-URL_SPELL_ASK = ("I'm not sure I caught that. Words are fine, like 'studdy dash buddy dot vercel dot app slash "
-                 "code', and say done at the end. Can you say the address bit by bit?")
+URL_SPELL_ASK = ("I didn't quite catch the address. Can you say it a bit at a time? I'll repeat each bit back, "
+                 "and say done at the end. What's the first bit?")
 _URL_WORDS = [("forward slash", "/"), ("full stop", "."), ("dot", "."), ("point", "."), ("period", "."),
               ("slash", "/"), ("dash", "-"), ("hyphen", "-"), ("minus", "-"), ("underscore", "_"),
               ("colon", ":"), ("at sign", "@"), ("question mark", "?"), ("equals", "="), ("and sign", "&")]
@@ -383,8 +383,10 @@ def address_from_speech(text: str, strict: bool = True) -> str:
 
 
 def say_address(url: str) -> str:
-    """How to read an address back: 'studdy dash buddy dot vercel dot app slash code'."""
-    return re.sub(r"\s+", " ", "".join(f" {_SAY[c]} " if c in _SAY else c for c in url)).strip()
+    """How to read an address back, slowly and clearly, a piece at a time:
+    'studdy, dash, buddy, dot, vercel, dot, app, slash, code'."""
+    pieces = [p for p in re.split(r"([./\-_:?=&@])", url) if p]
+    return ", ".join(_SAY.get(p, p) for p in pieces)
 
 
 def speakable(text: str, limit: int = 900) -> str:
@@ -723,49 +725,90 @@ class Brain:
 
     # ---------- Wi-Fi by voice ----------
     async def _address(self, text: str, conv: Conversation, ctx: dict, p: dict) -> Reply:
-        """Getting a website address right: read back, yes/no, or said bit by bit."""
-        t = text.lower().strip()
-        if re.search(r"\b(cancel|never mind|forget it|stop)\b", t):
-            return Reply("Okay, forget that address.", intent="address")
-        if p["intent"] == "url_confirm":
-            if YES.search(t) and not NO.search(t):
-                url = p["url"]
-                self.memory.add(f"Website they gave: {url}", "other", source="user")
-                conv.last_address = url
-                if p.get("task") and self.online:
-                    r = self.online.start(f"{p['task']} (the address is {url})", who=ctx.get("speaker", ""),
-                                          today=self.now().strftime("%A %d %B %Y"))
-                    if r == "started":
-                        return Reply("Great, I'm on it. I'll come back to you.", intent="address")
-                    return Reply(r, intent="address")
-                return Reply(f"Got it, I'll remember {say_address(url)}.", intent="address")
-            # "no, it's ..." with a new address: try that; otherwise ask for it bit by bit
-            rest = re.sub(r"^(no|nope|not quite|wrong)[,.!]?\s*(it's|its|it is)?\s*", "", t)
-            again = address_from_speech(rest) if rest != t or not NO.search(t) else ""
-            if again and again != p["url"]:
-                conv.pending = {**p, "url": again}
-                return Reply(f"Okay, so it's {say_address(again)}. Is that right?", intent="address", follow_up=True)
+        """Getting a website address right. Claude reads what they said (yes, no, a correction, a bit
+        of the address, or just chat), and Buddy keeps asking until they say it's right."""
+        url = p.get("url", "") or p.get("chars", "")
+        spelling = p["intent"] == "url_spell"
+        d = await self._address_meaning(text, url, spelling)
+        act = d.get("action", "")
+        new = address_from_speech(d.get("address", ""), strict=False) if d.get("address") else ""
+        part = address_from_speech(d.get("part", ""), strict=False) if d.get("part") else ""
+
+        def ask(u: str, line: str = "") -> Reply:
+            conv.pending = {"intent": "url_confirm", "url": u, "task": p.get("task", "")}
+            return Reply(f"{line} I've got: {say_address(u)}. Is that right?".strip(), intent="address",
+                         follow_up=True)
+
+        if act == "cancel":
+            return Reply("Okay, I'll forget that address.", intent="address")
+        if act == "yes" and url and not spelling:
+            return await self._address_done(url, conv, ctx, p)
+        if act in ("replace", "no") and new and new != url:
+            return ask(new, "Okay.")
+        if act == "no" or (act == "yes" and spelling and not url):
             conv.pending = {"intent": "url_spell", "chars": "", "task": p.get("task", "")}
-            return Reply(URL_SPELL_ASK, intent="address", follow_up=True)
-        # bit by bit
-        so_far = p.get("chars", "")
-        done = re.search(r"\b(done|finished|that's it|that's all|that's the lot)\b", t)
-        if re.search(r"\b(start again|start over|from the beginning)\b", t):
+            return Reply("No problem. Say it to me a bit at a time, and I'll repeat each bit back. "
+                         "Say done when that's all of it. What's the first bit?", intent="address", follow_up=True)
+        if spelling and act == "add" and part:
+            so_far = url + part
+            conv.pending = {**p, "chars": so_far}
+            return Reply(f"{say_address(part)}. Got it. Next bit, or done?", intent="address", follow_up=True)
+        if spelling and act in ("done", "yes") and url:
+            return ask(url, "Great.")
+        if spelling and act == "restart":
             conv.pending = {**p, "chars": ""}
-            return Reply("Okay, from the start.", intent="address", follow_up=True)
-        part = address_from_speech(re.sub(r"\b(done|finished|that's it|that's all|that's the lot)\b", "", t),
-                                   strict=False)
-        so_far += part
-        if done or (not part and so_far):
-            if not so_far:
-                conv.pending = {**p, "chars": ""}
-                return Reply("I didn't get any of it yet. Go on, bit by bit.", intent="address", follow_up=True)
-            url = address_from_speech(so_far, strict=False)
-            conv.pending = {"intent": "url_confirm", "url": url, "task": p.get("task", "")}
-            return Reply(f"So that's {say_address(url)}. Is that right?", intent="address", follow_up=True)
-        conv.pending = {**p, "chars": so_far}
-        return Reply(f"{say_address(part)}. Next bit, or say done." if part else "Sorry, say that bit again?",
-                     intent="address", follow_up=True)
+            return Reply("Okay, from the start. What's the first bit?", intent="address", follow_up=True)
+        # Something else (chat, unclear): answer kindly and keep going.
+        conv.pending = p
+        if spelling:
+            got = f" So far I've got: {say_address(url)}." if url else ""
+            return Reply(f"Sorry, I didn't catch an address bit there.{got} What's the next bit, or say done?",
+                         intent="address", follow_up=True)
+        return Reply(f"Sorry, just to be sure, is the address {say_address(url)}? Yes or no?", intent="address",
+                     follow_up=True)
+
+    async def _address_meaning(self, text: str, url: str, spelling: bool) -> dict:
+        state = (f"They're saying the address a bit at a time. So far: \"{url}\"." if spelling
+                 else f"You read back the address \"{url}\" and asked if it's right.")
+        prompt = (f"You're a voice assistant taking down a website address. {state}\n"
+                  f"They just said (speech-to-text, may be messy): \"{text}\"\n"
+                  "What do they mean? Reply with JSON only: {\"action\": one of \"yes\" (it's right / go ahead), "
+                  "\"no\" (it's wrong, nothing new given), \"replace\" (they gave a whole new or corrected address), "
+                  "\"add\" (the next piece of the address), \"done\" (that's all of it), \"restart\", "
+                  "\"cancel\", \"other\" (chat or unclear), \"address\": the full corrected address if "
+                  "replace (as typed, e.g. studdy-buddy.vercel.app/code), \"part\": the piece to add if add (as "
+                  "typed, e.g. vercel.app)}. Filler like um, uh, buddy, okay doesn't change the meaning.")
+        try:
+            res = await self.llm.chat([{"role": "user", "content": prompt}], tier="fast", json_mode=True,
+                                      max_tokens=150)
+            d = parse_json_loose(res.content or "")
+            if isinstance(d, dict) and d.get("action"):
+                return d
+        except Exception:  # noqa: BLE001 - fall back to simple word rules
+            pass
+        t = text.lower()
+        if re.search(r"\b(cancel|never mind|forget it)\b", t):
+            return {"action": "cancel"}
+        if re.search(r"\b(done|finished|that's it|that's all)\b", t) and spelling:
+            return {"action": "done"}
+        if re.search(r"\b(yes|yeah|yep|yup|correct|right|that's the one|go ahead|perfect)\b", t):
+            return {"action": "yes"}
+        if re.search(r"\b(no|nope|wrong|not quite)\b", t):
+            return {"action": "no"}
+        if spelling and address_from_speech(t, strict=False):
+            return {"action": "add", "part": t}
+        return {"action": "other"}
+
+    async def _address_done(self, url: str, conv: Conversation, ctx: dict, p: dict) -> Reply:
+        self.memory.add(f"Website they gave: {url}", "other", source="user")
+        conv.last_address = url
+        if p.get("task") and self.online:
+            r = self.online.start(f"{p['task']} (the address is {url})", who=ctx.get("speaker", ""),
+                                  today=self.now().strftime("%A %d %B %Y"))
+            if r == "started":
+                return Reply("Great, I'm going there now. I'll tell you what I find.", intent="address")
+            return Reply(r, intent="address")
+        return Reply(f"Great, I'll remember {say_address(url)}.", intent="address")
 
     async def _wifi_tool(self, a: dict, conv: Conversation) -> tuple[str, str, list]:
         if self.wifi is None or not self.wifi.devices():
