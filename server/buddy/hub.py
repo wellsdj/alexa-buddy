@@ -48,6 +48,7 @@ from .alarm_sounds import AlarmSounds
 from .study import StudyStore, StudyWorker
 from .music import MusicPlayer
 from .spotify import Spotify
+from .speech import SpeechStream
 from .stt import LocalSTT, STTError
 from .tts import ElevenLabsTTS, TTSRouter, TTSUnavailable
 from .vad import CHUNK as VAD_CHUNK
@@ -479,32 +480,64 @@ class Session:
         if not text:
             await self.set_state("idle")
             return
-        self.seq = (self.seq + 1) % 256
-        seq = self.seq
-        self.playback_done.clear()
-        await self.set_state("speaking")
-        await self.send_json({"type": "audio_start", "seq": seq, "rate": SR, "text": text})
-        if after == "idle":  # a real answer (not a "one sec"): remember it, in case they cut in
-            self.speaking_text, self.speak_started, self.speak_total_s = text, None, 0.0
+        await self._play(self.hub.tts.stream(text), lambda: text, lambda: then_listen, after, hold_s=0.5,
+                         engine=lambda: self.hub.tts.last_engine)
+
+    async def speak_stream(self, speech) -> None:
+        """Speak an answer while it's still being written (speech.SpeechStream)."""
+        if self.interim_task and not self.interim_task.done():
+            try:  # let the "one sec" line finish rather than cutting it off
+                await asyncio.wait_for(asyncio.shield(self.interim_task), timeout=8.0)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                pass
+        if self.speak_task and not self.speak_task.done():
+            self.speak_task.cancel()
+        hold = max(0.05, int(self.hub.settings["play_hold_ms"]) / 1000)
+        self.speak_task = asyncio.create_task(self._play(
+            speech.pcm(), lambda: speech.text, lambda: speech.then_listen, "idle", hold_s=hold,
+            engine=lambda: speech.engine, gaps=speech))
+        try:
+            await self.speak_task
+        except asyncio.CancelledError:
+            pass
+
+    async def _play(self, pcm_iter, text_of, then_listen_of, after: str, hold_s: float, engine, gaps=None) -> None:
+        """Send sound to the speaker as it arrives. Nothing happens (no light, no "speaking") until the
+        first sound is ready. text_of / then_listen_of are read as they change (streamed answers grow)."""
+        seq = None
+        answer = after == "idle"  # a real answer (not a "one sec"): remember it, in case they cut in
         sent = 0
         t0 = time.monotonic()
         # The board holds 1.5 s of sound. Keep it about 0.8 s ahead: enough to ride out Wi-Fi
         # hiccups, never so much that it overflows and drops pieces mid-word.
         lead = 0.8
         leveller = Leveller()  # same loudness whichever voice spoke
-        held = bytearray()  # the first half second, collected before playing starts
+        held = bytearray()  # the first bit of sound, collected before playing starts
         started_at = None  # the clock starts when the first sound is sent, not before the voice arrives
+        timer = timing.current.get() if answer else None
 
-        timer = timing.current.get() if after == "idle" else None  # a "one sec" line isn't the answer
+        async def begin() -> int:
+            nonlocal seq
+            self.seq = (self.seq + 1) % 256
+            seq = self.seq
+            self.playback_done.clear()
+            await self.set_state("speaking")
+            await self.send_json({"type": "audio_start", "seq": seq, "rate": SR, "text": text_of()})
+            if answer:
+                self.speaking_text, self.speak_started, self.speak_total_s = text_of(), None, 0.0
+            return seq
 
         async def send(pcm: bytes, final: bool = False) -> None:
             nonlocal sent, started_at
             if started_at is None:
                 held.extend(pcm)
-                if len(held) < BYTES_PER_S // 2 and not final:
-                    return  # wait for half a second, so a slow start doesn't stutter
+                if len(held) < BYTES_PER_S * hold_s and not final:
+                    return  # collect a little first, so a slow start doesn't stutter
+                if not held:
+                    return
                 pcm, started_at = bytes(held), time.monotonic()
-                if self.speaking_text == text:
+                await begin()
+                if answer:
                     self.speak_started = started_at
                 if timer:
                     # The board plays as soon as this arrives (a few tens of ms over Wi-Fi).
@@ -515,32 +548,47 @@ class Session:
                 ahead = sent / BYTES_PER_S - (time.monotonic() - started_at)
                 if ahead > lead:
                     await asyncio.sleep(ahead - lead)
+                elif ahead < -0.05 and gaps is not None and sent:
+                    gaps.gaps += 1  # the sound ran out mid-answer: a pause the listener can hear
                 await self.send_audio(seq, part)
                 sent += len(part)
-                if self.speaking_text == text:
+                if answer:
+                    self.speaking_text = text_of()
                     self.speak_total_s = sent / BYTES_PER_S
 
         try:
-            if timer:
+            if timer and gaps is None:
                 timer.mark("tts_sent")
-            async for chunk in self.hub.tts.stream(text):
-                if timer:
+            async for chunk in pcm_iter:
+                if timer and gaps is None:
                     timer.mark("tts_first_byte")
                 await send(leveller.process(chunk))
             await send(leveller.flush(), final=True)
             t0 = started_at or t0
-            self.hub.record("voice", engine=self.hub.tts.last_engine, to=self.role,
-                            volume=self.hub.brain.volume, peak_in_db=peak_db(leveller.peak_in),
-                            peak_out_db=peak_db(leveller.peak_out),
-                            dropped_on_board=self.info.get("dropped_spk"))
+            if started_at is not None:
+                self.hub.record("voice", engine=engine(), to=self.role,
+                                volume=self.hub.brain.volume, peak_in_db=peak_db(leveller.peak_in),
+                                peak_out_db=peak_db(leveller.peak_out),
+                                dropped_on_board=self.info.get("dropped_spk"),
+                                **({"gaps": gaps.gaps} if gaps is not None else {}))
+                if timer and gaps is not None:
+                    timing.note("gaps", gaps.gaps)
         except TTSUnavailable as e:
             log.warning("no TTS: %s", e)
+            if seq is None:
+                await begin()
+            text = text_of()
             await self.send_json({"type": "say", "seq": seq, "text": text})
             if self.role == "device":
                 await self.earcon("error")
             sent = int(len(text) / 14 * BYTES_PER_S)  # rough speaking time for the browser voice
+        except asyncio.CancelledError:
+            raise
         except Exception:  # noqa: BLE001
             log.exception("speaking failed")
+        if seq is None:  # nothing to say after all
+            await self.set_state(after if after != "idle" else "idle")
+            return
         await self.send_json({"type": "audio_end", "seq": seq, "bytes": sent})
         remaining = max(0.0, sent / BYTES_PER_S - (time.monotonic() - t0))
         try:
@@ -549,7 +597,7 @@ class Session:
             pass
         self.quiet_until = time.time() + 1.0  # the last of Buddy's voice is still in the room
         self.hub.last_spoke_at = time.time()
-        if then_listen and self.hands_free:
+        if then_listen_of() and self.hands_free:
             await self.start_listening(earcon=True, no_speech_s=5.0)
         else:
             await self.set_state(after)  # "thinking" after a "one sec" line: the answer is on its way
@@ -998,11 +1046,22 @@ class Hub:
                "say": s.interim, "present": self.present(),
                # Who's talking: their name, or "unknown voice" when it heard someone it doesn't know yet.
                "speaker": speaker.get("name") or ("unknown voice" if speaker.get("score", 0) > 0 else "")}
+        speech, speaking = None, None
+        if self._can_stream(s, starting, speaker):
+            # Speak Claude's answer while it's being written (speech.py).
+            speech = SpeechStream(self, timing.current.get())
+            name = speaker.get("name", "")
+            if (starting and name and self.settings["greet_by_voice"]
+                    and time.time() - self.greeted.get(name, 0) > 3600):
+                self.greeted[name] = time.time()
+                speech.add_text(random.choice([f"Hey {name}!", f"Hi {name}!", f"Alright {name}?"]))
+            ctx["on_text"] = speech.feed
+            speaking = asyncio.create_task(s.speak_stream(speech))
         work = asyncio.create_task(self.brain.handle(text, self.conv, ctx))
         try:
             # Still nothing after a few seconds (and no "one sec" yet)? Say so, rather than leave a silence.
             done, _ = await asyncio.wait({work}, timeout=3.5)
-            if not done and not ctx.get("said_while"):
+            if not done and not ctx.get("said_while") and not (speech and speech.started):
                 ctx["said_while"] = True
                 await s.interim(random.choice(STILL_WORKING))
             reply: Reply = await work
@@ -1010,6 +1069,20 @@ class Hub:
             log.exception("brain failed")
             reply = Reply("Ah, sorry, something went a bit wrong on my end. Give it another go?", intent="error")
             self.record("error", where="brain", error=str(e))
+        if speech is not None:
+            if s.paused is not None and not speech.played:
+                # An alarm broke in before any of the answer was heard: hold it, as before streaming.
+                speaking.cancel()
+                try:
+                    await speaking
+                except asyncio.CancelledError:
+                    pass
+                ctx.pop("check_later", None)
+                if reply.streamed and self.settings["fact_check"] and reply.intent in ("llm", "llm_deep"):
+                    reply = await self.brain.check_after(text, self.conv, ctx, reply.text) or reply
+            else:
+                await self._finish_streamed(s, text, reply, speech, speaking, ctx, stt_ms)
+                return
         s.turns += 1
         s.last_intent = reply.intent or ""
         if s.ringing and s.paused is not None and reply.intent not in ("stop", "off", "snooze"):
@@ -1042,6 +1115,58 @@ class Hub:
             elif reply.intent not in ("music",):
                 await self.note(s, f'Heard "{text}" but had nothing to say back.')
             await s.set_state("idle")
+
+    def _can_stream(self, s: Session, starting: bool, speaker: dict) -> bool:
+        """Stream this answer? Not when it has to be held back: a new voice is asked "who's this?" first,
+        an alarm is going, or a missed alarm has to be worked into the answer."""
+        if not self.settings["stream_replies"] or s.ringing or s.paused is not None or self.brain.missed:
+            return False
+        unknown = (speaker and not speaker.get("name") and not speaker.get("learning")
+                   and speaker.get("score", 0) > 0)
+        return not (starting and unknown and self.settings["greet_by_voice"])
+
+    async def _finish_streamed(self, s: Session, text: str, reply: Reply, speech, speaking, ctx: dict,
+                               stt_ms: int) -> None:
+        """The brain is done and the answer may already be half spoken: add anything that wasn't
+        streamed, let the speaking finish, then check facts (and correct, if needed)."""
+        s.turns += 1
+        s.last_intent = reply.intent or ""
+        for act in reply.actions:
+            await self.apply_action(s, act)
+        if reply.text and not reply.streamed:
+            speech.add_text(reply.text)  # a quick command, or a confirmation: said in one go
+        check = None
+        if ctx.get("check_later") and reply.text:
+            check = asyncio.create_task(self.brain.check_after(text, self.conv, ctx, reply.text))
+        # Keep listening afterwards only if it asked something and nothing needs correcting.
+        follow = reply.follow_up
+        speech.then_listen = follow and check is None
+        speech.end()
+        said = speech.text or reply.text
+        self.record("turn", session=s.id, heard=text, said=said, intent=reply.intent, model=reply.model,
+                    stt_ms=stt_ms, brain_ms=reply.ms, streamed=reply.streamed)
+        await self.broadcast_ui({"type": "event", "kind": "transcript", "session": s.id, "role": "assistant",
+                                 "text": said, "model": reply.model, "intent": reply.intent})
+        await speaking
+        if not speech.n_sentences:
+            if reply.intent in ("off", "stop"):
+                await self.note(s, f'Went quiet: I took "{text}" as {"off" if reply.intent == "off" else "stop"}.')
+            elif reply.intent not in ("music",):
+                await self.note(s, f'Heard "{text}" but had nothing to say back.')
+            await s.set_state("idle")
+        if check is not None:
+            try:
+                fix = await check
+            except Exception:  # noqa: BLE001 - a failed check mustn't break anything
+                log.exception("fact-check after speaking failed")
+                fix = None
+            if fix:
+                self.record("corrected", heard=text, said=fix.text)
+                await self.broadcast_ui({"type": "event", "kind": "transcript", "session": s.id,
+                                         "role": "assistant", "text": fix.text, "intent": "correction"})
+                await s.speak(fix.text, then_listen=False)
+            elif follow and s.hands_free and s.state == "idle":
+                await s.start_listening(earcon=True, no_speech_s=5.0)
 
     def _greet(self, reply: Reply, speaker: dict, audio: np.ndarray | None) -> None:
         """Start of a conversation. Someone it knows: "Hey Wells!" (at most once an hour each). A voice it

@@ -12,6 +12,7 @@ from tests.fakes import FakeAPIs, FakeSTT
 def setup(settings, heard):
     apis = FakeAPIs()
     apis.transcripts = [heard]
+    settings.update({"stream_replies": False})  # these tests catch what's said through speak()
     hub = Hub(settings, stt=FakeSTT(apis))
     ws = FakeWS()
     s = Session(hub, ws, "device", "esp32")

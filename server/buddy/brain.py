@@ -99,6 +99,7 @@ class Reply:
     model: str = ""
     intent: str = ""
     ms: int = 0
+    streamed: bool = False  # this text was already spoken as Claude wrote it
 
 
 @dataclass
@@ -312,7 +313,10 @@ class Brain:
         if reply is None:
             reply = await self._llm(text, conv, ctx)
         if reply.intent in ("llm", "llm_deep") and reply.text and self.settings["fact_check"]:
-            reply = await self._make_sure(text, conv, ctx, reply)
+            if reply.streamed:
+                ctx["check_later"] = True  # already being said: check it straight after (check_after)
+            else:
+                reply = await self._make_sure(text, conv, ctx, reply)
         reply.text = speakable(reply.text, 1400 if reply.intent == "llm_deep" else 900)
         if reply.text and reply.intent in REWORD and self.settings["reword_replies"]:
             reply.text = await self._reword(text, reply.text)
@@ -571,6 +575,21 @@ class Brain:
         return Reply("Sorry, I've had a proper look, on the web and thinking it through, and I couldn't find solid "
                      "information on that. I'd rather not guess.", reply.actions, model=reply.model, intent="llm")
 
+    async def check_after(self, text: str, conv: Conversation, ctx: dict, said: str) -> Reply | None:
+        """A streamed answer can't be fact-checked before it's said, so it's checked just after.
+        Returns a correction to say, or None if it held up."""
+        ctx.pop("on_text", None)  # anything from here is said separately, not streamed into the answer
+        ctx["say"] = None  # no "let me double-check" while Buddy may still be talking
+        original = Reply(said, intent="llm")
+        checked = await self._make_sure(text, conv, ctx, original)
+        if checked is original:
+            return None
+        fixed = speakable(checked.text)
+        conv.add("assistant", fixed, "A correction: my first answer didn't pass my fact-checker.")
+        conv.last_reply = fixed
+        return Reply("Actually, I've double-checked that. " + fixed, checked.actions, model=checked.model,
+                     intent="correction")
+
     async def _reword(self, said_by_user: str, reply: str) -> str:
         """Say a quick, ready-made reply in Buddy's own words so it doesn't sound the same every time.
         Facts stay exact. Falls back to the original if Claude is slow or unavailable."""
@@ -738,13 +757,21 @@ class Brain:
         confirmations: list[str] = []
         model = ""
         intent = "llm_deep" if tier == "smart" else "llm"
+        on_text = ctx.get("on_text")  # speak the answer as it's written (speech.SpeechStream.feed)
         for _ in range(6):  # room to try again when a tool comes back empty
+            heard: list[str] = []
+
+            def tap(delta: str) -> None:
+                heard.append(delta)
+                on_text(delta)
+
             with timing.span("haiku"):
-                res = await self.llm.chat(messages, tier=tier, tools=tools, max_tokens=900 if tier == "smart" else 500)
+                res = await self.llm.chat(messages, tier=tier, tools=tools, max_tokens=900 if tier == "smart" else 500,
+                                          **({"on_text": tap} if on_text else {}))
             model = res.model
             if not res.tool_calls:
                 text = res.content or " ".join(confirmations)
-                return Reply(text, actions, model=model, intent=intent)
+                return Reply(text, actions, model=model, intent=intent, streamed=bool(heard) and bool(res.content))
             names = [c["function"]["name"] for c in res.tool_calls]
             if "think_harder" in names and tier != "smart":
                 # Thinking hard is slower and costs more, so ask first. A yes reruns it (see _pending).

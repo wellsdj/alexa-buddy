@@ -1,5 +1,7 @@
 fastapi>=0.110
 uvicorn[standard]>=0.29
+# ElevenLabs live voice (speaking answers while they're written): the WebSocket client.
+websockets>=13
 httpx>=0.27
 # Claude Haiku: Buddy's brain.
 anthropic>=2.3,<3

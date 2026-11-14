@@ -157,7 +157,8 @@ class ClaudeLLM:
 
     async def chat(self, messages: list[dict], *, tier: str = "fast", tools: list[dict] | None = None,
                    json_mode: bool = False, max_tokens: int = 600, temperature: float | None = None,
-                   builtin_tools: list[dict] | None = None) -> ClaudeResult:
+                   builtin_tools: list[dict] | None = None, on_text=None) -> ClaudeResult:
+        """on_text: called with each bit of the answer's text as Claude writes it (streaming)."""
         # temperature and builtin_tools are Groq knobs; Claude only takes default sampling.
         api = self._api()
         if time.time() < self.blocked_until and self.last_error:
@@ -179,7 +180,14 @@ class ClaudeLLM:
             params["tools"] = convert_tools(tools)
         t0 = time.monotonic()
         try:
-            r = await api.messages.create(**params)
+            if on_text is None:
+                r = await api.messages.create(**params)
+            else:
+                async with api.messages.stream(**params) as stream:
+                    async for event in stream:
+                        if event.type == "text" and event.text:
+                            on_text(event.text)
+                    r = await stream.get_final_message()
         except anthropic.APIError as e:
             raise self._fail(e, model) from e
         if r.stop_reason == "refusal":
