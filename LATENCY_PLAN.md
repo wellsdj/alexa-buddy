@@ -29,7 +29,7 @@ Status: **built** (step 1: knows who is speaking). Still to decide: what Buddy *
 
 Goal: the time from the end of your speech to Buddy's first sound goes from 1.5–2 s to **800 ms or less**, with no change you can hear in the answers.
 
-Status: **not started.** I have only read the code so far. Nothing is changed yet.
+Status: **built.** Waiting for your before/after numbers (Speed tab).
 
 ---
 
@@ -136,12 +136,43 @@ Also: the **half-second hold** can shrink to about 150 ms once audio is streamin
 - **Tests:** 9 tests already fail before any change (listening, memory paging, weather parsing, speaking).
 - I couldn't open the x.com link from here, because x.com is blocked in this session.
 
+## Step 2: status. **All built** (one commit each, each with an off switch)
+
+- a. Streaming Haiku into ElevenLabs: done. No gap after sentence one.
+- b. Model: checked; Buddy already used the fastest one (`eleven_flash_v2_5`). No change.
+- c. Warm connections: done.
+- d. End-of-speech: 600 ms. Words are written down at the first pause.
+- e. Fast Haiku: thinking off, cached short instructions, 1–2 sentences.
+- f. Interruption: done, for known voices or "hey buddy".
+- Extra: streamed answers start playing after 0.2 s of sound.
+- Extra: a **Speed** tab in the controls.
+
+### Settings (all in data/settings.json, defaults shown)
+| Setting | Default | What it does |
+|---|---|---|
+| `timing_log` | on | Times every turn (Speed tab, `/api/timings`). |
+| `stream_replies` | on | Speaks the answer while Claude writes it. |
+| `play_hold_ms` | 200 | Sound collected before a streamed answer starts playing. |
+| `warm_connections` | on | Connects to Claude and ElevenLabs at "hey buddy". |
+| `end_of_speech_ms` | 600 | Quiet this long means you've finished (was 800). |
+| `early_transcribe` | on | Starts writing your words down at the first pause. |
+| `fast_haiku` | on | No thinking, short cached instructions, 400-token cap. |
+| `barge_in` | on | Talking over Buddy stops it (needs a saved voice). |
+| `listen_sensitivity` | 0.3 | Speech score that counts after "hey buddy" (was 0.5). |
+| `elevenlabs_model` | eleven_flash_v2_5 | The voice model. |
+
 ## Step 3: Report
 
-When all the changes are done, the report will include:
-- a before-and-after table of each stage's time
-- every setting and its default
-- every problem that is still open
+**Before and after: waiting for your numbers.** The real table needs your Speed tab from a few questions. My estimate is about **1.5–2 s down to about 0.7–0.9 s**.
+
+### Open problems
+- **Not tested on the real hardware yet.** That covers the ElevenLabs live voice, the 0.2 s start, quiet "hey buddy" and talking over Buddy. Everything passes tests with stand-ins.
+- **No echo cancelling.** So talking over Buddy only works for saved voices.
+- **600 ms end-of-speech** may cut off slow speakers. If it does, raise `end_of_speech_ms`.
+- **True streaming speech-to-text** would need a different, possibly less accurate, model. The early-transcribe trick covers most of the gain.
+- **Fact-check after speaking:** a wrong answer is said first, then corrected straight after.
+- **ElevenLabs live failing part way** through an answer: the rest of that answer is lost (logged).
+- **The online Study Buddy** shows teacher names only after its next website deploy.
 
 ---
 
