@@ -21,6 +21,7 @@ load_dotenv(ROOT / ".env")
 # in the room was meant for Buddy. Groq retires models regularly, so its model names are
 # preferences, not hard requirements: llm.py checks what the account can actually see.
 DEFAULTS: dict[str, Any] = {
+    "settings_version": 2,
     "assistant_name": "Buddy",
     "user_name": "",
     "location_name": "Richmond, London",
@@ -52,7 +53,7 @@ DEFAULTS: dict[str, Any] = {
     "piper_voice": "",  # path to a Piper .onnx voice; empty = first one found in data/voices
     "wake_threshold": 0.5,
     "wake_verify_threshold": 0.15,
-    "follow_up": "questions",  # off | questions | always
+    "follow_up": "always",  # off | questions | always: a conversation, you just answer back without "hey buddy"
     "end_of_speech_ms": 600,  # quiet this long = you've finished (was 800; lower is faster but may cut you off)
     "early_transcribe": True,  # start writing down your words at the first pause, before the end is decided
     # Just after "hey buddy", how speech-like a sound must be to count as you talking (0-1). Was 0.5,
@@ -67,7 +68,7 @@ DEFAULTS: dict[str, Any] = {
     "online_show_browser": True,  # show the browser window on the Mac (so you can log in and watch)
     "echo_cancel": True,  # the board takes Buddy's own voice out of the mic (firmware 1.7.0+)
     "sound_effects": True,  # switch-on, "hey buddy" heard, and "didn't hear anything" sounds
-    "barge_in": True,  # talking over Buddy stops it (needs your voice saved; "hey buddy" always works)  # everyday answers: no thinking first, short cached instructions, 1-2 sentences  # connect to Claude and the voice as soon as "hey buddy" is heard  # sound collected before Buddy starts playing a streamed answer  # one line per spoken turn with how long each stage took (data/timings.jsonl)
+    "barge_in": False,  # just talking over Buddy stops it (off: its own voice could do it too; "hey buddy" always works)  # everyday answers: no thinking first, short cached instructions, 1-2 sentences  # connect to Claude and the voice as soon as "hey buddy" is heard  # sound collected before Buddy starts playing a streamed answer  # one line per spoken turn with how long each stage took (data/timings.jsonl)
     "voice_id_on": True,  # notice who is speaking (needs a saved voice on the "Your voice" tab)
     "voice_id_threshold": 0.35,  # how alike a voice must be to count as that person (0-1)
     "voice_trust_seconds": 60,  # a new voice is only named once Buddy has heard this much of it
@@ -106,6 +107,10 @@ class Settings:
                 for k, v in stored.items():
                     if target is self._secrets or k in DEFAULTS:
                         target[k] = v
+                if target is self._values and int(stored.get("settings_version", 1)) < 2:
+                    # Version 2: a proper back-and-forth. Buddy keeps listening after every answer, and only
+                    # "hey buddy" cuts it off (talking over it let its own voice stop it).
+                    target.update({"follow_up": "always", "barge_in": False, "settings_version": 2})
 
     def __getitem__(self, key: str) -> Any:
         with self._lock:

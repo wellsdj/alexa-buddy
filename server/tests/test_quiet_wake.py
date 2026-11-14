@@ -209,3 +209,18 @@ def test_the_wake_sound_isnt_taken_for_you_talking(settings):
         n = int(1.5 / 0.032)  # the sound effect, loud and speech-like, for 1.5 s
         return s.endpointer.update([0.9] * n)
     assert asyncio.run(run()) is None and not s.endpointer.started
+
+
+def test_a_quick_question_said_over_the_chime_still_counts():
+    from buddy.vad import Endpointer
+    ep = Endpointer(silence_ms=600, no_speech_s=6.0, on=0.3, ignore_s=1.9)
+    talk = [0.9] * 35 + [0.05] * 50  # "what time is it" during the chime, then quiet
+    assert ep.update(talk) == "end"
+
+
+def test_a_conversation_keeps_going_and_old_settings_are_moved_on(tmp_path):
+    import json
+    from buddy.config import Settings
+    (tmp_path / "settings.json").write_text(json.dumps({"follow_up": "questions", "barge_in": True}))
+    s = Settings(tmp_path)
+    assert s["follow_up"] == "always" and s["barge_in"] is False

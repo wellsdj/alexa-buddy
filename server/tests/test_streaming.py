@@ -262,6 +262,7 @@ def test_warming_can_be_switched_off(settings):
 def test_talking_over_buddy_stops_it_and_listens(settings, monkeypatch):
     claude = StreamingClaude()
     hub, s, board, apis = streamed_hub(settings, claude)
+    settings.update({"barge_in": True})  # off by default now
     hub.voiceid.people = {"Wells": {"samples": [[1.0]], "seconds": 100}}
 
     async def who(audio):

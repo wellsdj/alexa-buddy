@@ -79,13 +79,18 @@ class Endpointer:
         self.peak = 0.0  # the most speech-like moment heard (shows why a quiet voice was missed)
         # The first moment isn't listened to (the chime, and the last of Buddy's own voice in the room).
         self.ignore_chunks = int(ignore_s / self.chunk_s)
+        self.hidden_chunks = 0  # speech-like chunks while ignoring (you may talk over the chime)
 
     def update(self, probs: list[float]) -> str | None:
         """Returns None while listening, else 'end', 'timeout' or 'max'."""
         for p in probs:
             self.chunks += 1
             if self.chunks <= self.ignore_chunks:
-                p = 0.0
+                # Not trusted (it may be the chime), but noted: if you said it all over the chime, it still
+                # counts (carrying on after it is picked up straight away anyway).
+                if p >= self.on:
+                    self.hidden_chunks += 1
+                continue
             self.peak = max(self.peak, p)
             if p >= (self.keep if self.started else self.on):
                 self.voiced_run += 1
@@ -100,7 +105,14 @@ class Endpointer:
                 self.silent_run += 1
             if self.started and self.silent_run >= self.silence_chunks:
                 return "end"
+            if (not self.started and self.chunks > self.ignore_chunks and self.hidden_chunks * self.chunk_s >= 0.6
+                    and self.silent_run >= self.silence_chunks):
+                self.speech_chunks += self.hidden_chunks
+                return "end"  # it was all said over the chime, then they stopped
             if not self.started and self.chunks >= self.no_speech_chunks:
+                if self.hidden_chunks * self.chunk_s >= 0.6:
+                    self.speech_chunks += self.hidden_chunks
+                    return "end"  # it was all said over the chime
                 return "timeout"
             if self.chunks >= self.max_chunks:
                 return "max"

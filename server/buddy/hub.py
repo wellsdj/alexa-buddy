@@ -515,6 +515,7 @@ class Session:
         self.captured = 0
         self.woken = False  # set right after, if "hey buddy" started this listen
         self.cut_in = False
+        self.follow_up = ""  # this listen is Buddy waiting for a reply ("question" or just "after" it spoke)
         if self.early:
             self.early["task"].cancel()
         self.early = None
@@ -788,6 +789,7 @@ class Session:
             # already spoken and answer itself. Give them a bit longer to start instead.
             self.asked_text, self.asked_at = text_of(), time.time()
             await self.start_listening(earcon=True, no_speech_s=8.0, ignore_s=0.35)
+            self.follow_up = "question" if text_of().rstrip().endswith("?") else "after"
         else:
             await self.set_state(after)  # "thinking" after a "one sec" line: the answer is on its way
 
@@ -1221,10 +1223,20 @@ class Hub:
                 await s.start_listening(earcon=False, no_speech_s=6.0)
                 return
             s.relistened = False
-            await s.earcon("nospeech")
+            if s.woken:  # the "didn't hear anything" sound only after "hey buddy", never mid-conversation
+                await s.earcon("nospeech")
             await s.set_state("idle")
             return
         s.relistened = False
+        if (getattr(s, "follow_up", "") == "after" and not (s.speaker or {}).get("name")
+                and not intents.has_wake(text) and self.settings.secret("GROQ_API_KEY")):
+            # Listening on after a statement, and it's not a voice Buddy knows: the TV or people chatting?
+            since = time.time() - self.last_spoke_at if self.last_spoke_at else 1e9
+            if not await self.judge.is_for_buddy(text, False, self.conv.last_reply, since):
+                self.record("heard", session=s.id, heard=text, for_buddy=False, how=self.judge.last_how)
+                await self.note(s, f'Heard "{text}" and decided it wasn\'t for me.')
+                await s.set_state("idle")
+                return
         if not intents.strip_wake(text):  # just "hey buddy" and a pause: wait for the question
             await s.start_listening(earcon=False, no_speech_s=6.0)
             return
