@@ -133,6 +133,9 @@ def match(text: str, now: datetime, context: dict | None = None) -> Intent | Non
     if re.fullmatch(r"(stop|cancel|never ?mind|nevermind|nothing|forget it|no thanks?|nope|no)", t):
         return Intent("stop")
 
+    # Reading out a long list (memories): "keep going" means the next page, not "carry on talking".
+    if re.fullmatch(r"(more|keep going|carry on|next|go on|continue|and\??)( please)?", t) and context.get("pager"):
+        return Intent("more")
     if len(t.split()) <= 12 and re.search(
             r"\b(carry on|go on|keep going|as you were|(say|finish|tell me) what you were (saying|going to say)|"
             r"what were you (saying|going to say)|"
@@ -150,9 +153,6 @@ def match(text: str, now: datetime, context: dict | None = None) -> Intent | Non
     if re.fullmatch(r"(say that again|repeat( that)?|what did you (just )?say|pardon|sorry|come again|"
                     r"can you repeat that|what was that)", t):
         return Intent("repeat")
-    if re.fullmatch(r"(more|keep going|carry on|next|go on|continue|and\??)", t) and context.get("pager"):
-        return Intent("more")
-
     vol = _volume(t)
     if vol:
         return vol

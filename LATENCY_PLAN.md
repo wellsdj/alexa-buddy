@@ -169,10 +169,10 @@ Covers both web pages: Buddy (`server/web/index.html`, `app.js`, `style.css`) an
 
 Status: **not started.**
 
-1. **Fix the broken bits first**, before the speed work.
+1. **Fix the broken bits first**, before the speed work. **Done.**
    - Put back the missing `async def _accept(...)` line in `hub.py`. Without it, a quiet "hey buddy" that gets checked silently crashes, and Buddy can get stuck and stop waking up.
    - Fix the 9 tests that already fail.
-2. **Find the "light comes on, then goes off" bug.** You say a quiet "hey buddy" and the light comes on, but Buddy doesn't take in what you say and the light goes off again.
+2. **Find the "light comes on, then goes off" bug.** **Fixed in code, needs your test.** After a wake, a speech score of 0.3 now counts (setting `listen_sensitivity`). Each time Buddy gives up, the Activity tab shows `no_speech` with the loudest score it heard. You say a quiet "hey buddy" and the light comes on, but Buddy doesn't take in what you say and the light goes off again.
    - **Confirmed:** the light stays on for about 6 s before it goes off, so this is a timeout.
    - Cause: the wake word heard you, but your voice was too quiet for the speech detector (it needs a speech score of 0.5). So Buddy thinks nobody is talking and gives up after 6 s.
    - Check it in the Activity tab and in the timing logs, then fix it. Options: a lower speech threshold just after a wake, or more mic gain.

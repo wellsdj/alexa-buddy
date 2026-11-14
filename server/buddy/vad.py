@@ -72,11 +72,13 @@ class Endpointer:
         self.silent_run = 0
         self.started = False
         self.speech_chunks = 0
+        self.peak = 0.0  # the most speech-like moment heard (shows why a quiet voice was missed)
 
     def update(self, probs: list[float]) -> str | None:
         """Returns None while listening, else 'end', 'timeout' or 'max'."""
         for p in probs:
             self.chunks += 1
+            self.peak = max(self.peak, p)
             if p >= self.on:
                 self.voiced_run += 1
                 self.silent_run = 0

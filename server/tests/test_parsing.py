@@ -63,9 +63,9 @@ def test_reminders():
 
 
 @pytest.mark.parametrize("text,name,args", [
-    ("what's the weather", "weather", {"day": "today"}),
-    ("will it rain tomorrow", "weather", {"day": "tomorrow"}),
-    ("do I need an umbrella", "weather", {"day": "today"}),
+    ("what's the weather", "weather", {"place": "", "when": "what's the weather"}),
+    ("will it rain tomorrow", "weather", {"place": "", "when": "will it rain tomorrow"}),
+    ("do I need an umbrella", "weather", {"place": "", "when": "do i need an umbrella"}),
     ("what time is it", "time", {}),
     ("volume up", "volume", {"delta": 2}),
     ("set the volume to 7", "volume", {"level": 7}),
@@ -83,8 +83,13 @@ def test_fast_paths(text, name, args):
     assert it.name == name and it.args == args
 
 
+def test_weather_anywhere_any_day_is_quick():
+    # Weather for other places and days is answered straight away now, without asking Claude.
+    assert match("what's the weather in Paris", EVENING).args["place"] == "paris"
+    assert match("what is the weather like this weekend", EVENING).name == "weather"
+
+
 @pytest.mark.parametrize("text", [
-    "what's the weather in Paris", "what is the weather like this weekend",
     "tell me a joke", "who won the football last night", "what's the capital of Peru",
 ])
 def test_goes_to_the_model(text):

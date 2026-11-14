@@ -401,8 +401,11 @@ class Session:
         self.ptt = ptt
         pre = self._take_preroll(preroll_s) if preroll_s else np.zeros(0, dtype=np.int16)
         self.capture = [pre] if len(pre) else []
+        # Listening for real (the light is on): a quieter voice still counts. Silent captures (checking
+        # room talk) keep the stricter default so the TV or the radio doesn't keep them going.
+        on = 0.5 if silent else min(0.5, max(0.1, float(s["listen_sensitivity"])))
         self.endpointer = Endpointer(silence_ms=int(s["end_of_speech_ms"]), no_speech_s=no_speech_s,
-                                     max_s=float(s["max_listen_s"]) + preroll_s)
+                                     max_s=float(s["max_listen_s"]) + preroll_s, on=on, off=min(0.35, on - 0.05))
         if preroll_s:
             n = int(preroll_s * SR / VAD_CHUNK)
             self.endpointer.update(list(self.vad_history)[-n:])
@@ -426,6 +429,10 @@ class Session:
         speech_s = self.endpointer.speech_seconds if self.endpointer else 0.0
         self.capture = []
         if reason == "timeout" or len(audio) < SR * 0.3:
+            if not silent and self.endpointer:
+                self.hub.record("no_speech", session=self.id, waited_s=round(len(audio) / SR, 1),
+                                loudest_speech=round(self.endpointer.peak, 2),
+                                needed=self.endpointer.on)
             self.state = "idle"
             await self.send_json({"type": "state", "state": "idle"})
             if not silent:
@@ -888,6 +895,8 @@ class Hub:
         if text.strip():
             self.record("heard_on_second_try", heard=text)
         return text
+
+    async def _accept(self, s: Session, text: str, stt_ms: int = 0) -> None:
         """Something heard silently turned out to be for Buddy: light up and answer it."""
         self.set_awake(True)
         await s.earcon("wake")

@@ -17,7 +17,7 @@ def ask(j, text, **kw):
 
 def test_hey_buddy_at_the_start_needs_no_model(settings, apis):
     j = judge_for(settings, apis)
-    assert ask(j, "Hey buddy, what's the weather?") and j.last_how == "starts with hey buddy"
+    assert ask(j, "Hey buddy, what's the weather?") and j.last_how == "hey buddy"
     assert not apis.chat_requests
 
 

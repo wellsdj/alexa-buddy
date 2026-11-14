@@ -60,7 +60,9 @@ def speak(tts):
         return None
 
     hub = SimpleNamespace(tts=tts, brain=SimpleNamespace(volume=3), record=lambda *a, **k: None,
-                          broadcast_ui=noop, last_spoke_at=0)
+                          broadcast_ui=noop, last_spoke_at=0,
+                          spotify=SimpleNamespace(duck=noop, unduck=noop),  # music turns down while it talks
+                          _soon=lambda coro: coro.close())
     s = Session(hub, board, "device", "test")
     board.session = s
     asyncio.run(s._speak("hello there", then_listen=False))
