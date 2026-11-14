@@ -24,7 +24,7 @@
 
 #include "config.h"
 
-#define FW_VERSION "1.5.2"
+#define FW_VERSION "1.6.0"
 #define SAMPLE_RATE 16000
 #define MIC_FRAMES 320               // 20 ms per I2S read
 #define SEND_BYTES 1280              // 40 ms of 16-bit audio per WebSocket frame
@@ -93,6 +93,8 @@ static String cfgHost, cfgToken, resolvedHost;
 static uint16_t cfgPort = DEFAULT_SERVER_PORT, resolvedPort = DEFAULT_SERVER_PORT;
 static bool wsConnected = false;
 static uint32_t lastConnected = 0, lastConnectAttempt = 0;
+static bool wantScan = false, wantJoin = false;  // Wi-Fi change by voice (see wifiTasks)
+static String joinSsid, joinPass, joinResult;
 static String serverState = "offline";
 static bool shouldSaveConfig = false;
 
@@ -628,7 +630,116 @@ static void handleJson(uint8_t *payload, size_t len) {
     Serial.printf("[alarms] schedule updated: %d fire times\n", n);
   } else if (!strcmp(type, "alarm_stop")) {
     stopRinging(doc["reason"] | (doc["quiet"] | false ? "snooze" : "voice"));
+  } else if (!strcmp(type, "wifi_scan")) {
+    wantScan = true;  // done in loop(): scanning takes a few seconds
+  } else if (!strcmp(type, "wifi_join")) {
+    joinSsid = String((const char *)(doc["ssid"] | ""));
+    joinPass = String((const char *)(doc["pass"] | ""));
+    if (joinSsid.length()) wantJoin = true;
   }
+}
+
+// ---------------------------------------------------------------- Wi-Fi networks by voice
+// Up to 5 networks are remembered (newest first) besides the one Wi-Fi itself saved. When the
+// current one is lost, Buddy tries each in turn, so home, a hotspot and a friend's all work.
+#define MAX_NETS 5
+
+static void rememberNet(const String &ssid, const String &pass) {
+  if (!ssid.length()) return;
+  String ss[MAX_NETS], pp[MAX_NETS];
+  int n = 0;
+  ss[n] = ssid; pp[n] = pass; n++;
+  for (int i = 0; i < MAX_NETS && n < MAX_NETS; i++) {
+    String s = prefs.getString(("w" + String(i)).c_str(), "");
+    if (!s.length() || s == ssid) continue;
+    ss[n] = s; pp[n] = prefs.getString(("p" + String(i)).c_str(), ""); n++;
+  }
+  for (int i = 0; i < MAX_NETS; i++) {
+    prefs.putString(("w" + String(i)).c_str(), i < n ? ss[i] : "");
+    prefs.putString(("p" + String(i)).c_str(), i < n ? pp[i] : "");
+  }
+}
+
+static bool waitForWifi(uint32_t ms) {
+  uint32_t t0 = millis();
+  while (millis() - t0 < ms) {
+    if (WiFi.status() == WL_CONNECTED) return true;
+    led(0, 90, 90);  // teal while switching
+    delay(100);
+  }
+  return WiFi.status() == WL_CONNECTED;
+}
+
+static void wifiTasks() {
+  if (wantScan) {
+    wantScan = false;
+    int n = WiFi.scanNetworks(false, false);
+    JsonDocument doc;
+    doc["type"] = "wifi_list";
+    doc["current"] = WiFi.SSID();
+    JsonArray arr = doc["networks"].to<JsonArray>();
+    // Strongest first, each name once.
+    bool used[64] = {false};
+    for (int k = 0; k < 15; k++) {
+      int best = -1;
+      for (int i = 0; i < n && i < 64; i++) {
+        if (used[i] || !WiFi.SSID(i).length()) continue;
+        if (best < 0 || WiFi.RSSI(i) > WiFi.RSSI(best)) best = i;
+      }
+      if (best < 0) break;
+      used[best] = true;
+      bool dup = false;
+      for (JsonObject o : arr) if (WiFi.SSID(best) == (const char *)o["ssid"]) dup = true;
+      if (dup) { k--; continue; }
+      JsonObject o = arr.add<JsonObject>();
+      o["ssid"] = WiFi.SSID(best);
+      o["rssi"] = WiFi.RSSI(best);
+      o["open"] = WiFi.encryptionType(best) == WIFI_AUTH_OPEN;
+    }
+    WiFi.scanDelete();
+    sendJson(doc);
+  }
+  if (wantJoin) {
+    wantJoin = false;
+    String prevS = WiFi.SSID(), prevP = WiFi.psk();
+    rememberNet(prevS, prevP);  // so it can always come back to where it was
+    Serial.printf("[wifi] switching to %s\n", joinSsid.c_str());
+    WiFi.disconnect(false, false);
+    delay(200);
+    WiFi.begin(joinSsid.c_str(), joinPass.length() ? joinPass.c_str() : nullptr);
+    if (waitForWifi(15000)) {
+      rememberNet(joinSsid, joinPass);
+      joinResult = "ok";
+      Serial.printf("[wifi] now on %s\n", joinSsid.c_str());
+    } else {
+      joinResult = "failed";  // wrong password or out of range: back to the old one
+      Serial.printf("[wifi] couldn't join %s; going back to %s\n", joinSsid.c_str(), prevS.c_str());
+      WiFi.disconnect(false, false);
+      delay(200);
+      WiFi.begin(prevS.c_str(), prevP.length() ? prevP.c_str() : nullptr);
+      waitForWifi(15000);
+    }
+    resolvedHost = "";  // find the Mac again on this network
+    lastConnectAttempt = 0;
+  }
+}
+
+// Lost Wi-Fi: try the last network again, then each remembered one, 20 s each.
+static void tryNextNetwork() {
+  static int turn = 0;
+  turn = (turn + 1) % (MAX_NETS + 1);
+  if (turn == 0) {
+    WiFi.reconnect();
+    return;
+  }
+  String s = prefs.getString(("w" + String(turn - 1)).c_str(), "");
+  if (!s.length() || s == WiFi.SSID()) {
+    WiFi.reconnect();
+    return;
+  }
+  String p = prefs.getString(("p" + String(turn - 1)).c_str(), "");
+  Serial.printf("[wifi] trying %s\n", s.c_str());
+  WiFi.begin(s.c_str(), p.length() ? p.c_str() : nullptr);
 }
 
 static void sendHello() {
@@ -643,6 +754,12 @@ static void sendHello() {
   doc["uptime"] = millis() / 1000;  // lets the server tell switching on from a Wi-Fi reconnect
   doc["sd"] = sdOk;
   doc["recording"] = (bool)recording;
+  doc["ssid"] = WiFi.SSID();
+  if (joinResult.length()) {  // how the last "change Wi-Fi" went (the server says it out loud)
+    doc["wifi_join"] = joinResult;
+    doc["wifi_join_ssid"] = joinSsid;
+    joinResult = "";
+  }
   sendJson(doc);
   if (micMuted || recording) {
     JsonDocument m;
@@ -1012,7 +1129,7 @@ static void maintainConnection() {
   if (WiFi.status() != WL_CONNECTED) {
     if (!wifiLostAt) wifiLostAt = millis();
     if (millis() - wifiLostAt > 20000) {
-      WiFi.reconnect();
+      tryNextNetwork();
       wifiLostAt = millis();
     }
     return;
@@ -1220,6 +1337,7 @@ void loop() {
   handleButton();
   checkAlarms();
   maintainConnection();
+  wifiTasks();
   sendStats();
   updateLed();
   stripUpdate();

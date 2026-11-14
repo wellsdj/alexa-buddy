@@ -215,6 +215,14 @@ TOOLS = [
         "parameters": {"type": "object", "properties": {
             "name": {"type": "string"}, "value": {"type": "string"}}, "required": ["name", "value"]}}},
     {"type": "function", "function": {
+        "name": "wifi", "description": "Change the Wi-Fi network the desk unit is on, only when the user asks. "
+                                       "action 'scan' lists networks nearby; then read out a few names and ask which. "
+                                       "action 'join' with the network's exact name from the scan (it asks for "
+                                       "the password itself if one is needed).",
+        "parameters": {"type": "object", "properties": {
+            "action": {"type": "string", "enum": ["scan", "join"]}, "ssid": {"type": "string"}},
+            "required": ["action"]}}},
+    {"type": "function", "function": {
         "name": "switch_voice", "description": "Change the voice you speak with, among the user's saved voices. "
                                                "step 1 = next, -1 = previous; or a 1-based number; or a voice name.",
         "parameters": {"type": "object", "properties": {
@@ -340,6 +348,7 @@ class Brain:
         self.study = None  # (StudyStore, Practice), set by the hub
         self.study_cloud = None  # the hub's study_cloud(), set by the hub
         self.insight = None  # the hub's insight(): speed, connection, voice credits... (for get_settings)
+        self.wifi = None  # the hub: wifi_scan / wifi_join on the desk unit
 
     def now(self) -> datetime:
         return datetime.now(ZoneInfo(self.settings["timezone"]))
@@ -369,8 +378,14 @@ class Brain:
         reply.text = speakable(reply.text, 1400 if reply.intent == "llm_deep" else 900)
         if reply.text and reply.intent in REWORD and self.settings["reword_replies"]:
             reply.text = await self._reword(text, reply.text)
-        if self.missed and reply.text and reply.intent not in ("off", "stop", "repeat", "think_offer"):
+        if self.missed and reply.text and reply.intent not in ("off", "stop", "repeat", "think_offer", "wifi_pass"):
             reply.text = await self._mention_missed(text, reply.text)
+        if reply.intent == "wifi_pass" or (conv.pending or {}).get("intent") == "wifi_pass":
+            # Spelling a password: kept out of the conversation history (which goes to Claude) and memory.
+            conv.last_active = time.time()
+            if reply.text:
+                conv.last_reply = reply.text
+            return reply
         conv.add("user", text, speaker=ctx.get("speaker", ""))
         if reply.text:
             notes = [f'I searched the web for "{q}" and found: {r[:350]}' for q, r in ctx.get("searched", [])]
@@ -401,6 +416,8 @@ class Brain:
         p, conv.pending = conv.pending, None
         if not p:
             return None
+        if p.get("intent") == "wifi_pass":
+            return await self._wifi_password(text, conv, p)
         if p.get("intent") == "think":
             if YES.search(text):
                 await say_while(ctx, "think")
@@ -623,6 +640,90 @@ class Brain:
         ctx["checked"] = "gave_up"
         return Reply("Sorry, I've had a proper look, on the web and thinking it through, and I couldn't find solid "
                      "information on that. I'd rather not guess.", reply.actions, model=reply.model, intent="llm")
+
+    # ---------- Wi-Fi by voice ----------
+    async def _wifi_tool(self, a: dict, conv: Conversation) -> tuple[str, str, list]:
+        if self.wifi is None or not self.wifi.devices():
+            return "The desk unit isn't connected, so its Wi-Fi can't be changed right now.", "", []
+        if a.get("action") == "scan" or not self.wifi.last_scan:
+            nets = await self.wifi.wifi_scan()
+            if nets is None:
+                return "The desk unit didn't answer the Wi-Fi scan. Ask them to try again in a moment.", "", []
+            if a.get("action") == "scan":
+                current = self.wifi.wifi_current or "nothing"
+                names = "; ".join(f"{n['ssid']} ({'no password' if n['open'] else 'password'})" for n in nets[:12])
+                return (f"Currently on {current}. Networks nearby, strongest first: {names or 'none found'}. "
+                        "Read out the first few names (not all) and ask which one."), "", []
+        want = str(a.get("ssid", "")).strip()
+        nets = self.wifi.last_scan or []
+        match = next((n for n in nets if n["ssid"] == want), None) or next(
+            (n for n in nets if n["ssid"].lower() == want.lower()), None) or next(
+            (n for n in nets if want.lower() and want.lower() in n["ssid"].lower()), None)
+        if not match:
+            return (f"No network called '{want}' is in range. Networks nearby: "
+                    + ", ".join(n["ssid"] for n in nets[:8]) + ". Ask which one they meant."), "", []
+        ssid = match["ssid"]
+        if match["open"]:
+            await self.wifi.wifi_join(ssid, "")
+            return "joining", self._joining_line(ssid), []
+        conv.pending = {"intent": "wifi_pass", "ssid": ssid, "chars": [], "stage": "spell"}
+        # wifi_join is an action tool: this line is said as it is, with no second trip to Claude.
+        return "asking for the password", (f"{ssid} needs a password. Tell me it one character at a time. Say "
+                                            "'capital' for capital letters, and 'done' when you've finished. "
+                                            "What's the first one?"), []
+
+    @staticmethod
+    def _joining_line(ssid: str) -> str:
+        return (f"Okay, joining {ssid} now. I'll go quiet for a moment. If your Mac is on {ssid} too, "
+                "I'll be straight back; if not, I'll come back once I'm on a network your Mac is on.")
+
+    async def _wifi_password(self, text: str, conv: Conversation, p: dict) -> Reply:
+        """Spelling the Wi-Fi password, a character at a time. All on this computer: none of it goes to
+        Claude or into the conversation history."""
+        from .spelling import correct, describe, parse_chars, read_back
+        t = re.sub(r"[.!?]", "", intents.strip_wake(text).lower()).strip()
+        chars, ssid = p["chars"], p["ssid"]
+
+        def again(line: str) -> Reply:
+            conv.pending = p
+            return Reply(line, intent="wifi_pass", follow_up=True)
+
+        if re.fullmatch(r"(cancel|never ?mind|stop|forget it|forget about it|leave it|quit)( it)?( please)?", t):
+            return Reply("Okay, I'll stay on the Wi-Fi I'm on.", intent="wifi_pass")
+        if re.fullmatch(r"(start (again|over)|restart|clear( it)?|from the (start|beginning))", t):
+            p.update(chars=[], stage="spell")
+            return again("Okay, from the start. What's the first character?")
+        if p["stage"] == "spell":
+            if re.fullmatch(r"(done|i'?m done|that'?s (it|all)|finished|i'?ve finished|end|that is it|that'?s everything)", t):
+                if not chars:
+                    return again("I haven't got any characters yet. What's the first one?")
+                p["stage"] = "confirm"
+                return again(f"Here's what I've got: {read_back(chars)}. That's {len(chars)} characters. "
+                             "Is that right? Say yes to join, or tell me what to change, like 'number 3 should "
+                             "be capital D'.")
+            if re.fullmatch(r"(undo|delete( that| the last one)?|back|go back|remove( that| the last one)?|"
+                            r"scratch that|oops|no that'?s wrong|wrong)", t):
+                if chars:
+                    gone = chars.pop()
+                    return again(f"Took out {describe(gone)}. Next one?")
+                return again("There's nothing to take out yet. What's the first character?")
+            new = parse_chars(text)
+            if not new:
+                return again("Sorry, I didn't catch that. Say one character, like 'capital D', 'small d' or "
+                             "'number 3', or say done.")
+            chars.extend(new)
+            return again(f"Yes, {read_back(new)}. Next?")
+        # stage "confirm": read back, change bits, then join
+        if re.fullmatch(r"(yes|yeah|yep|correct|that'?s (right|correct)|right|join( it)?|go( for it)?|yes please|"
+                        r"perfect|spot on)", t):
+            await self.wifi.wifi_join(ssid, "".join(chars))
+            return Reply(self._joining_line(ssid), intent="wifi_pass")
+        fixed = correct(chars, text)
+        if fixed is None:
+            return again("Sorry, I didn't get which bit to change. Say something like 'number 3 should be a "
+                         "capital D', 'delete the last one', or 'start again'. Or say yes to join.")
+        p["chars"], done = fixed
+        return again(f"{done}. Now it's: {read_back(p['chars'])}. Is that right?")
 
     async def check_after(self, text: str, conv: Conversation, ctx: dict, said: str) -> Reply | None:
         """A streamed answer can't be fact-checked before it's said, so it's checked just after.
@@ -870,8 +971,8 @@ class Brain:
                 actions += acts
                 if confirm:
                     confirmations.append(confirm)
-                if name not in ACTION_TOOLS:
-                    info_needed = True
+                if name not in ACTION_TOOLS and not (name == "wifi" and confirm):
+                    info_needed = True  # (a Wi-Fi join or password question is said as it is)
                 messages.append({"role": "tool", "tool_call_id": call.get("id", name), "content": result})
             if not info_needed and confirmations:
                 # Every call was an action with its own confirmation: skip a second model round trip.
@@ -947,6 +1048,8 @@ class Brain:
                 self.volume = max(0, min(10, level))
                 self.settings.update({"volume": self.volume})
                 return f"volume {self.volume}", f"Volume {self.volume}.", [{"type": "volume", "level": self.volume}]
+            if name == "wifi":
+                return await self._wifi_tool(a, conv)
             if name == "get_settings":
                 from .tuning import describe
                 info = self.insight() if self.insight else ""

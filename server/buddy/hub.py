@@ -792,6 +792,10 @@ class Session:
         if t == "hello":
             self.info = {k: v for k, v in msg.items() if k != "type"}
             await self.hub.greet(self)
+            if msg.get("wifi_join"):
+                self.hub._soon(self.hub.wifi_join_result(self, msg))
+        elif t == "wifi_list":
+            self.hub.wifi_list_arrived(msg)
         elif t == "stats":
             self.info.update({k: v for k, v in msg.items() if k != "type"})
             await self.hub.broadcast_ui({"type": "event", "kind": "device", "session": self.id, "info": self.info})
@@ -864,6 +868,10 @@ class Hub:
         self.brain.study = (self.study, self.practice)  # so Buddy can say how revising is going
         self.brain.study_cloud = self.study_cloud
         self.brain.insight = self.insight  # so Buddy can say how it's doing (get_settings)
+        self.brain.wifi = self  # so Buddy can change the desk unit's Wi-Fi when asked
+        self.last_scan: list[dict] = []
+        self.wifi_current = ""
+        self._wifi_wait: asyncio.Future | None = None
         self.trouble: collections.deque = collections.deque(maxlen=50)  # (when, "not_heard" | "repeat")
         self.offered: dict[str, float] = {}  # kind of help -> when Buddy last offered it
         self.brain.sounds = self.sounds
@@ -1083,7 +1091,8 @@ class Hub:
         # How loud it was and what came out: shows a too-quiet (or clipping) mic in the Activity tab.
         if len(audio):
             peak = float(np.abs(audio.astype(np.int32)).max())
-            self.record("capture", session=s.id, heard=text, speech_s=round(speech_s, 2),
+            spelling = (self.conv.pending or {}).get("intent") == "wifi_pass"
+            self.record("capture", session=s.id, heard="(hidden)" if spelling else text, speech_s=round(speech_s, 2),
                         loudest_db=round(20 * np.log10(max(peak, 1.0) / 32768), 1),
                         level_db=round(rms_dbfs(audio), 1), clipped=bool(peak >= 32000), mode=silent or "normal",
                         **({"speaker": s.speaker.get("name") or (f"{s.speaker['learning']} (still learning)"
@@ -1208,7 +1217,9 @@ class Hub:
     async def _respond(self, s: Session, text: str, stt_ms: int = 0) -> None:
         speaker, s.speaker = s.speaker, {}
         audio, s.turn_audio = s.turn_audio, None
-        await self.broadcast_ui({"type": "event", "kind": "transcript", "session": s.id, "role": "user", "text": text,
+        spelling = (self.conv.pending or {}).get("intent") == "wifi_pass"
+        await self.broadcast_ui({"type": "event", "kind": "transcript", "session": s.id, "role": "user",
+                                 "text": "(a bit of the Wi-Fi password)" if spelling else text,
                                  **({"speaker": speaker.get("name", "")} if speaker else {})})
         if await self._answer_to_who(s, text, audio):
             return
@@ -1287,10 +1298,13 @@ class Hub:
             await self.apply_action(s, act)
         if starting and reply.text and reply.intent not in QUIET_INTENTS and self.settings["greet_by_voice"]:
             self._greet(reply, speaker, audio)
-        self.record("turn", session=s.id, heard=text, said=reply.text, intent=reply.intent, model=reply.model,
+        secret = reply.intent == "wifi_pass"  # Wi-Fi password spelling: not shown or logged
+        self.record("turn", session=s.id, heard="(hidden)" if secret else text,
+                    said="(hidden)" if secret else reply.text, intent=reply.intent, model=reply.model,
                     stt_ms=stt_ms, brain_ms=reply.ms)
         await self.broadcast_ui({"type": "event", "kind": "transcript", "session": s.id, "role": "assistant",
-                                 "text": reply.text, "model": reply.model, "intent": reply.intent})
+                                 "text": "(talking about the Wi-Fi password)" if secret else reply.text,
+                                 "model": reply.model, "intent": reply.intent})
         if reply.text:
             await s.speak(reply.text, then_listen=reply.follow_up)
         else:
@@ -1299,6 +1313,48 @@ class Hub:
             elif reply.intent not in ("music",):
                 await self.note(s, f'Heard "{text}" but had nothing to say back.')
             await s.set_state("idle")
+
+    # ---------- Wi-Fi by voice (the desk unit scans and joins; brain.py does the talking) ----------
+    async def wifi_scan(self) -> list[dict] | None:
+        """Ask the desk unit which networks it can see. None if it doesn't answer."""
+        devs = self.devices()
+        if not devs:
+            return None
+        self._wifi_wait = asyncio.get_running_loop().create_future()
+        await devs[0].send_json({"type": "wifi_scan"})
+        try:
+            msg = await asyncio.wait_for(self._wifi_wait, timeout=12)
+        except asyncio.TimeoutError:
+            return None
+        self.last_scan = [n for n in msg.get("networks", []) if n.get("ssid")]
+        self.wifi_current = msg.get("current", "")
+        return self.last_scan
+
+    def wifi_list_arrived(self, msg: dict) -> None:
+        if self._wifi_wait is not None and not self._wifi_wait.done():
+            self._wifi_wait.set_result(msg)
+
+    async def wifi_join(self, ssid: str, password: str) -> None:
+        """Tell the desk unit to join a network. It goes back to the old one if this doesn't work."""
+        devs = self.devices()
+        if not devs:
+            return
+        self.record("wifi_change", to=ssid, password_given=bool(password))  # never the password itself
+        await asyncio.sleep(4.0)  # let it finish saying "joining now" first
+        await devs[0].send_json({"type": "wifi_join", "ssid": ssid, "pass": password})
+
+    async def wifi_join_result(self, s: Session, hello: dict) -> None:
+        """The desk unit is back after a Wi-Fi change: say how it went."""
+        await asyncio.sleep(1.5)
+        ssid, now = hello.get("wifi_join_ssid", ""), hello.get("ssid", "")
+        if hello.get("wifi_join") == "ok":
+            text = f"I'm on {ssid} now."
+        else:
+            text = (f"I couldn't join {ssid}. The password might not be quite right, or it's out of range, "
+                    f"so I've gone back to {now or 'the Wi-Fi I was on'}. Want to try again?")
+        self.record("wifi_changed", result=hello.get("wifi_join"), ssid=ssid, now=now)
+        await self.broadcast_ui({"type": "event", "kind": "transcript", "session": s.id, "role": "assistant", "text": text})
+        await s.speak(text, then_listen=text.endswith("?"))
 
     def _troubles(self, kind: str, within_s: float) -> int:
         cutoff = time.time() - within_s
@@ -1371,10 +1427,12 @@ class Hub:
         speech.then_listen = follow and check is None
         speech.end()
         said = speech.text or reply.text
-        self.record("turn", session=s.id, heard=text, said=said, intent=reply.intent, model=reply.model,
-                    stt_ms=stt_ms, brain_ms=reply.ms, streamed=reply.streamed)
+        secret = reply.intent == "wifi_pass"  # Wi-Fi password spelling: not shown or logged
+        self.record("turn", session=s.id, heard="(hidden)" if secret else text, said="(hidden)" if secret else said,
+                    intent=reply.intent, model=reply.model, stt_ms=stt_ms, brain_ms=reply.ms, streamed=reply.streamed)
         await self.broadcast_ui({"type": "event", "kind": "transcript", "session": s.id, "role": "assistant",
-                                 "text": said, "model": reply.model, "intent": reply.intent})
+                                 "text": "(talking about the Wi-Fi password)" if secret else said,
+                                 "model": reply.model, "intent": reply.intent})
         await speaking
         if not speech.n_sentences:
             if reply.intent in ("off", "stop"):
