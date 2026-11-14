@@ -499,6 +499,7 @@ async function micTest(on) {
   $("mt-stats").textContent = on ? "Listening… say something." : "Stopped.";
   if (on) { $("mt-lines").replaceChildren(); $("mt-partial").textContent = ""; $("mt-advice").textContent = ""; }
   if (!on && !S.handsFree && !S.ptt) Mic.stop();
+  micLive();
 }
 function micTestEvent(m) {
   if (m.error) { toast(m.error); micTest(false); return; }
@@ -524,6 +525,17 @@ function micTestEvent(m) {
   } else {
     $("mt-partial").textContent = m.text ? m.text + " …" : "…";
   }
+}
+
+// One Stop button at the bottom of the controls, whichever page started the mic.
+function micLive() {
+  const on = S.micTest;
+  $("mic-live").hidden = !on;
+  if (on) $("mic-live-text").textContent = vidRecording ? "Learning your voice…" : "Mic test is on";
+}
+function stopMicAll() {
+  if (vidRecording) vidRec(false);
+  else if (S.micTest) micTest(false);
 }
 
 // ---------------------------------------------------------------- your voice (voice recognition)
@@ -586,6 +598,7 @@ async function vidRec(on) {
   vidSay("vid-rec-status", on ? "Listening… read the sentences out. Each one is added as you finish it." : "Stopped.");
   if (!on && !S.handsFree && !S.ptt) Mic.stop();
   if (!on) loadVoiceID();
+  micLive();
 }
 function vidEvent(m) {
   if (m.error) { vidSay("vid-rec-status", m.error, "bad"); return; }
@@ -711,6 +724,7 @@ function init() {
     el("div", { class: "suggest" }, ["What's the weather?", "Set a timer for 10 minutes", "Wake me up at 7 on weekdays", "What do you remember about me?"]
       .map((t) => el("button", { type: "button", onclick: () => ask(t) }, t)))));
   const drawer = (open) => {
+    if (!open) stopMicAll();  // closing the controls switches the mic test off
     $("drawer").classList.toggle("open", open);
     $("drawer").setAttribute("aria-hidden", String(!open));
     $("menu").setAttribute("aria-expanded", String(open));
@@ -812,6 +826,7 @@ function init() {
       if (tab.dataset.tab === "activity") loadStatus();
       if (tab.dataset.tab === "yourvoice") loadVoiceID();
       if (tab.dataset.tab !== "yourvoice" && vidRecording) vidRec(false);
+      if (tab.dataset.tab !== "mictest" && S.micTest && !vidRecording) micTest(false);
     };
   }
   $("meter-source").onchange = (e) => (S.meterSource = e.target.value);
@@ -905,6 +920,7 @@ function init() {
   $("vid-install").onclick = async () => { try { await api("/api/voiceid/install", { method: "POST" }); } catch (err) { toast(err.message); } loadVoiceID(); };
   $("vid-upload").onclick = vidUpload;
   $("vid-rec").onclick = () => vidRec(!vidRecording);
+  $("mic-live-stop").onclick = stopMicAll;
   $("update-now").onclick = async () => {
     if (!confirm("Update Buddy now? It restarts by itself; give it a minute or two.")) return;
     try {
