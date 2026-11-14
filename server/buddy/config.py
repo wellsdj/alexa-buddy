@@ -60,7 +60,7 @@ DEFAULTS: dict[str, Any] = {
     "listen_sensitivity": 0.3,
     "timing_log": True,
     "stream_replies": True,  # speak Claude's answer while it's still being written (off: wait for all of it)
-    "play_hold_ms": 500,
+    "play_hold_ms": 200,  # sound collected before Buddy starts playing a streamed answer (raise if it stutters)
     "warm_connections": True,
     "fast_haiku": True,
     "barge_in": True,  # talking over Buddy stops it (needs your voice saved; "hey buddy" always works)  # everyday answers: no thinking first, short cached instructions, 1-2 sentences  # connect to Claude and the voice as soon as "hey buddy" is heard  # sound collected before Buddy starts playing a streamed answer  # one line per spoken turn with how long each stage took (data/timings.jsonl)
