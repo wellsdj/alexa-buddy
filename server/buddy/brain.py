@@ -203,6 +203,18 @@ TOOLS = [
                                              "diet'). Remembered for the rest of the conversation.",
         "parameters": {"type": "object", "properties": {"topic": {"type": "string"}}, "required": ["topic"]}}},
     {"type": "function", "function": {
+        "name": "get_settings", "description": "Look at your own settings and how you're doing: how fast your "
+                                               "answers are, the desk unit's connection, voice credits, who you "
+                                               "know by voice, and trouble hearing lately. Use it when asked "
+                                               "about yourself, or before changing a setting.",
+        "parameters": {"type": "object", "properties": {}}}},
+    {"type": "function", "function": {
+        "name": "change_setting", "description": "Change one of your own settings (get_settings lists them with "
+                                                 "their ranges). Only when the user asks for it, or says yes after "
+                                                 "you offered. Afterwards say in plain words what changed.",
+        "parameters": {"type": "object", "properties": {
+            "name": {"type": "string"}, "value": {"type": "string"}}, "required": ["name", "value"]}}},
+    {"type": "function", "function": {
         "name": "switch_voice", "description": "Change the voice you speak with, among the user's saved voices. "
                                                "step 1 = next, -1 = previous; or a 1-based number; or a voice name.",
         "parameters": {"type": "object", "properties": {
@@ -248,6 +260,8 @@ Rules:
 - For news, sport, prices, opening hours or anything recent, use web_search. (You've already said "one sec, \
 I'll check" out loud before searching, so don't start your answer with that.)
 - For long writing, planning or tricky reasoning, call think_harder (it asks the user first).
+- For questions about yourself (speed, settings, voice credits) use get_settings. Change a setting with \
+change_setting only when asked or after they agree to your offer, and say what changed in plain words.
 - If you ask the user something, end with a question mark.
 - Never say you did something unless a tool confirmed it.
 - Trust your earlier answers in this conversation, above all those your fact-checker confirmed (see the \
@@ -278,6 +292,8 @@ HH:MM local.
 with confirmed=true after they say yes.
 - News, sport, prices, opening hours or anything recent: web_search (you've already said "one sec, I'll check").
 - Long writing, planning or tricky reasoning: think_harder.
+- Questions about yourself (how fast you are, your settings, your voice credits): get_settings. Change a setting \
+with change_setting only when they ask or say yes to your offer; say what changed in plain words, never setting names.
 - Never say you did something unless a tool confirmed it. If a tool finds nothing, try another way before giving up.
 - Wanting you to stop or go away entirely: go_quiet. Dropping one subject: drop_topic, then carry on.
 - When you use a tool, you may say a brief sentence first. If no tool can do what they asked, say so instead of \
@@ -323,6 +339,7 @@ class Brain:
         self.missed: list[str] = []  # alarms that rang out with nobody there, to mention next time
         self.study = None  # (StudyStore, Practice), set by the hub
         self.study_cloud = None  # the hub's study_cloud(), set by the hub
+        self.insight = None  # the hub's insight(): speed, connection, voice credits... (for get_settings)
 
     def now(self) -> datetime:
         return datetime.now(ZoneInfo(self.settings["timezone"]))
@@ -765,6 +782,10 @@ class Brain:
         if force_search:
             system += ("\nYour last answer to this didn't pass a fact-check. Use web_search to get current, reliable "
                        "facts before answering, and only say what the results support.")
+        if ctx.get("hint"):
+            # Something Buddy noticed (e.g. trouble hearing): offered once, gently, never pushed.
+            system += f"\nWorth offering once, briefly, after you answer: {ctx['hint']} Only change anything if they say yes."
+            ctx["hint_used"] = True
         if ctx.get("speaker") or ctx.get("present"):
             system += ("\nSeveral people can talk to you; you know them by voice. Their lines start with their name "
                        "in brackets, or [unknown voice]. Keep track of who said what, answer the person talking now, "
@@ -926,6 +947,17 @@ class Brain:
                 self.volume = max(0, min(10, level))
                 self.settings.update({"volume": self.volume})
                 return f"volume {self.volume}", f"Volume {self.volume}.", [{"type": "volume", "level": self.volume}]
+            if name == "get_settings":
+                from .tuning import describe
+                info = self.insight() if self.insight else ""
+                return f"How you're doing:\n{info}\n\nYour settings:\n{describe(self.settings)}", "", []
+            if name == "change_setting":
+                from .tuning import change
+                changed, note = change(self.settings, a.get("name", ""), a.get("value", ""))
+                if changed and a.get("name") == "volume":
+                    self.volume = int(self.settings["volume"])
+                    return note, "", [{"type": "volume", "level": self.volume}]
+                return note, "", []
             if name == "music":
                 said = await self._music(a)
                 if quick_failed(said):

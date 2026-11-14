@@ -541,6 +541,7 @@ class Session:
                 self.hub.record("no_speech", session=self.id, waited_s=round(len(audio) / SR, 1),
                                 loudest_speech=round(self.endpointer.peak, 2),
                                 needed=self.endpointer.on)
+                self.hub.trouble.append((time.time(), "not_heard"))
             self.state = "idle"
             await self.send_json({"type": "state", "state": "idle"})
             if not silent:
@@ -862,6 +863,9 @@ class Hub:
         self.practice = Practice(self.study.dir)  # "Start revising": questions that fit each person
         self.brain.study = (self.study, self.practice)  # so Buddy can say how revising is going
         self.brain.study_cloud = self.study_cloud
+        self.brain.insight = self.insight  # so Buddy can say how it's doing (get_settings)
+        self.trouble: collections.deque = collections.deque(maxlen=50)  # (when, "not_heard" | "repeat")
+        self.offered: dict[str, float] = {}  # kind of help -> when Buddy last offered it
         self.brain.sounds = self.sounds
         self.conv = Conversation()
         self.sessions: dict[str, Session] = {}
@@ -1118,6 +1122,7 @@ class Hub:
             text = await self._second_listen(audio, speech_s)  # louder, trimmed: often enough
         if not text.strip():
             self.record("nothing_heard", session=s.id, speech_s=round(speech_s, 2))
+            self.trouble.append((time.time(), "not_heard"))
             if speech_s >= 0.3:
                 await self.note(s, "Heard you talking but couldn't make out any words"
                                    + (", so I'm still listening." if speech_s >= 0.6 and not s.relistened else "."))
@@ -1208,8 +1213,9 @@ class Hub:
         if await self._answer_to_who(s, text, audio):
             return
         starting = not self.conv.history or time.time() - self.conv.last_active > 600
+        hint_kind, hint = self._trouble_hint()
         ctx = {"ringing": s.ringing or next((d.ringing for d in self.devices() if d.ringing), None),
-               "say": s.interim, "present": self.present(),
+               "say": s.interim, "present": self.present(), "hint": hint,
                # Who's talking: their name, or "unknown voice" when it heard someone it doesn't know yet.
                "speaker": speaker.get("name") or ("unknown voice" if speaker.get("score", 0) > 0 else "")}
         speech, speaking = None, None
@@ -1236,6 +1242,17 @@ class Hub:
             log.exception("brain failed")
             reply = Reply("Ah, sorry, something went a bit wrong on my end. Give it another go?", intent="error")
             self.record("error", where="brain", error=str(e))
+        if ctx.get("hint_used"):
+            self.offered[hint_kind] = time.time()
+            self.record("offered_help", kind=hint_kind)
+        if reply.intent == "repeat":
+            self.trouble.append((time.time(), "repeat"))
+            if self._troubles("repeat", 300) >= 2 and time.time() - self.offered.get("hearing_buddy", 0) > 3 * 3600:
+                # They keep asking what Buddy said: offer (once) to speak up or slow down.
+                self.offered["hearing_buddy"] = time.time()
+                reply.text = reply.text.rstrip() + " By the way, want me to speak up a bit, or talk a bit slower?"
+                reply.follow_up = True
+                self.record("offered_help", kind="hearing_buddy")
         if speech is not None:
             if s.paused is not None and not speech.played:
                 # An alarm broke in before any of the answer was heard: hold it, as before streaming.
@@ -1282,6 +1299,50 @@ class Hub:
             elif reply.intent not in ("music",):
                 await self.note(s, f'Heard "{text}" but had nothing to say back.')
             await s.set_state("idle")
+
+    def _troubles(self, kind: str, within_s: float) -> int:
+        cutoff = time.time() - within_s
+        return sum(1 for t, k in self.trouble if k == kind and t >= cutoff)
+
+    def _trouble_hint(self) -> tuple[str, str]:
+        """Something worth offering help with, at most once every 3 hours each: ("kind", "what to offer")."""
+        n = self._troubles("not_heard", 900)
+        if n >= 2 and time.time() - self.offered.get("hearing_them", 0) > 3 * 3600:
+            return "hearing_them", (f"in the last few minutes you listened {n} times and heard nothing, or couldn't "
+                                    "make out the words. Offer to listen more carefully: pick up quieter voices "
+                                    "(listen_sensitivity lower), turn the mic up (device_mic_shift lower), or wait a "
+                                    "little longer before deciding they've finished (end_of_speech_ms higher).")
+        return "", ""
+
+    def insight(self) -> str:
+        """How Buddy is doing, in a few lines (for get_settings): speed, connection, voice, hearing."""
+        from .timing import LABELS, STAGES, recent
+        lines = []
+        turns = recent(self.settings.data_dir / "timings.jsonl", 10)
+        if turns:
+            avg = sum(t["total"] for t in turns) / len(turns)
+            stages = {k: [t[k] for t in turns if t.get(k)] for k in STAGES if k != "total"}
+            slow = max(stages, key=lambda k: sum(stages[k]) / len(turns) if stages[k] else 0)
+            lines.append(f"Answer speed (end of their speech to your first word): last {turns[0]['total'] / 1000:.1f} s, "
+                         f"average of the last {len(turns)} {avg / 1000:.1f} s (goal 0.8 s). The slowest part is "
+                         f"'{LABELS[slow]}' (about {sum(stages[slow]) / len(turns) / 1000:.1f} s).")
+        else:
+            lines.append("Answer speed: no timed answers yet.")
+        devs = self.devices()
+        lines.append("Desk unit: " + (", ".join(f"{d.name} connected (Wi-Fi signal {d.info.get('rssi', '?')} dBm)"
+                                                for d in devs) if devs else "not connected"))
+        q = getattr(self.tts.eleven, "quota", None) if hasattr(self.tts, "eleven") else None
+        if q and q.get("limit"):
+            lines.append(f"Voice (ElevenLabs): {q.get('used')} of {q.get('limit')} characters used this month.")
+        lines.append(f"Last voice used: {getattr(self.tts, 'last_engine', '') or 'none yet'}. "
+                     f"Ears: {self.stt.status().get('engine', '?')}.")
+        people = self.voiceid.status(float(self.settings["voice_trust_seconds"]))["people"]
+        if people:
+            lines.append("Voices you know: " + ", ".join(p["name"] + ("" if p["trusted"] else " (still learning)")
+                                                        for p in people) + ".")
+        lines.append(f"Trouble lately: heard nothing or no words {self._troubles('not_heard', 3600)} times, "
+                     f"asked to repeat {self._troubles('repeat', 3600)} times in the last hour.")
+        return "\n".join(lines)
 
     def _can_stream(self, s: Session, starting: bool, speaker: dict) -> bool:
         """Stream this answer? Not when it has to be held back: a new voice is asked "who's this?" first,
