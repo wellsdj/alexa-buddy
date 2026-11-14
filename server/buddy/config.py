@@ -63,6 +63,7 @@ DEFAULTS: dict[str, Any] = {
     "play_hold_ms": 200,  # sound collected before Buddy starts playing a streamed answer (raise if it stutters)
     "warm_connections": True,
     "fast_haiku": True,
+    "echo_cancel": True,  # the board takes Buddy's own voice out of the mic (firmware 1.7.0+)
     "sound_effects": True,  # switch-on, "hey buddy" heard, and "didn't hear anything" sounds
     "barge_in": True,  # talking over Buddy stops it (needs your voice saved; "hey buddy" always works)  # everyday answers: no thinking first, short cached instructions, 1-2 sentences  # connect to Claude and the voice as soon as "hey buddy" is heard  # sound collected before Buddy starts playing a streamed answer  # one line per spoken turn with how long each stage took (data/timings.jsonl)
     "voice_id_on": True,  # notice who is speaking (needs a saved voice on the "Your voice" tab)

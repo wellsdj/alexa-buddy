@@ -21,6 +21,7 @@ SETTABLE: dict[str, tuple[str, Any, str]] = {
     "max_listen_s": ("int", (5, 60), "longest you'll listen to one sentence, in seconds"),
     "follow_up": ("choice", ("off", "questions", "always"), "keep listening after you speak: never, only after a "
                                                            "question, or always"),
+    "echo_cancel": ("bool", None, "the board takes Buddy's own voice out of what the mic hears"),
     "sound_effects": ("bool", None, "switch-on, 'hey buddy' and 'didn't hear anything' sounds"),
     "greet_by_voice": ("bool", None, "say hello by name, and ask new voices who they are"),
     "barge_in": ("bool", None, "people you know can talk over you to stop you"),

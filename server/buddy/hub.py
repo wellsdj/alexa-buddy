@@ -908,6 +908,8 @@ class Hub:
         if {"strip_leds", "strip_brightness"} & changes.keys():
             self._soon(self.broadcast({"type": "strip", "leds": int(self.settings["strip_leds"]),
                                        "brightness": int(self.settings["strip_brightness"])}, role="device"))
+        if "echo_cancel" in changes:
+            self._soon(self.broadcast({"type": "aec", "on": bool(changes["echo_cancel"])}, role="device"))
         if "device_mic_shift" in changes:
             self._soon(self.broadcast({"type": "mic_gain", "shift": int(changes["device_mic_shift"])}, role="device"))
         self._soon(self.broadcast_ui({"type": "event", "kind": "settings"}))
@@ -972,6 +974,7 @@ class Hub:
                            "strip_leds": int(self.settings["strip_leds"]),
                            "strip_brightness": int(self.settings["strip_brightness"])})
         if s.role == "device":
+            await s.send_json({"type": "aec", "on": bool(self.settings.get("echo_cancel", True))})
             await self.push_schedule(s)
             if self.just_switched_on(s):
                 await s.play_startup_sound()

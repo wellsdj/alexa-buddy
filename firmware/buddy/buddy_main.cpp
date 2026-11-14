@@ -24,7 +24,7 @@
 
 #include "config.h"
 
-#define FW_VERSION "1.6.0"
+#define FW_VERSION "1.7.0"
 #define SAMPLE_RATE 16000
 #define MIC_FRAMES 320               // 20 ms per I2S read
 #define SEND_BYTES 1280              // 40 ms of 16-bit audio per WebSocket frame
@@ -145,6 +145,19 @@ static float speechGain() {
   return powf(10.0f, (v - 10) * 3.0f / 20.0f);
 }
 
+// ------------------------------------------------------------------ echo cancelling
+// Takes Buddy's own voice out of the mic, so it doesn't hear itself (and you can cut in).
+#include "aec.h"
+static AecPipeline aec;
+static volatile bool aecOn = true;  // the server can switch it off ("echo_cancel" setting)
+
+static void aecTask(void *) {
+  for (;;) {
+    if (aec.delayTask()) Serial.printf("[aec] echo delay %d samples\n", (int)aec.lag);
+    vTaskDelay(pdMS_TO_TICKS(50));
+  }
+}
+
 // ------------------------------------------------------------------ audio tasks
 static void micTask(void *) {
   static int32_t raw[MIC_FRAMES * 2];
@@ -176,6 +189,7 @@ static void micTask(void *) {
       hpY = y;
       out[i] = (int16_t)constrain((int32_t)y, -32768, 32767);
     }
+    if (aecOn && !recording && spkRate == SAMPLE_RATE) aec.processMic(out, frames);
     if (recording) {  // a lesson: straight to the SD card, not to the server
       if (xStreamBufferSend(recStream, out, frames * 2, 0) < (size_t)frames * 2) droppedRec++;
     } else if (!micMuted && xStreamBufferSend(micStream, out, frames * 2, 0) < (size_t)frames * 2) {
@@ -241,6 +255,7 @@ static void playTask(void *) {
       i2s_channel_reconfig_std_clock(txChan, &clk);
       i2s_channel_enable(txChan);
       spkRate = wantRate;
+      aec.restart();  // the timeline starts again
     }
     if (flushSpeaker) {
       xStreamBufferReset(spkStream);
@@ -258,7 +273,7 @@ static void playTask(void *) {
     int n = renderTone(mono, 256, gain);
     bool tone = n > 0;
     if (!tone) {
-      n = xStreamBufferReceive(spkStream, mono, sizeof(mono), pdMS_TO_TICKS(20)) / 2;
+      n = xStreamBufferReceive(spkStream, mono, sizeof(mono), pdMS_TO_TICKS(aecOn ? 4 : 20)) / 2;
       gain = speechGain();
       if (ringMode != RING_NONE) {  // an alarm sound: at least half volume, getting louder like the beeps
         float ramp = min(1.0f, 0.3f + (millis() - ringStartMs) / 30000.0f * 0.7f);
@@ -271,9 +286,15 @@ static void playTask(void *) {
           playbackDone = true;
         }
         speakLevel *= 0.8f;
-        continue;
+        if (!aecOn || spkRate != SAMPLE_RATE) continue;
+        // Echo cancelling needs an unbroken timeline of what the speaker played, so keep it fed
+        // with silence (the speaker plays silence anyway).
+        memset(mono, 0, 128 * 2);
+        n = 128;
+        gain = 1.0f;
+      } else {
+        playing = true;
       }
-      playing = true;
     }
     int peak = 0;
     for (int i = 0; i < n; i++) {
@@ -283,6 +304,11 @@ static void playTask(void *) {
       peak = max(peak, abs((int)s));
     }
     speakLevel = speakLevel * 0.7f + (peak / 32768.0f) * 0.3f;
+    if (aecOn && spkRate == SAMPLE_RATE) {
+      static int16_t played[256];
+      for (int i = 0; i < n; i++) played[i] = stereo[2 * i];
+      aec.pushRef(played, n);
+    }
     size_t written;
     i2s_channel_write(txChan, stereo, n * 4, &written, portMAX_DELAY);
   }
@@ -311,8 +337,8 @@ static void setupI2S() {
 
   // Amplifier on I2S1: 16-bit stereo, the same sample on both slots.
   i2s_chan_config_t txCfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_1, I2S_ROLE_MASTER);
-  txCfg.dma_desc_num = 8;
-  txCfg.dma_frame_num = 256;
+  txCfg.dma_desc_num = 6;  // short queue (48 ms): it's kept full of silence for the echo cancelling
+  txCfg.dma_frame_num = 128;
   txCfg.auto_clear = true;  // silence instead of stutter if we ever run dry
   ESP_ERROR_CHECK(i2s_new_channel(&txCfg, &txChan, nullptr));
   i2s_std_config_t txStd = {
@@ -630,6 +656,10 @@ static void handleJson(uint8_t *payload, size_t len) {
     Serial.printf("[alarms] schedule updated: %d fire times\n", n);
   } else if (!strcmp(type, "alarm_stop")) {
     stopRinging(doc["reason"] | (doc["quiet"] | false ? "snooze" : "voice"));
+  } else if (!strcmp(type, "aec")) {
+    bool on = doc["on"] | true;
+    if (on && !aecOn) aec.restart();
+    aecOn = on;
   } else if (!strcmp(type, "wifi_scan")) {
     wantScan = true;  // done in loop(): scanning takes a few seconds
   } else if (!strcmp(type, "wifi_join")) {
@@ -755,6 +785,9 @@ static void sendHello() {
   doc["sd"] = sdOk;
   doc["recording"] = (bool)recording;
   doc["ssid"] = WiFi.SSID();
+  doc["aec"] = (bool)aecOn;
+  doc["aec_lag"] = (int)aec.lag;
+  doc["aec_db"] = (int)aec.ec.erleDb;
   if (joinResult.length()) {  // how the last "change Wi-Fi" went (the server says it out loud)
     doc["wifi_join"] = joinResult;
     doc["wifi_join_ssid"] = joinSsid;
@@ -1266,6 +1299,7 @@ void setup() {
   }
   xTaskCreatePinnedToCore(micTask, "mic", 6144, nullptr, 6, nullptr, 0);
   xTaskCreatePinnedToCore(playTask, "play", 6144, nullptr, 6, nullptr, 1);
+  xTaskCreatePinnedToCore(aecTask, "aec", 4096, nullptr, 1, nullptr, 0);
   if (sdOk) {
     xTaskCreatePinnedToCore(recTask, "rec", 6144, nullptr, 3, nullptr, 1);
     xTaskCreatePinnedToCore(uploadTask, "upload", 8192, nullptr, 1, nullptr, 1);
