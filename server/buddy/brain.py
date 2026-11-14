@@ -112,6 +112,7 @@ class Conversation:
     pending: dict | None = None
     clear_requested: float = 0.0
     dropped: list[str] = field(default_factory=list)
+    last_address: str = ""  # the last website address they gave (checked with them)
     interrupted: str = ""  # the rest of an answer that got cut off, for "carry on"  # topics the user asked Buddy to leave alone
 
     def add(self, role: str, content: str, note: str = "", speaker: str = "") -> None:
@@ -241,6 +242,12 @@ TOOLS = [
         "It asks them before anything final and reports back when done.",
         "parameters": {"type": "object", "properties": {"task": {"type": "string"}}, "required": ["task"]}}},
     {"type": "function", "function": {
+        "name": "check_address", "description": "Take down a website address the user said out loud and read it back "
+        "to check it (like spelling a Wi-Fi password). heard: the address as you understood it, e.g. "
+        "studdy-buddy.vercel.app/code. task: what to do there once it's right (empty to just remember it).",
+        "parameters": {"type": "object", "properties": {"heard": {"type": "string"}, "task": {"type": "string"}},
+                       "required": ["heard"]}}},
+    {"type": "function", "function": {
         "name": "online_job", "description": "How the job you're doing online is going (status), or stop it.",
         "parameters": {"type": "object", "properties": {"action": {"type": "string", "enum": ["status", "stop"]}},
                        "required": ["action"]}}},
@@ -253,7 +260,7 @@ TOOLS = [
         "parameters": {"type": "object", "properties": {"reason": {"type": "string"}}}}},
 ]
 ACTION_TOOLS = {"set_alarm", "set_timer", "set_reminder", "cancel_alarm", "remember", "forget",
-                "update_memory", "clear_memory", "set_volume", "switch_voice", "music", "go_online"}
+                "update_memory", "clear_memory", "set_volume", "switch_voice", "music", "go_online", "check_address"}
 
 SYSTEM = """You are {name}, {user_ref} voice assistant. You live in {user_ref} bedroom and you've known \
 {user_obj} for a while: you're a friend, not a gadget or a servant. Everything you say is spoken aloud.
@@ -303,9 +310,24 @@ SYSTEM_STATIC = """You are {name}, {user_ref} voice assistant and a friend, not 
 set for 7." No follow-up offers.
 - Chat: be natural, and ask something back now and then. Never call yourself a device or a speaker.
 - Say times like "7:30 AM" and temperatures like "12 degrees".
+What you can do (you really can do all of these, so do them confidently; never say you can't):
+- Alarms, timers and reminders (with their own sounds); weather anywhere; remembering things about people.
+- Volume, music on Spotify, switching between your saved voices.
+- Search the web for anything current (web_search).
+- Go online and do jobs on real websites: open pages, click through, fill in forms, find things, book (go_online). \
+It runs in the background and asks before anything final.
+- Take down a website address carefully and read it back (check_address).
+- Change the Wi-Fi of your desk unit, with the password spelt out (wifi).
+- Look at and change your own settings, and say how fast you're answering (get_settings, change_setting).
+- Study Buddy: how their revising is going (study_progress).
+- Recognise people by voice, carry on after being interrupted, think harder about tricky things (think_harder).
+Be persistent: if one way doesn't work, try another (a different search, another site, a different tool) before \
+saying you couldn't, and then say what you tried.
 Tools:
 - Use them for alarms, timers, reminders, weather, memory, volume, music (Spotify) and changing your voice. Times are 24h \
 HH:MM local.
+- A website address they say out loud: call check_address with what you heard, before go_online, unless it's a \
+well-known site (google.com, bbc.co.uk...).
 - A missing or unclear detail: ask one short question. When you ask something, end with a question mark.
 - "Remember ..." means remember; forget or update_memory use the memory's id. Ask before clear_memory, and only call it \
 with confirmed=true after they say yes.
@@ -326,6 +348,43 @@ SYSTEM_DYNAMIC = """Now: {now}. Home: {place}.
 {weather}
 What you remember about the user (numbers are ids for editing):
 {memories}"""
+
+
+URL_SPELL_ASK = ("I'm not sure I caught that. Words are fine, like 'studdy dash buddy dot vercel dot app slash "
+                 "code', and say done at the end. Can you say the address bit by bit?")
+_URL_WORDS = [("forward slash", "/"), ("full stop", "."), ("dot", "."), ("point", "."), ("period", "."),
+              ("slash", "/"), ("dash", "-"), ("hyphen", "-"), ("minus", "-"), ("underscore", "_"),
+              ("colon", ":"), ("at sign", "@"), ("question mark", "?"), ("equals", "="), ("and sign", "&")]
+_DIGITS = {"zero": "0", "one": "1", "two": "2", "three": "3", "four": "4", "five": "5", "six": "6", "seven": "7",
+           "eight": "8", "nine": "9"}
+_SAY = {".": "dot", "/": "slash", "-": "dash", "_": "underscore", ":": "colon", "?": "question mark", "=": "equals",
+        "&": "and", "@": "at"}
+
+
+def address_from_speech(text: str, strict: bool = True) -> str:
+    """'studdy dash buddy dot vercel dot app slash code' -> 'studdy-buddy.vercel.app/code'.
+    strict: it must look like a whole address (has a dot and a name ending)."""
+    t = (text or "").lower().strip().rstrip(".!?")
+    t = re.sub(r"^(go to|open|it's|its|it is|the address is|the website is)\s+", "", t)
+    t = re.sub(r"https?\s*:?\s*(slash|/)\s*(slash|/)", "", t)
+    t = re.sub(r"^https?://", "", t)
+    for w, c in _URL_WORDS:
+        t = re.sub(rf"\b{w}\b", f" {c} ", t)
+    t = re.sub(r"\bw\s*w\s*w\b|\bdouble u double u double u\b|\btriple w\b", "www", t)
+    out = []
+    for tok in t.split():
+        tok = _DIGITS.get(tok, tok)
+        tok = re.sub(r"[^a-z0-9./\-_:?=&@%#]", "", tok)
+        out.append(tok)
+    url = re.sub(r"^https?:?/*", "", "".join(out))
+    if strict and not re.fullmatch(r"[a-z0-9\-]+(\.[a-z0-9\-]+)*\.[a-z]{2,}(/\S*)?", url):
+        return ""
+    return url
+
+
+def say_address(url: str) -> str:
+    """How to read an address back: 'studdy dash buddy dot vercel dot app slash code'."""
+    return re.sub(r"\s+", " ", "".join(f" {_SAY[c]} " if c in _SAY else c for c in url)).strip()
 
 
 def speakable(text: str, limit: int = 900) -> str:
@@ -430,6 +489,8 @@ class Brain:
             return None
         if p.get("intent") == "wifi_pass":
             return await self._wifi_password(text, conv, p)
+        if p.get("intent") in ("url_confirm", "url_spell"):
+            return await self._address(text, conv, ctx, p)
         if p.get("intent") == "online_answer" and self.online and self.online.waiting:
             if re.search(r"\b(stop|cancel|forget it|never mind)\b", text, re.I) and not re.search(
                     r"\b(cancel(ling)? (the|my) (booking|order))\b", text, re.I):
@@ -661,6 +722,51 @@ class Brain:
                      "information on that. I'd rather not guess.", reply.actions, model=reply.model, intent="llm")
 
     # ---------- Wi-Fi by voice ----------
+    async def _address(self, text: str, conv: Conversation, ctx: dict, p: dict) -> Reply:
+        """Getting a website address right: read back, yes/no, or said bit by bit."""
+        t = text.lower().strip()
+        if re.search(r"\b(cancel|never mind|forget it|stop)\b", t):
+            return Reply("Okay, forget that address.", intent="address")
+        if p["intent"] == "url_confirm":
+            if YES.search(t) and not NO.search(t):
+                url = p["url"]
+                self.memory.add(f"Website they gave: {url}", "other", source="user")
+                conv.last_address = url
+                if p.get("task") and self.online:
+                    r = self.online.start(f"{p['task']} (the address is {url})", who=ctx.get("speaker", ""),
+                                          today=self.now().strftime("%A %d %B %Y"))
+                    if r == "started":
+                        return Reply("Great, I'm on it. I'll come back to you.", intent="address")
+                    return Reply(r, intent="address")
+                return Reply(f"Got it, I'll remember {say_address(url)}.", intent="address")
+            # "no, it's ..." with a new address: try that; otherwise ask for it bit by bit
+            rest = re.sub(r"^(no|nope|not quite|wrong)[,.!]?\s*(it's|its|it is)?\s*", "", t)
+            again = address_from_speech(rest) if rest != t or not NO.search(t) else ""
+            if again and again != p["url"]:
+                conv.pending = {**p, "url": again}
+                return Reply(f"Okay, so it's {say_address(again)}. Is that right?", intent="address", follow_up=True)
+            conv.pending = {"intent": "url_spell", "chars": "", "task": p.get("task", "")}
+            return Reply(URL_SPELL_ASK, intent="address", follow_up=True)
+        # bit by bit
+        so_far = p.get("chars", "")
+        done = re.search(r"\b(done|finished|that's it|that's all|that's the lot)\b", t)
+        if re.search(r"\b(start again|start over|from the beginning)\b", t):
+            conv.pending = {**p, "chars": ""}
+            return Reply("Okay, from the start.", intent="address", follow_up=True)
+        part = address_from_speech(re.sub(r"\b(done|finished|that's it|that's all|that's the lot)\b", "", t),
+                                   strict=False)
+        so_far += part
+        if done or (not part and so_far):
+            if not so_far:
+                conv.pending = {**p, "chars": ""}
+                return Reply("I didn't get any of it yet. Go on, bit by bit.", intent="address", follow_up=True)
+            url = address_from_speech(so_far, strict=False)
+            conv.pending = {"intent": "url_confirm", "url": url, "task": p.get("task", "")}
+            return Reply(f"So that's {say_address(url)}. Is that right?", intent="address", follow_up=True)
+        conv.pending = {**p, "chars": so_far}
+        return Reply(f"{say_address(part)}. Next bit, or say done." if part else "Sorry, say that bit again?",
+                     intent="address", follow_up=True)
+
     async def _wifi_tool(self, a: dict, conv: Conversation) -> tuple[str, str, list]:
         if self.wifi is None or not self.wifi.devices():
             return "The desk unit isn't connected, so its Wi-Fi can't be changed right now.", "", []
@@ -1108,6 +1214,13 @@ class Brain:
                                           "Leave it with me, I'll come back to you."])
                     return "started in the background; say only the confirmation", line, []
                 return r, "", []
+            if name == "check_address":
+                url = address_from_speech(a.get("heard", ""))
+                if not url:
+                    conv.pending = {"intent": "url_spell", "chars": "", "task": a.get("task", "")}
+                    return "asked them to say it bit by bit", URL_SPELL_ASK, []
+                conv.pending = {"intent": "url_confirm", "url": url, "task": a.get("task", "")}
+                return "reading it back to check", f"Just to check, that's {say_address(url)}. Is that right?", []
             if name == "online_job":
                 if not self.online:
                     return "nothing running", "", []

@@ -200,6 +200,14 @@ class Session:
         """A short sound effect through Buddy's speaker (follows the volume, doesn't change the light)."""
         if not pcm or not self.hub.settings["sound_effects"]:
             return
+        # Don't take the sound effect for someone talking: while it plays (plus its echo in the room),
+        # listening ignores it and "hey buddy" / room listening waits.
+        dur = len(pcm) / 2 / SR + 0.25
+        self.quiet_until = max(self.quiet_until, time.time() + dur)
+        self.sound_until = time.time() + dur
+        ep = self.endpointer
+        if ep is not None:
+            ep.ignore_chunks = max(ep.ignore_chunks, ep.chunks + int(dur / ep.chunk_s))
         self.seq = (self.seq + 1) % 256
         seq = self.seq
         await self.send_json({"type": "audio_start", "seq": seq, "rate": SR, "text": ""})
@@ -518,7 +526,7 @@ class Session:
         on = 0.5 if silent else min(0.5, max(0.1, float(s["listen_sensitivity"])))
         self.endpointer = Endpointer(silence_ms=int(s["end_of_speech_ms"]), no_speech_s=no_speech_s,
                                      max_s=float(s["max_listen_s"]) + preroll_s, on=on, off=0.35, keep=0.5,
-                                     ignore_s=ignore_s)
+                                     ignore_s=max(ignore_s, getattr(self, "sound_until", 0) - time.time()))
         if preroll_s:
             n = int(preroll_s * SR / VAD_CHUNK)
             self.endpointer.update(list(self.vad_history)[-n:])

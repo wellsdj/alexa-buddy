@@ -198,3 +198,14 @@ def test_the_chime_doesnt_count_as_a_reply():
     from buddy.vad import Endpointer
     ep = Endpointer(silence_ms=600, no_speech_s=8.0, on=0.3, ignore_s=0.35)
     assert ep.update([0.9] * 10 + [0.0] * 30) is None and not ep.started
+
+
+def test_the_wake_sound_isnt_taken_for_you_talking(settings):
+    hub, s, ws, spoken = setup(settings, "")
+
+    async def run():
+        await s.start_listening(earcon=False)
+        await s.wake_sound()
+        n = int(1.5 / 0.032)  # the sound effect, loud and speech-like, for 1.5 s
+        return s.endpointer.update([0.9] * n)
+    assert asyncio.run(run()) is None and not s.endpointer.started
