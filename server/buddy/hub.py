@@ -653,6 +653,7 @@ class Hub:
         self.study = StudyStore(d)  # Study Buddy: lessons, notes and questions per person
         self.study_worker = StudyWorker(self.study, self.stt, self.llm)
         self.study_worker.cloud = self.study_cloud
+        self.study_worker.teachers = VoiceID(d / "study" / "teachers", share=self.voiceid)  # teachers' voices
         from .practice import Practice
         self.practice = Practice(self.study.dir)  # "Start revising": questions that fit each person
         self.brain.study = (self.study, self.practice)  # so Buddy can say how revising is going

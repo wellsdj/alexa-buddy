@@ -33,6 +33,7 @@ SR = 16000
 CHUNK_MIN_S, CHUNK_MAX_S = 18, 28  # long recordings are cut at quiet moments into pieces this long
 MAX_TRANSCRIPT_CHARS = 120_000  # about two hours of talking
 MAX_UPLOAD_BYTES = 400 * 1024 * 1024
+TEACHER_MATCH = 0.45  # a lesson's main voice this close to a saved teacher is that teacher
 MIN_LESSON_S = 10  # anything 10 seconds or longer is kept, whatever it's about
 INBOX_FOLDER = "Buddy lessons"  # voice memos put in a folder with this name on the Mac are picked up too
 AUDIO_EXT = {".m4a", ".mp3", ".wav", ".aac", ".caf", ".aif", ".aiff", ".flac", ".ogg", ".mp4", ".qta"}
@@ -178,7 +179,7 @@ class StudyStore:
                 x = json.loads(f.read_text())
             except (OSError, ValueError):
                 continue
-            out.append({k: x.get(k) for k in ("id", "title", "auto_title", "subject", "about", "date", "status", "progress", "error",
+            out.append({k: x.get(k) for k in ("id", "title", "auto_title", "subject", "about", "teacher", "date", "status", "progress", "error",
                                                "created", "duration_s")}
                        | {"topics": [t["name"] for t in x.get("topics", [])], "questions": len(x.get("questions", []))})
         return sorted(out, key=lambda x: (x["date"] or "", x["created"]), reverse=True)
@@ -357,6 +358,7 @@ class StudyWorker:
         self.store, self.stt, self.llm = store, stt, llm
         self.recordings = Recordings(store)
         self.cloud = lambda: None  # (website address, sync key) once Buddy is connected to Study Buddy online
+        self.teachers = None  # a VoiceID of teachers' voices, set by the hub
         self.queue: asyncio.Queue = asyncio.Queue()
         self.task: asyncio.Task | None = None
         self.watch_task: asyncio.Task | None = None
@@ -412,7 +414,8 @@ class StudyWorker:
             return False
         url, key = cloud
         import httpx
-        body = {k: rec.get(k) for k in ("id", "recorded_at", "name", "subject", "about", "duration_s", "transcript", "source")}
+        body = {k: rec.get(k) for k in ("id", "recorded_at", "name", "subject", "about", "duration_s", "transcript", "source",
+                                        "teacher")}
         try:
             async with httpx.AsyncClient(timeout=30) as c:
                 r = await c.post(f"{url.rstrip('/')}/study/api/sync/recording", json=body, headers={"X-Sync-Key": key})
@@ -470,7 +473,7 @@ class StudyWorker:
                 except StudyError:
                     pass
 
-    async def _transcribe_file(self, path: Path) -> tuple[str, int]:
+    async def _transcribe_file(self, path: Path) -> tuple[str, int, np.ndarray]:
         if not self.stt.available():
             raise StudyError("Buddy's ears aren't installed yet: click Update Buddy, then try again.")
         audio = await asyncio.to_thread(read_audio, path)
@@ -479,7 +482,50 @@ class StudyWorker:
             text = await self.stt.transcribe(piece, "", len(piece) / SR)
             if text.strip():
                 words.append(text.strip())
-        return " ".join(words)[:MAX_TRANSCRIPT_CHARS], int(len(audio) / SR)
+        return " ".join(words)[:MAX_TRANSCRIPT_CHARS], int(len(audio) / SR), audio
+
+    async def find_teacher(self, audio: np.ndarray, said_name: str = "") -> dict:
+        """Whose lesson was it? The voice that talks most is taken as the teacher and compared with the
+        teachers Buddy knows. A voice it knows: named, and its voice is topped up. A new voice whose name
+        was said in the lesson ("I'm Mr Smith"): learnt under that name. Otherwise it waits for you to
+        say who it is on the lesson page. The recording itself still isn't kept, only the voiceprint."""
+        t = self.teachers
+        if t is None or not t.installed():
+            return {}
+        try:
+            main = await asyncio.to_thread(t.main_voice, audio)
+        except Exception:  # noqa: BLE001 - a voice problem mustn't stop the notes
+            log.exception("finding the teacher's voice failed")
+            return {}
+        if not main or main["share"] < 0.35:
+            return {}  # nobody talked much more than the rest: no clear teacher
+        out = {"teacher": "", "teacher_print": [round(float(x), 5) for x in main["print"]],
+               "teacher_seconds": main["seconds"]}
+        best, score = t.match_print(main["print"])
+        if best and score >= TEACHER_MATCH:
+            out["teacher"] = best
+            await asyncio.to_thread(t.add_print, best, main["print"], main["seconds"], "lessons")
+        elif said_name:
+            out["teacher"], out["teacher_guessed"] = said_name, True
+            await asyncio.to_thread(t.add_print, said_name, main["print"], main["seconds"], "name said in a lesson", True)
+        return out
+
+    def name_teacher(self, pid: str, lid: str, name: str) -> dict:
+        """You said who the teacher was: remember their voice for next time."""
+        name = " ".join(str(name).split())[:40]
+        if not name:
+            raise StudyError("Type the teacher's name.")
+        lesson = self.store.lesson(pid, lid)
+        if not lesson.get("teacher_print") or self.teachers is None:
+            raise StudyError("Buddy didn't catch a clear teacher's voice in this lesson.")
+        old = lesson.get("teacher", "")
+        if old and old != name and lesson.get("teacher_guessed"):
+            self.teachers.remove(old)  # its guess from the lesson was wrong
+        self.teachers.add_print(name, np.array(lesson["teacher_print"], dtype=np.float32),
+                                float(lesson.get("teacher_seconds", 60)), "named by you", True)
+        lesson.update(teacher=name, teacher_guessed=False)
+        self.store.save_lesson(pid, lesson)
+        return lesson
 
     async def check_recording(self, pid: str, rid: str) -> None:
         """10 seconds or longer? Then it goes in the list, named after its subject and day."""
@@ -497,7 +543,7 @@ class StudyWorker:
             if seconds < MIN_LESSON_S:
                 rec["status"] = "too_short"
                 return
-            rec["transcript"], rec["duration_s"] = await self._transcribe_file(audio_file)
+            rec["transcript"], rec["duration_s"], audio = await self._transcribe_file(audio_file)
             sample = " ".join(rec["transcript"].split()[:2500])
             verdict = {}
             if sample:
@@ -511,6 +557,7 @@ class StudyWorker:
             rec["about"] = str(verdict.get("about", "")).strip().rstrip(".")[:80] or (
                 "" if sample else "couldn't make out any words")
             rec["name"] = f"{rec['subject']} lesson" if rec["subject"] else "Lesson"
+            rec.update(await self.find_teacher(audio, _clean_name(str(verdict.get("teacher", "")))))
             rec["status"] = "ready"
         except StudyError as e:
             rec["status"], rec["error"] = "unclear", str(e)
@@ -529,7 +576,8 @@ class StudyWorker:
             raise StudyError("Notes have already been made from that recording.")
         day = time.strftime("%Y-%m-%d", time.localtime(rec["recorded_at"]))
         lesson = self.store.new_lesson(pid, rec["subject"], day, title, "audio")
-        lesson.update(transcript=rec["transcript"], duration_s=rec["duration_s"], about=rec["about"])
+        lesson.update(transcript=rec["transcript"], duration_s=rec["duration_s"], about=rec["about"],
+                      **{k: rec[k] for k in ("teacher", "teacher_print", "teacher_seconds", "teacher_guessed") if k in rec})
         self.store.save_lesson(pid, lesson)
         rec["used_by"] = lesson["id"]
         self.recordings.save(pid, rec)
@@ -548,6 +596,7 @@ class StudyWorker:
             self.store.save_lesson(pid, lesson)
             audio = await asyncio.to_thread(read_audio, upload)
             lesson["duration_s"] = int(len(audio) / SR)
+            lesson.update(await self.find_teacher(audio))
             pieces = split_at_pauses(audio)
             words = []
             for i, piece in enumerate(pieces):

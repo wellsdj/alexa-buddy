@@ -345,12 +345,28 @@ function upload(blob, details) {
 }
 
 // ---------- one lesson ----------
+function teacherForm(id, tab) {
+  const f = $("#teacher-form");
+  if (!f) return;
+  f.onsubmit = async (e) => {
+    e.preventDefault();
+    const name = $("#teacher-name").value.trim();
+    if (!name) return;
+    try { await api(`/lessons/${encodeURIComponent(id)}/teacher`, { method: "POST", body: { name } }); lessonView(id, tab); }
+    catch (err) { alert(err.message); }
+  };
+}
+
 async function lessonView(id, tab) {
   const x = await api(`/lessons/${encodeURIComponent(id)}`);
   const [cls, label] = STATUS[x.status] || ["", x.status];
   const head = `<a class="back" href="#/">← Lessons</a>
     <h1 class="fade" style="margin-top:20px">${esc(lessonName(x))}</h1>
-    <div class="meta"><span>${esc(longDate(x.date))}</span>${x.duration_s ? `<span>· ${Math.round(x.duration_s / 60)} min recording</span>` : ""}</div>`;
+    <div class="meta"><span>${esc(longDate(x.date))}</span>${x.duration_s ? `<span>· ${Math.round(x.duration_s / 60)} min recording</span>` : ""}${x.teacher ? `<span class="teacher">· ${esc(x.teacher)}${x.teacher_guessed ? "?" : ""}</span>` : ""}</div>
+    ${x.teacher_can_name && (!x.teacher || x.teacher_guessed) ? `<form class="teacher-ask" id="teacher-form">
+      <label for="teacher-name">${x.teacher_guessed ? `Was the teacher ${esc(x.teacher)}?` : "Who was the teacher?"} Buddy will know their voice next time.</label>
+      <div class="row"><input id="teacher-name" maxlength="40" placeholder="e.g. Mr Smith" value="${esc(x.teacher || "")}" autocomplete="off"><button class="btn secondary" type="submit">Save</button></div>
+    </form>` : ""}`;
   if (x.status !== "ready") {
     const working = busy(x);
     view.innerHTML = `${head}
@@ -362,6 +378,7 @@ async function lessonView(id, tab) {
       <p><button class="link" id="del">Delete this lesson</button></p>`;
     if (working) S.poll = setTimeout(() => location.hash.startsWith(`#/lesson/${id}`) && lessonView(id, tab).catch(() => {}), 2500);
     $("#retry")?.addEventListener("click", async () => { await api(`/lessons/${id}/retry`, { method: "POST" }); lessonView(id); });
+    teacherForm(id, tab);
     $("#del").onclick = () => deleteLesson(id);
     return;
   }
@@ -375,6 +392,7 @@ async function lessonView(id, tab) {
     <p><button class="link" id="del">Delete this lesson</button></p>`;
   view.querySelectorAll("[data-tab]").forEach((b) => b.onclick = () => { history.replaceState(null, "", `#/lesson/${id}/${b.dataset.tab}`); lessonView(id, b.dataset.tab); });
   $("#del").onclick = () => deleteLesson(id);
+  teacherForm(id, tab);
   const box = $("#tab");
   if (tab === "notes") {
     box.className = "notes";

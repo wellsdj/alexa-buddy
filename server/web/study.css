@@ -261,3 +261,10 @@ h2.sec { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; colo
 .step p { margin: 4px 0 0; }
 .step-icon { width: 44px; height: 44px; border-radius: 12px; background: var(--s2); display: grid; place-items: center; flex: none; }
 .step-icon svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+
+/* Who was the teacher? */
+.meta .teacher { color: var(--ink, #fff); font-weight: 600; }
+.teacher-ask { margin-top: 16px; padding: 14px 16px; border-radius: 14px; background: rgba(255, 255, 255, .06);
+  display: grid; gap: 10px; font-size: 15px; }
+.teacher-ask .row { display: flex; gap: 10px; flex-wrap: wrap; }
+.teacher-ask input { flex: 1 1 160px; min-width: 0; }

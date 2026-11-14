@@ -75,7 +75,10 @@ def _unit(v) -> np.ndarray:
 
 
 class VoiceID:
-    def __init__(self, data_dir: Path, model_path: Path | None = None):
+    def __init__(self, data_dir: Path, model_path: Path | None = None, share: "VoiceID | None" = None):
+        """share: another VoiceID whose loaded model to use (Study Buddy's teachers use Buddy's)."""
+        self.share = share
+        Path(data_dir).mkdir(parents=True, exist_ok=True)
         self.path = Path(data_dir) / "voiceprints.json"
         self.model_path = Path(model_path or MODEL_PATH)
         self._lock = threading.Lock()
@@ -113,6 +116,8 @@ class VoiceID:
 
     # ---------- the model ----------
     def installed(self) -> bool:
+        if self.share is not None:
+            return self.share.installed()
         if not self.model_path.exists():
             return False
         try:
@@ -164,6 +169,8 @@ class VoiceID:
 
     def embed(self, pcm: np.ndarray) -> np.ndarray:
         """int16 16 kHz speech -> unit-length voiceprint."""
+        if self.share is not None:
+            return self.share.embed(pcm)
         with self._lock:
             ext = self._get_extractor()
             stream = ext.create_stream()
@@ -208,6 +215,27 @@ class VoiceID:
             self._save()
         return True
 
+    def main_voice(self, pcm: np.ndarray, window_s: float = 3.0, most: int = 240) -> dict | None:
+        """The voice that talks most in a long recording (in a lesson, the teacher).
+        {"print": voiceprint, "seconds": how long they talked, "share": their part of all the talking}."""
+        size = int(window_s * SR)
+        wins = [pcm[i:i + size] for i in range(0, len(pcm) - size + 1, size)]
+        wins = [w for w in wins if has_speech(w, 0.5)]
+        if len(wins) < 3:
+            return None
+        talking_s = len(wins) * window_s
+        if len(wins) > most:  # long lessons: an even spread is plenty
+            wins = [wins[int(i * len(wins) / most)] for i in range(most)]
+        prints = np.array([self.embed(w) for w in wins])
+        sims = prints @ prints.T
+        seed = int(np.argmax((sims >= 0.5).sum(axis=1)))  # the most "crowded" voice
+        members = sims[seed] >= 0.45
+        for _ in range(2):  # settle on that voice's centre
+            centre = _unit(prints[members].mean(axis=0))
+            members = prints @ centre >= 0.45
+        share = float(members.mean())
+        return {"print": centre, "seconds": round(share * talking_s, 1), "share": round(share, 2)}
+
     def trusted(self, name: str, trust_s: float = TRUST_S) -> bool:
         return self.people.get(name, {}).get("seconds", 0.0) >= trust_s
 
@@ -230,10 +258,22 @@ class VoiceID:
         return {"name": match if trusted else "", "score": score, "best": best,
                 "learning": match if match and not trusted else "", "print": v, "seconds": len(voice) / SR}
 
-    def add_print(self, name: str, v: np.ndarray, seconds: float, source: str = "learnt while talking") -> None:
-        """Add one sentence's voiceprint to someone already saved (learning as they talk)."""
+    def match_print(self, v: np.ndarray) -> tuple[str, float]:
+        """The saved person closest to a voiceprint, and how close (0..1). ("", 0) if nobody is saved."""
+        if not self._centroids:
+            return "", 0.0
+        scores = {name: float(_unit(v) @ c) for name, c in self._centroids.items()}
+        best = max(scores, key=scores.get)
+        return best, round(scores[best], 2)
+
+    def add_print(self, name: str, v: np.ndarray, seconds: float, source: str = "learnt while talking",
+                  create: bool = False) -> None:
+        """Add a voiceprint to someone saved (learning as they talk). create: start a new person."""
+        name = " ".join(str(name).split())[:40]
         with self._lock:
             p = self.people.get(name)
+            if not p and create and name:
+                p = self.people[name] = {"samples": [], "seconds": 0.0, "added": time.time()}
             if not p:
                 return
             p["samples"] = (p["samples"] + [[round(float(x), 5) for x in v]])[-MAX_SAMPLES:]

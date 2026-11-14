@@ -319,8 +319,8 @@ def create_app(store=None) -> FastAPI:
 
     # ---------- lessons ----------
     def lesson_list_item(x: dict) -> dict:
-        return {k: x.get(k) for k in ("id", "title", "auto_title", "subject", "about", "date", "status", "progress",
-                                      "error", "created", "duration_s")} | {
+        return {k: x.get(k) for k in ("id", "title", "auto_title", "subject", "about", "teacher", "date", "status",
+                                      "progress", "error", "created", "duration_s")} | {
             "topics": [t["name"] for t in x.get("topics", [])], "questions": len(x.get("questions", []))}
 
     @app.get("/study/api/lessons")
@@ -414,7 +414,8 @@ def create_app(store=None) -> FastAPI:
                   "date": time.strftime("%Y-%m-%d", time.gmtime(rec["recorded_at"] + int(body.get("tz_offset_s") or 0))),
                   "title": (body.get("title") or "").strip()[:80], "source": "audio", "created": time.time(), "status": "waiting",
                   "progress": 0, "error": "", "transcript": rec["transcript"], "summary": "", "notes": [], "topics": [],
-                  "questions": [], "duration_s": rec.get("duration_s", 0), "about": rec.get("about", "")}
+                  "questions": [], "duration_s": rec.get("duration_s", 0), "about": rec.get("about", ""),
+                  "teacher": rec.get("teacher", "")}
         if body.get("date"):
             lesson["date"] = str(body["date"])[:10]
         await data.save_doc(f"u/{p['id']}/lessons/{lesson['id']}", lesson)
@@ -445,7 +446,7 @@ def create_app(store=None) -> FastAPI:
                "name": str(body.get("name", "Lesson"))[:60], "subject": _clean_name(str(body.get("subject", ""))),
                "about": str(body.get("about", ""))[:80], "duration_s": int(body.get("duration_s") or 0),
                "transcript": str(body.get("transcript", ""))[:120_000], "source": str(body.get("source", "pocket"))[:20],
-               "created": time.time(), "used_by": ""}
+               "teacher": _clean_name(str(body.get("teacher") or "")), "created": time.time(), "used_by": ""}
         await data.save_doc(f"u/{pid}/recs/{rid}", rec)
         return {"ok": True, "id": rid}
 

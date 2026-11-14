@@ -8,7 +8,8 @@ import re
 
 CHECK_PROMPT = """Here is the start of an automatic transcript of a recording made at school. Give it a name.
 Reply with JSON only: {{"subject": "the school subject, one or two words, e.g. Maths (your best guess)",
-"about": "what it was about in under 8 words, starting with a small letter"}}
+"about": "what it was about in under 8 words, starting with a small letter",
+"teacher": "the teacher's name only if it's clearly said in the recording (e.g. Mr Smith, Miss Patel), else empty"}}
 
 Transcript:
 \"\"\"

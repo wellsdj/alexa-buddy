@@ -283,7 +283,16 @@ def create_app(settings: Settings | None = None, http=None, claude_http=None, st
 
     @app.get("/study/api/lessons/{lid}")
     async def study_lesson(request: Request, lid: str):
-        return study_call(study.lesson, studying(request)["id"], lid)
+        lesson = dict(study_call(study.lesson, studying(request)["id"], lid))
+        lesson["teacher_can_name"] = bool(lesson.pop("teacher_print", None))  # the voiceprint stays on the Mac
+        return lesson
+
+    @app.post("/study/api/lessons/{lid}/teacher")
+    async def study_name_teacher(request: Request, lid: str, body: dict):
+        """Who the teacher was: Buddy remembers their voice and names them in later lessons."""
+        lesson = dict(study_call(hub.study_worker.name_teacher, studying(request)["id"], lid, body.get("name", "")))
+        lesson["teacher_can_name"] = bool(lesson.pop("teacher_print", None))
+        return lesson
 
     @app.delete("/study/api/lessons/{lid}")
     async def study_delete_lesson(request: Request, lid: str):
