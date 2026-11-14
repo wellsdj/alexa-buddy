@@ -67,8 +67,18 @@ YOU_WERE_SAYING = ["Oh sorry, you were saying?", "Sorry about that! What were yo
 QUIET_INTENTS = ("off", "stop", "empty", "snooze", "error", "llm_error", "repeat", "carry_on", "more_memory")
 STILL_WORKING = ["Hmm, one sec.", "Bear with me.", "Just a sec.", "Hang on a moment."]
 # Played once when the desk unit is switched on: 16 kHz mono 16-bit.
-_STARTUP_FILE = Path(__file__).resolve().parent.parent / "sounds" / "startup.pcm"
-STARTUP_SOUND = _STARTUP_FILE.read_bytes() if _STARTUP_FILE.exists() else b""
+# Sound effects, 16 kHz mono 16-bit (made from your mp3s: silence trimmed, peaks at -3 dB like the voice).
+_SOUNDS = Path(__file__).resolve().parent.parent / "sounds"
+
+
+def _sound(name: str) -> bytes:
+    f = _SOUNDS / f"{name}.pcm"
+    return f.read_bytes() if f.exists() else b""
+
+
+STARTUP_SOUND = _sound("startup")  # the desk unit has just been switched on
+WAKE_SOUND = _sound("wake")  # it's sure it heard "hey buddy" (not when it listens again for an answer)
+NOTHING_SOUND = _sound("nothing_heard")  # it was listening, but you didn't say anything
 
 
 class Session:
@@ -105,6 +115,7 @@ class Session:
         self.speaker: dict = {}  # who said the sentence being answered
         self.early: dict | None = None  # words being written down at the first pause (before the end)
         self.reply_task: asyncio.Task | None = None  # the answer being worked out (cancelled if cut off)
+        self.sound_until = 0.0  # a sound effect is playing until then
         self.barge_buf: list[np.ndarray] = []  # the last 2 s heard while Buddy talks
         self.barge_voiced = 0.0
         self.barge_checking = False
@@ -167,6 +178,9 @@ class Session:
                                      "role": self.role, "state": state}, exclude=self)
 
     async def earcon(self, name: str) -> None:
+        if name == "nospeech":
+            await self.play_sound(NOTHING_SOUND)  # listened, but you said nothing
+            return
         # No beeps when Buddy listens, finishes hearing you or can't hear you: the light shows it.
         # Only alarm and reminder chimes still sound.
         if name in ("chime",):
@@ -174,14 +188,23 @@ class Session:
 
     async def play_startup_sound(self) -> None:
         """The "I'm on" sound, streamed like speech so it follows Buddy's volume."""
-        if not STARTUP_SOUND:
+        await self.play_sound(STARTUP_SOUND)
+
+    async def wake_sound(self) -> None:
+        """Buddy is sure it heard "hey buddy"."""
+        await self.play_sound(WAKE_SOUND)
+
+    async def play_sound(self, pcm: bytes) -> None:
+        """A short sound effect through Buddy's speaker (follows the volume, doesn't change the light)."""
+        if not pcm or not self.hub.settings["sound_effects"]:
             return
         self.seq = (self.seq + 1) % 256
         seq = self.seq
         await self.send_json({"type": "audio_start", "seq": seq, "rate": SR, "text": ""})
-        for i in range(0, len(STARTUP_SOUND), 3200):
-            await self.send_audio(seq, STARTUP_SOUND[i:i + 3200])
-        await self.send_json({"type": "audio_end", "seq": seq, "bytes": len(STARTUP_SOUND)})
+        for i in range(0, len(pcm), 3200):
+            await self.send_audio(seq, pcm[i:i + 3200])
+        await self.send_json({"type": "audio_end", "seq": seq, "bytes": len(pcm)})
+        self.sound_until = time.monotonic() + len(pcm) / BYTES_PER_S
 
     # ---------- mic test ----------
     async def _mic_test_audio(self, pcm: np.ndarray, probs: list[float]) -> None:
@@ -342,6 +365,7 @@ class Session:
                 if self.ringing:
                     await self.send_json({"type": "alarm_stop"})
                 self.hub.set_awake(True)
+                self.hub._soon(self.wake_sound())
                 await self.start_listening(preroll_s=0.8, earcon=True)
                 return
             if self.state == "idle" and self._verify_allowed(now):
@@ -441,6 +465,7 @@ class Session:
         self.silent = None
         self.hub.set_awake(True)
         self.warm_up()
+        self.hub._soon(self.wake_sound())
         await self.earcon("wake")
         await self.set_state("listening", force=True)
         await self.hub.broadcast_ui({"type": "event", "kind": "wake", "session": self.id,
@@ -640,6 +665,9 @@ class Session:
 
         async def begin() -> int:
             nonlocal seq
+            wait = self.sound_until - time.monotonic()
+            if wait > 0:  # let a sound effect finish rather than cut it off
+                await asyncio.sleep(min(wait, 2.0))
             self.seq = (self.seq + 1) % 256
             seq = self.seq
             self.playback_done.clear()
@@ -1100,6 +1128,7 @@ class Hub:
                 await s.start_listening(earcon=False, no_speech_s=6.0)
                 return
             s.relistened = False
+            await s.earcon("nospeech")
             await s.set_state("idle")
             return
         s.relistened = False
@@ -1135,6 +1164,7 @@ class Hub:
     async def _accept(self, s: Session, text: str, stt_ms: int = 0) -> None:
         """Something heard silently turned out to be for Buddy: light up and answer it."""
         self.set_awake(True)
+        await s.wake_sound()
         await s.earcon("wake")
         await s.set_state("thinking")
         if not intents.strip_wake(text):  # just "hey buddy": now listen for the question

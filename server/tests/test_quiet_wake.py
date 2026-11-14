@@ -80,3 +80,48 @@ def test_carrying_on_after_a_pause_throws_the_early_words_away(settings):
     hub.stt.apis.transcripts.append("what time is it")
     listen(hub, s, [0.9] * 20 + [0.05] * 10 + [0.9] * 20 + [0.05] * 25)  # a pause mid-sentence
     assert spoken and ":" in spoken[0]  # the whole sentence was answered, not "what time"
+
+
+def sounds(ws):
+    """The sound effects sent to the board: the size of each one."""
+    out, size = [], None
+    for m in ws.sent:
+        if m["type"] == "audio_start" and m.get("text") == "":
+            size = 0
+        elif m["type"] == "audio_end" and size is not None:
+            out.append(m["bytes"])
+            size = None
+    return out
+
+
+def test_a_clear_hey_buddy_plays_the_wake_sound_but_a_follow_up_doesnt(settings):
+    from buddy.hub import WAKE_SOUND
+    from types import SimpleNamespace
+    hub, s, ws, spoken = setup(settings, "")
+
+    async def run():
+        s._quiet_before = lambda: True
+        await s._on_audio(np.zeros(512, np.int16), SimpleNamespace(confident=True, score=0.9), [0.0])
+        await asyncio.sleep(0.05)
+        first = sounds(ws)
+        s.state = "idle"
+        await s.start_listening(earcon=True, no_speech_s=5.0)  # listening again after a question
+        await asyncio.sleep(0.05)
+        return first, sounds(ws)
+
+    first, after = asyncio.run(run())
+    assert first == [len(WAKE_SOUND)] and after == first
+
+
+def test_saying_nothing_plays_the_nothing_heard_sound(settings):
+    from buddy.hub import NOTHING_SOUND
+    hub, s, ws, spoken = setup(settings, "")
+    listen(hub, s, [0.0] * int(6.2 / 0.032))  # 6 s of silence after the light came on
+    assert sounds(ws) == [len(NOTHING_SOUND)] and s.state == "idle"
+
+
+def test_sound_effects_can_be_switched_off(settings):
+    hub, s, ws, spoken = setup(settings, "")
+    settings.update({"sound_effects": False})
+    listen(hub, s, [0.0] * int(6.2 / 0.032))
+    assert sounds(ws) == []
