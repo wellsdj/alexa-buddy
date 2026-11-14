@@ -25,7 +25,7 @@ from pathlib import Path
 import numpy as np
 
 from .audio import resample
-from .study_text import CHECK_PROMPT, LESSON_PROMPT, StudyError, _clean_name, _hash_pin, _parse_json, tidy  # noqa: F401
+from .study_text import CHECK_PROMPT, LESSON_PROMPT, timetable_guess, too_few_words, StudyError, _clean_name, _hash_pin, _parse_json, tidy  # noqa: F401
 
 log = logging.getLogger("buddy.study")
 
@@ -553,7 +553,12 @@ class StudyWorker:
                     verdict = _parse_json(r.content)
                 except Exception:
                     verdict = {}
-            rec["subject"] = _clean_name(str(verdict.get("subject", "")))
+            rec["subject"] = "" if too_few_words(rec["transcript"]) else _clean_name(str(verdict.get("subject", "")))
+            if not rec["subject"]:  # what you usually have at this time on this day
+                past = [(r.get("recorded_at", 0), r.get("subject", "")) for r in self.recordings.all(pid)
+                        if r.get("id") != rid and not r.get("subject_from_timetable")]
+                rec["subject"] = timetable_guess(past, rec["recorded_at"])
+                rec["subject_from_timetable"] = bool(rec["subject"])
             rec["about"] = str(verdict.get("about", "")).strip().rstrip(".")[:80] or (
                 "" if sample else "couldn't make out any words")
             rec["name"] = f"{rec['subject']} lesson" if rec["subject"] else "Lesson"

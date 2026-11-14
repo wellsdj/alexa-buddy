@@ -7,7 +7,7 @@ import json
 import re
 
 CHECK_PROMPT = """Here is the start of an automatic transcript of a recording made at school. Give it a name.
-Reply with JSON only: {{"subject": "the school subject, one or two words, e.g. Maths (your best guess)",
+Reply with JSON only: {{"subject": "the school subject, one or two words, e.g. Maths, only if the words make it clear; empty if you can't tell",
 "about": "what it was about in under 8 words, starting with a small letter",
 "teacher": "the teacher's name only if it's clearly said in the recording (e.g. Mr Smith, Miss Patel), else empty"}}
 
@@ -23,7 +23,7 @@ was actually taught, and ignore chat that isn't about the lesson.
 Reply with JSON only, in exactly this shape:
 {{
   "title": "short title for the lesson, 3-7 words",
-  "subject": "the school subject, one or two words, e.g. Maths, English, Chemistry",
+  "subject": "the school subject, one or two words, e.g. Maths, English, Chemistry; empty if you can't tell",
   "about": "what the lesson was about in under 8 words, starting with a small letter, e.g. calculating angles in triangles",
   "summary": "2-3 plain sentences: what the lesson was about",
   "notes": [{{"heading": "...", "points": ["clear revision note", "..."]}}],
@@ -52,6 +52,33 @@ Rules:
 \"\"\"
 {text}
 \"\"\""""
+
+
+def timetable_guess(past: list[tuple[float, str]], when: float, tz=None) -> str:
+    """The subject you usually have at this time on this day of the week, from earlier recordings:
+    past = [(recorded_at, subject)]. Needs the same subject at least twice within 45 minutes of this
+    time on this weekday, and more often than anything else then. Otherwise ''."""
+    from datetime import datetime
+    t = datetime.fromtimestamp(when, tz)
+    mins = t.hour * 60 + t.minute
+    counts: dict[str, int] = {}
+    for at, subject in past:
+        if not subject or not at:
+            continue
+        p = datetime.fromtimestamp(at, tz)
+        if p.weekday() == t.weekday() and abs(p.hour * 60 + p.minute - mins) <= 45 and abs(at - when) > 3600:
+            counts[subject] = counts.get(subject, 0) + 1
+    if not counts:
+        return ""
+    best = max(counts, key=counts.get)
+    if counts[best] >= 2 and list(counts.values()).count(counts[best]) == 1:
+        return best
+    return ""
+
+
+def too_few_words(text: str) -> bool:
+    """Too little to tell what the lesson was (e.g. a 3-second test)."""
+    return len((text or "").split()) < 40
 
 
 class StudyError(Exception):
@@ -100,7 +127,8 @@ def tidy(result: dict, lesson: dict) -> dict:
                           "why": str(q.get("why", "")).strip(), "choices": choices})
     # Your own title stays; Buddy's suggestion is kept apart, shown only if you didn't give one.
     lesson.update({"auto_title": str(result.get("title", "")).strip()[:80],
-                   "subject": lesson.get("subject") or str(result.get("subject", "")).strip()[:30],
+                   "subject": lesson.get("subject") or ("" if too_few_words(lesson.get("transcript", "") or "x " * 99)
+                                                        else str(result.get("subject", "")).strip()[:30]),
                    "summary": str(result.get("summary", "")).strip(),
                    "about": str(result.get("about", "")).strip().rstrip(".")[:80],
                    "notes": [n for n in notes if n["heading"] or n["points"]], "topics": topics,
