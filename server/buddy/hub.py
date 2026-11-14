@@ -116,6 +116,7 @@ class Session:
         self.early: dict | None = None  # words being written down at the first pause (before the end)
         self.reply_task: asyncio.Task | None = None  # the answer being worked out (cancelled if cut off)
         self.sound_until = 0.0  # a sound effect is playing until then
+        self.woken = False  # this listen started with "hey buddy" (not a follow-up)
         self.barge_buf: list[np.ndarray] = []  # the last 2 s heard while Buddy talks
         self.barge_voiced = 0.0
         self.barge_checking = False
@@ -358,6 +359,7 @@ class Session:
             # While Buddy talks its own voice fills the room, so a clear "hey buddy" interrupts anyway.
             if wake.confident and (quiet or self.state == "speaking") and (
                     self.state in ("idle", "speaking") or self.ringing):
+                was_off = self.state == "idle" and not self.ringing
                 await self.hub.broadcast_ui({"type": "event", "kind": "wake", "session": self.id,
                                              "score": round(wake.score, 3), "confident": True})
                 if self.state == "speaking":
@@ -365,8 +367,10 @@ class Session:
                 if self.ringing:
                     await self.send_json({"type": "alarm_stop"})
                 self.hub.set_awake(True)
-                self.hub._soon(self.wake_sound())
+                if was_off:
+                    self.hub._soon(self.wake_sound())  # only when Buddy was off (not when cutting in)
                 await self.start_listening(preroll_s=0.8, earcon=True)
+                self.woken = True
                 return
             if self.state == "idle" and self._verify_allowed(now):
                 self.verify_times.append(now)
@@ -463,6 +467,7 @@ class Session:
     async def _promote(self, wake) -> None:
         """A silent capture turned out to start with "hey buddy": chime and light up as usual."""
         self.silent = None
+        self.woken = True
         self.hub.set_awake(True)
         self.warm_up()
         self.hub._soon(self.wake_sound())
@@ -494,6 +499,7 @@ class Session:
         self.silent = silent
         self.mentioned = False
         self.captured = 0
+        self.woken = False  # set right after, if "hey buddy" started this listen
         if self.early:
             self.early["task"].cancel()
         self.early = None
@@ -544,7 +550,7 @@ class Session:
                 self.hub.trouble.append((time.time(), "not_heard"))
             self.state = "idle"
             await self.send_json({"type": "state", "state": "idle"})
-            if not silent:
+            if not silent and self.woken:  # only after "hey buddy", not a follow-up listen
                 await self.earcon("nospeech")
             return
         if silent:

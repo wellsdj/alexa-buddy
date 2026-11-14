@@ -57,10 +57,11 @@ def test_listening_uses_the_gentler_setting_but_silent_checks_dont(settings):
     assert s.endpointer.on == 0.5
 
 
-def listen(hub, s, chunks):
+def listen(hub, s, chunks, woken=False):
     """Feed the listening session one 32 ms chunk per speech score."""
     async def run():
         await s.start_listening(earcon=False)
+        s.woken = woken
         for p in chunks:
             await s._on_audio(np.full(512, 300, np.int16), None, [p])
             await asyncio.sleep(0.005)
@@ -116,12 +117,30 @@ def test_a_clear_hey_buddy_plays_the_wake_sound_but_a_follow_up_doesnt(settings)
 def test_saying_nothing_plays_the_nothing_heard_sound(settings):
     from buddy.hub import NOTHING_SOUND
     hub, s, ws, spoken = setup(settings, "")
-    listen(hub, s, [0.0] * int(6.2 / 0.032))  # 6 s of silence after the light came on
+    listen(hub, s, [0.0] * int(6.2 / 0.032), woken=True)  # "hey buddy", then 6 s of silence
     assert sounds(ws) == [len(NOTHING_SOUND)] and s.state == "idle"
+
+
+def test_no_sound_when_a_follow_up_listen_hears_nothing(settings):
+    hub, s, ws, spoken = setup(settings, "")
+    listen(hub, s, [0.0] * int(6.2 / 0.032), woken=False)  # listening after Buddy asked something
+    assert sounds(ws) == []
+
+
+def test_no_wake_sound_when_cutting_in_while_buddy_talks(settings):
+    from types import SimpleNamespace
+    hub, s, ws, spoken = setup(settings, "")
+
+    async def run():
+        s.state = "speaking"
+        await s._on_audio(np.zeros(512, np.int16), SimpleNamespace(confident=True, score=0.9), [0.0])
+        await asyncio.sleep(0.05)
+    asyncio.run(run())
+    assert sounds(ws) == [] and s.state == "listening"
 
 
 def test_sound_effects_can_be_switched_off(settings):
     hub, s, ws, spoken = setup(settings, "")
     settings.update({"sound_effects": False})
-    listen(hub, s, [0.0] * int(6.2 / 0.032))
+    listen(hub, s, [0.0] * int(6.2 / 0.032), woken=True)
     assert sounds(ws) == []
