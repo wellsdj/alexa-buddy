@@ -59,7 +59,8 @@ DEFAULTS: dict[str, Any] = {
     "listen_sensitivity": 0.3,
     "timing_log": True,
     "stream_replies": True,  # speak Claude's answer while it's still being written (off: wait for all of it)
-    "play_hold_ms": 500,  # sound collected before Buddy starts playing a streamed answer  # one line per spoken turn with how long each stage took (data/timings.jsonl)
+    "play_hold_ms": 500,
+    "warm_connections": True,  # connect to Claude and the voice as soon as "hey buddy" is heard  # sound collected before Buddy starts playing a streamed answer  # one line per spoken turn with how long each stage took (data/timings.jsonl)
     "voice_id_on": True,  # notice who is speaking (needs a saved voice on the "Your voice" tab)
     "voice_id_threshold": 0.35,  # how alike a voice must be to count as that person (0-1)
     "voice_trust_seconds": 60,  # a new voice is only named once Buddy has heard this much of it

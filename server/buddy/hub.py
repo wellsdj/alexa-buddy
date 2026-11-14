@@ -48,7 +48,7 @@ from .alarm_sounds import AlarmSounds
 from .study import StudyStore, StudyWorker
 from .music import MusicPlayer
 from .spotify import Spotify
-from .speech import SpeechStream
+from .speech import LiveVoice, SpeechStream
 from .stt import LocalSTT, STTError
 from .tts import ElevenLabsTTS, TTSRouter, TTSUnavailable
 from .vad import CHUNK as VAD_CHUNK
@@ -103,6 +103,7 @@ class Session:
         self.mic_test_until = 0.0
         self.enroll_name = ""  # Your voice tab: add what's said in the mic test to this person's voice
         self.speaker: dict = {}  # who said the sentence being answered
+        self.live_task: asyncio.Task | None = None  # an ElevenLabs connection opened early (warm)
         self.turn_audio: np.ndarray | None = None  # what they said, to learn their voice from
         self.mt_buf: list[np.ndarray] = []
         self.mt_silence = 0
@@ -374,6 +375,7 @@ class Session:
         """A silent capture turned out to start with "hey buddy": chime and light up as usual."""
         self.silent = None
         self.hub.set_awake(True)
+        self.warm_up()
         await self.earcon("wake")
         await self.set_state("listening", force=True)
         await self.hub.broadcast_ui({"type": "event", "kind": "wake", "session": self.id,
@@ -418,6 +420,7 @@ class Session:
         if earcon:
             await self.earcon("wake")
         if not silent:
+            self.warm_up()
             await self.set_state("listening")
         else:
             self.state = "listening"  # silent: no LED, no chime unless it turns out to be for Buddy
@@ -452,6 +455,53 @@ class Session:
             await self.set_state("thinking")
             await self.earcon("end")
         asyncio.create_task(self.hub.process_audio(self, audio, speech_s, silent, mentioned, timer=timer))
+
+    # ---------- warm connections ----------
+    def warm_up(self) -> None:
+        """Someone's about to ask something: connect to Claude and the voice now, while they talk,
+        so neither connection has to be made after the question is ready."""
+        s = self.hub.settings
+        if not s["warm_connections"]:
+            return
+        self.hub._soon(self.hub.llm.warm())
+        eleven = getattr(self.hub.tts, "eleven", None)
+        if not (s["stream_replies"] and s["tts_engine"] in ("auto", "elevenlabs") and eleven is not None
+                and eleven.available):
+            return
+        if self.live_task is not None and not self.live_task.done():
+            return  # already connecting
+        if self.live_task is not None and self.live_task.done() and not self.live_task.cancelled() \
+                and self.live_task.exception() is None and self.live_task.result().fresh():
+            return  # still open from a moment ago
+        self._drop_live()
+
+        async def connect() -> LiveVoice:
+            live = LiveVoice(s)
+            await live.open()
+            return live
+        self.live_task = asyncio.create_task(connect())
+
+    async def take_live(self) -> LiveVoice | None:
+        """The warm voice connection, if there is a good one (waiting a moment if it's still opening)."""
+        task, self.live_task = self.live_task, None
+        if task is None:
+            return None
+        try:
+            live = await asyncio.wait_for(asyncio.shield(task), timeout=1.0)
+        except Exception:  # noqa: BLE001 - not ready or failed: the stream opens its own
+            task.add_done_callback(lambda t: t.cancelled() or t.exception() or self.hub._soon(t.result().close()))
+            return None
+        return live if live.fresh() else None
+
+    def _drop_live(self) -> None:
+        task, self.live_task = self.live_task, None
+        if task is None:
+            return
+        if task.done():
+            if not task.cancelled() and task.exception() is None:
+                self.hub._soon(task.result().close())
+        else:
+            task.cancel()
 
     # ---------- speaking ----------
     async def interim(self, text: str) -> None:
@@ -773,6 +823,7 @@ class Hub:
         for t in (s.worker, s.speak_task):
             if t and not t.done():
                 t.cancel()
+        s._drop_live()
 
     def devices(self) -> list[Session]:
         return [s for s in self.sessions.values() if s.role == "device"]
@@ -1049,7 +1100,7 @@ class Hub:
         speech, speaking = None, None
         if self._can_stream(s, starting, speaker):
             # Speak Claude's answer while it's being written (speech.py).
-            speech = SpeechStream(self, timing.current.get())
+            speech = SpeechStream(self, timing.current.get(), live=await s.take_live())
             name = speaker.get("name", "")
             if (starting and name and self.settings["greet_by_voice"]
                     and time.time() - self.greeted.get(name, 0) > 3600):

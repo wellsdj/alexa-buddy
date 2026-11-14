@@ -213,3 +213,46 @@ def test_without_the_live_voice_it_falls_back_sentence_by_sentence(settings, mon
         return [c async for c in sp.pcm()]
 
     assert asyncio.run(run()) and tts.said == ["One.", "Two."]
+
+
+# ---------- warm connections (speed change c) ----------
+def test_hey_buddy_warms_up_claude_and_the_voice(settings, monkeypatch):
+    opened, warmed = [], []
+
+    class FakeLive:
+        def __init__(self, settings):
+            self.closed = False
+
+        async def open(self):
+            opened.append(self)
+
+        def fresh(self):
+            return True
+
+        async def close(self):
+            self.closed = True
+
+    monkeypatch.setattr("buddy.hub.LiveVoice", FakeLive)
+    claude = StreamingClaude()
+    hub, s, board, apis = streamed_hub(settings, claude)
+    hub.tts.eleven = type("E", (), {"available": True})()
+
+    async def warm():
+        warmed.append(1)
+    hub.llm.warm = warm
+
+    async def run():
+        await s.start_listening(earcon=False)
+        await asyncio.sleep(0.05)
+        return await s.take_live()
+
+    live = asyncio.run(run())
+    assert warmed == [1] and opened == [live]  # both started while the question is still being asked
+
+
+def test_warming_can_be_switched_off(settings):
+    claude = StreamingClaude()
+    hub, s, board, apis = streamed_hub(settings, claude)
+    settings.update({"warm_connections": False})
+    asyncio.run(s.start_listening(earcon=False))
+    assert s.live_task is None

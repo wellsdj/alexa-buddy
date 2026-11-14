@@ -108,6 +108,7 @@ class ClaudeLLM:
         self.blocked_until = 0.0
         self.last_error = ""
         self.last_model = ""
+        self._warmed_at = -1e9
 
     def has_key(self) -> bool:
         return bool(self.settings.secret("ANTHROPIC_API_KEY"))
@@ -125,8 +126,18 @@ class ClaudeLLM:
         if not key:
             raise LLMError("No Claude API key set")
         if self._client is None or key != self._client_key:
+            http = self._http
+            if http is None and self.settings["warm_connections"]:
+                # Keep the connection to Anthropic open for 2 minutes between requests (the usual is 5 s),
+                # so the one opened when "hey buddy" is heard is still there when the question is ready.
+                try:
+                    import httpx2 as hx
+                except ImportError:  # older SDKs use httpx
+                    import httpx as hx
+                http = anthropic.DefaultAsyncHttpxClient(
+                    limits=hx.Limits(max_connections=20, max_keepalive_connections=5, keepalive_expiry=120))
             self._client = anthropic.AsyncAnthropic(
-                api_key=key, max_retries=1, timeout=anthropic.Timeout(45.0, connect=5.0), http_client=self._http)
+                api_key=key, max_retries=1, timeout=anthropic.Timeout(45.0, connect=5.0), http_client=http)
             self._client_key = key
         return self._client
 
@@ -203,6 +214,17 @@ class ClaudeLLM:
         return ClaudeResult(content=text, tool_calls=calls, model=model,
                             usage=r.usage.model_dump(exclude_none=True), ms=int((time.monotonic() - t0) * 1000),
                             blocks=[b.model_dump(exclude_none=True) for b in r.content])
+
+    async def warm(self) -> None:
+        """Open the connection to Anthropic now (when the wake word fires), not when the question's ready.
+        Listing one model is free and makes the connection; it's then kept open for the real request."""
+        if not self.ready() or time.monotonic() - self._warmed_at < 20:
+            return
+        self._warmed_at = time.monotonic()
+        try:
+            await self._api().models.list(limit=1)
+        except Exception as e:  # noqa: BLE001 - only a head start; the real request still works without it
+            log.debug("warming the Claude connection failed: %s", e)
 
     async def web_search(self, query: str) -> str:
         """Claude's own web search, answered in a few spoken sentences."""
