@@ -22,7 +22,6 @@ SETTABLE: dict[str, tuple[str, Any, str]] = {
     "follow_up": ("choice", ("off", "questions", "always"), "keep listening after you speak: never, only after a "
                                                            "question, or always"),
     "online_on": ("bool", None, "doing jobs on websites for the user, like booking"),
-    "strict_wake": ("bool", None, "when the light's off, only a clear 'hey buddy' wakes you (off: unclear ones are checked)"),
     "echo_cancel": ("bool", None, "the board takes Buddy's own voice out of what the mic hears"),
     "sound_effects": ("bool", None, "switch-on, 'hey buddy' and 'didn't hear anything' sounds"),
     "greet_by_voice": ("bool", None, "say hello by name, and ask new voices who they are"),
