@@ -24,7 +24,7 @@
 
 #include "config.h"
 
-#define FW_VERSION "1.7.1"
+#define FW_VERSION "1.7.0"
 #define SAMPLE_RATE 16000
 #define MIC_FRAMES 320               // 20 ms per I2S read
 #define SEND_BYTES 1280              // 40 ms of 16-bit audio per WebSocket frame
@@ -149,8 +149,7 @@ static float speechGain() {
 // Takes Buddy's own voice out of the mic, so it doesn't hear itself (and you can cut in).
 #include "aec.h"
 static AecPipeline aec;
-static volatile bool aecOn = true;
-static volatile bool micResetWanted = false;  // the server heard nothing at all for a while: restart the mic  // the server can switch it off ("echo_cancel" setting)
+static volatile bool aecOn = true;  // the server can switch it off ("echo_cancel" setting)
 
 static void aecTask(void *) {
   for (;;) {
@@ -168,20 +167,8 @@ static void micTask(void *) {
   uint64_t sums[2] = {0, 0};
   int blocks = 0;
   for (;;) {
-    if (micResetWanted) {
-      micResetWanted = false;
-      i2s_channel_disable(rxChan);
-      vTaskDelay(pdMS_TO_TICKS(20));
-      i2s_channel_enable(rxChan);
-      hpX = hpY = 0;
-      channel = -1;  // check which side the mic is on again
-      sums[0] = sums[1] = 0;
-      blocks = 0;
-      aec.restart();
-      Serial.println("[mic] reset");
-    }
     size_t got = 0;
-    if (i2s_channel_read(rxChan, raw, sizeof(raw), &got, pdMS_TO_TICKS(500)) != ESP_OK) continue;
+    if (i2s_channel_read(rxChan, raw, sizeof(raw), &got, portMAX_DELAY) != ESP_OK) continue;
     int frames = got / 8;
     if (channel < 0) {
       for (int i = 0; i < frames; i++) {
@@ -669,8 +656,6 @@ static void handleJson(uint8_t *payload, size_t len) {
     Serial.printf("[alarms] schedule updated: %d fire times\n", n);
   } else if (!strcmp(type, "alarm_stop")) {
     stopRinging(doc["reason"] | (doc["quiet"] | false ? "snooze" : "voice"));
-  } else if (!strcmp(type, "mic_reset")) {
-    micResetWanted = true;
   } else if (!strcmp(type, "aec")) {
     bool on = doc["on"] | true;
     if (on && !aecOn) aec.restart();

@@ -224,30 +224,3 @@ def test_a_conversation_keeps_going_and_old_settings_are_moved_on(tmp_path):
     (tmp_path / "settings.json").write_text(json.dumps({"follow_up": "questions", "barge_in": True}))
     s = Settings(tmp_path)
     assert s["follow_up"] == "always" and s["barge_in"] is False
-
-
-def test_waiting_for_an_answer_isnt_cut_short_by_a_noise(settings):
-    hub, s, ws, spoken = setup(settings, "")
-
-    async def run():
-        await s.listen_for_reply(15.0, "question")
-        for p in [0.9] * 4 + [0.05] * 25:  # a bump: tiny, then quiet
-            await s._on_audio(np.full(512, 300, np.int16), None, [p])
-        await asyncio.sleep(0.2)
-        return s.state, s.follow_up, round(s.reply_until - __import__("time").time())
-    state, kind, left = asyncio.run(run())
-    assert state == "listening" and kind == "question" and left >= 13
-
-
-def test_a_dead_mic_gets_reset(settings, monkeypatch):
-    hub, s, ws, spoken = setup(settings, "")
-    real_sleep = asyncio.sleep
-    monkeypatch.setattr(asyncio, "sleep", lambda t: real_sleep(0.01 if t >= 7 else t))
-
-    async def run():
-        await s.start_listening(earcon=False, no_speech_s=15)
-        for _ in range(5):
-            await s._on_audio(np.zeros(512, np.int16), None, [0.0])  # digital silence
-        await real_sleep(0.1)
-    asyncio.run(run())
-    assert {"type": "mic_reset"} in ws.sent
