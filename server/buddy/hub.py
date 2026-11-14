@@ -104,6 +104,10 @@ class Session:
         self.enroll_name = ""  # Your voice tab: add what's said in the mic test to this person's voice
         self.speaker: dict = {}  # who said the sentence being answered
         self.early: dict | None = None  # words being written down at the first pause (before the end)
+        self.reply_task: asyncio.Task | None = None  # the answer being worked out (cancelled if cut off)
+        self.barge_buf: list[np.ndarray] = []  # the last 2 s heard while Buddy talks
+        self.barge_voiced = 0.0
+        self.barge_checking = False
         self.live_task: asyncio.Task | None = None  # an ElevenLabs connection opened early (warm)
         self.turn_audio: np.ndarray | None = None  # what they said, to learn their voice from
         self.mt_buf: list[np.ndarray] = []
@@ -324,6 +328,8 @@ class Session:
             return
         if self.ringing and self.role == "device":
             self._ring_listen(pcm, probs)
+        if self.state == "speaking":
+            self._barge_listen(pcm, probs)
         if wake is not None:
             quiet = self._quiet_before()
             # While Buddy talks its own voice fills the room, so a clear "hey buddy" interrupts anyway.
@@ -396,6 +402,36 @@ class Session:
                 asyncio.create_task(self.hub.ring_heard(self, audio))
         elif self.ring_quiet > 1.5:
             self.ring_speech = 0.0
+
+    def _barge_listen(self, pcm: np.ndarray, probs: list[float]) -> None:
+        """While Buddy talks: someone talking over it for over half a second, whose voice Buddy knows,
+        cuts it off (no "hey buddy" needed). Its own voice comes back through the mic too, which is why
+        the voice has to be recognised: only people saved on the Your voice tab can do this."""
+        s = self.hub.settings
+        if not s["barge_in"] or not self.hub.voiceid.people:
+            return
+        self.barge_buf.append(pcm)
+        while sum(len(x) for x in self.barge_buf) > 2 * SR:
+            self.barge_buf.pop(0)
+        talking = bool(probs) and max(probs) > 0.6
+        step = len(pcm) / SR
+        self.barge_voiced = self.barge_voiced + step if talking else max(0.0, self.barge_voiced - step / 2)
+        if self.barge_voiced >= 0.6 and not self.barge_checking:
+            self.barge_checking = True
+            asyncio.create_task(self._barge_check(np.concatenate(self.barge_buf)))
+
+    async def _barge_check(self, audio: np.ndarray) -> None:
+        try:
+            who = await self.hub.who_spoke(audio)
+        finally:
+            self.barge_checking = False
+        if who.get("name") and self.state == "speaking":
+            self.hub.record("interrupted", session=self.id, by=who["name"], score=who.get("score"))
+            await self.stop_speaking()
+            # Listen from a moment ago, so the words they said over Buddy are kept.
+            await self.start_listening(preroll_s=1.6, earcon=False)
+        else:
+            self.barge_voiced = 0.0  # Buddy's own voice, or someone it doesn't know: carry on
 
     def reset_ring_ears(self) -> None:
         self.ring_buf, self.ring_speech, self.ring_quiet = [], 0.0, 0.0
@@ -607,6 +643,7 @@ class Session:
             self.seq = (self.seq + 1) % 256
             seq = self.seq
             self.playback_done.clear()
+            self.barge_buf, self.barge_voiced = [], 0.0
             await self.set_state("speaking")
             await self.send_json({"type": "audio_start", "seq": seq, "rate": SR, "text": text_of()})
             if answer:
@@ -645,10 +682,14 @@ class Session:
         try:
             if timer and gaps is None:
                 timer.mark("tts_sent")
-            async for chunk in pcm_iter:
-                if timer and gaps is None:
-                    timer.mark("tts_first_byte")
-                await send(leveller.process(chunk))
+            try:
+                async for chunk in pcm_iter:
+                    if timer and gaps is None:
+                        timer.mark("tts_first_byte")
+                    await send(leveller.process(chunk))
+            finally:
+                if hasattr(pcm_iter, "aclose"):
+                    await pcm_iter.aclose()  # cut off: close the voice connection now, not later
             await send(leveller.flush(), final=True)
             t0 = started_at or t0
             if started_at is not None:
@@ -708,7 +749,8 @@ class Session:
 
     async def stop_speaking(self) -> None:
         self._where_we_got_to()
-        for task in (self.speak_task, self.interim_task):
+        # Stop the sound, the answer still being written, and the voice still being made.
+        for task in (self.speak_task, self.interim_task, self.reply_task):
             if task and not task.done():
                 task.cancel()
         await self.send_json({"type": "stop_audio", "seq": self.seq})
@@ -1152,6 +1194,7 @@ class Hub:
             ctx["on_text"] = speech.feed
             speaking = asyncio.create_task(s.speak_stream(speech))
         work = asyncio.create_task(self.brain.handle(text, self.conv, ctx))
+        s.reply_task = work
         try:
             # Still nothing after a few seconds (and no "one sec" yet)? Say so, rather than leave a silence.
             done, _ = await asyncio.wait({work}, timeout=3.5)

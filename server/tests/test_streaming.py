@@ -256,3 +256,49 @@ def test_warming_can_be_switched_off(settings):
     settings.update({"warm_connections": False})
     asyncio.run(s.start_listening(earcon=False))
     assert s.live_task is None
+
+
+# ---------- interrupting (speed change f) ----------
+def test_talking_over_buddy_stops_it_and_listens(settings, monkeypatch):
+    claude = StreamingClaude()
+    hub, s, board, apis = streamed_hub(settings, claude)
+    hub.voiceid.people = {"Wells": {"samples": [[1.0]], "seconds": 100}}
+
+    async def who(audio):
+        return {"name": "Wells", "score": 0.7}
+    hub.who_spoke = who
+
+    async def run():
+        async def long_answer():
+            await asyncio.sleep(30)
+        s.reply_task = asyncio.create_task(long_answer())  # Claude still writing
+        s.speak_task = asyncio.create_task(asyncio.sleep(30))  # sound still playing
+        s.state = "speaking"
+        for _ in range(30):  # 1 s of someone talking
+            await s._on_audio(np.full(512, 2000, np.int16), None, [0.95])
+        await asyncio.sleep(0.1)
+        return s.reply_task.cancelled(), s.speak_task.cancelled()
+
+    reply_cancelled, sound_cancelled = asyncio.run(run())
+    assert reply_cancelled and sound_cancelled
+    assert s.state == "listening" and any(m["type"] == "stop_audio" for m in board.msgs)
+    assert any(e["event"] == "interrupted" and e["by"] == "Wells" for e in hub.log)
+
+
+def test_buddys_own_voice_doesnt_interrupt_it(settings):
+    claude = StreamingClaude()
+    hub, s, board, apis = streamed_hub(settings, claude)
+    hub.voiceid.people = {"Wells": {"samples": [[1.0]], "seconds": 100}}
+
+    async def who(audio):
+        return {"name": "", "score": 0.1}  # not anyone it knows: its own voice through the mic
+    hub.who_spoke = who
+
+    async def run():
+        s.state = "speaking"
+        for _ in range(30):
+            await s._on_audio(np.full(512, 2000, np.int16), None, [0.95])
+        await asyncio.sleep(0.1)
+
+    asyncio.run(run())
+    assert s.state == "speaking" and not any(m["type"] == "stop_audio" for m in board.msgs)
