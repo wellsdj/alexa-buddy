@@ -54,6 +54,8 @@ DEFAULTS: dict[str, Any] = {
     "wake_verify_threshold": 0.15,
     "follow_up": "questions",  # off | questions | always
     "end_of_speech_ms": 800,
+    "voice_id_on": True,  # notice who is speaking (needs a saved voice on the "Your voice" tab)
+    "voice_id_threshold": 0.35,  # how alike a voice must be to count as that person (0-1)
     "max_listen_s": 15,
     "snooze_minutes": 9,
     "morning_briefing": True,

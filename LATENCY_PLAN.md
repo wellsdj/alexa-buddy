@@ -1,6 +1,9 @@
 # FIRST: voice recognition (knows who is speaking)
 
-Status: **not started.** I've checked that the free model works, but no code is written.
+Status: **built** (step 1: knows who is speaking). Still to decide: what Buddy *does* with it (see the last point).
+
+- **Model changed from the plan:** CAM++ couldn't tell your recording apart from strangers. **NVIDIA TitaNet small** (free, 40 MB) could. On 2-second clips it recognised you 37 out of 38 times, and named 0 of 19 strangers. "It's you" threshold: 0.35. Each check takes about 25 ms, and runs at the same time as transcribing.
+- **Not tested yet:** another real person in your room, on Buddy's mic. The strangers were sample clips.
 
 - **Model:** CAM++. It's free, runs on the Mac and is about 29 MB. It uses the same speech library Buddy already has, so there are no new paid services.
 - **Your recording:** `New ai training.m4a`. It's 5 min 5 s, mono, recorded on your laptop, with only you talking. It is **not** stored in GitHub, because voice recordings stay private, so keep your own copy on the laptop to upload.

@@ -220,6 +220,7 @@ function onEvent(m) {
       break;
     case "transcript": addChat(m); break;
     case "mic_test": micTestEvent(m); break;
+    case "voice_enroll": vidEvent(m); break;
     case "log": addLog(m.entry); if (m.entry.event === "turn") loadStatusSoon(); break;
     case "alarms": loadAlarms(); break;
     case "memory": loadMemory(); break;
@@ -513,13 +514,84 @@ function micTestEvent(m) {
   if (m.final) {
     $("mt-partial").textContent = "";
     if (m.text.trim()) {
-      $("mt-lines").append(el("li", {}, m.text, el("span", { class: "meta" }, ` ${m.seconds}s of speech · ${m.ms} ms · ${m.engine}`)));
+      const who = m.speaker === undefined ? null
+        : m.speaker ? el("span", { class: "who" }, `sounds like ${m.speaker} (${m.voice_score})`)
+        : el("span", { class: "who unknown" }, `voice not recognised (${m.voice_score})`);
+      $("mt-lines").append(el("li", {}, m.text, el("span", { class: "meta" }, ` ${m.seconds}s of speech · ${m.ms} ms · ${m.engine}`), ...(who ? [who] : [])));
     } else {
       $("mt-lines").append(el("li", { class: "miss" }, `(heard ${m.seconds}s of sound but no words)`));
     }
   } else {
     $("mt-partial").textContent = m.text ? m.text + " …" : "…";
   }
+}
+
+// ---------------------------------------------------------------- your voice (voice recognition)
+let vidPoll = null;
+async function loadVoiceID() {
+  let st;
+  try { st = await api("/api/voiceid"); } catch { return; }
+  $("vid-setup").hidden = st.installed;
+  $("vid-main").hidden = !st.installed;
+  $("vid-install").disabled = st.installing;
+  $("vid-install").textContent = st.installing ? "Downloading…" : "Download";
+  $("vid-install-status").textContent = st.error || (st.installing ? "This takes a minute or so." : "");
+  clearTimeout(vidPoll);
+  if (st.installing) vidPoll = setTimeout(loadVoiceID, 2000);
+  if (!$("vid-name").value) $("vid-name").value = S.settings?.user_name || "";
+  $("vid-people").replaceChildren(...(st.people.length ? st.people.map((p) => el("li", {},
+    el("div", {}, el("b", {}, p.name), el("small", {}, `${Math.round(p.seconds)} s of speech · ${p.sources.join(", ")}`)),
+    el("button", { class: "btn small ghost", type: "button", onclick: async () => {
+      if (!confirm(`Delete ${p.name}'s saved voice?`)) return;
+      try { await api("/api/voiceid/" + encodeURIComponent(p.name), { method: "DELETE" }); loadVoiceID(); toast("Deleted"); }
+      catch (err) { toast("Couldn't: " + err.message); }
+    } }, "Delete"))) : [el("li", { class: "note" }, "None yet. Do step 1 or 2 above.")]));
+}
+function vidName() {
+  const name = $("vid-name").value.trim();
+  if (!name) { toast("Type whose voice it is first"); $("vid-name").focus(); }
+  return name;
+}
+function vidSay(id, text, kind = "") { const p = $(id); p.textContent = text; p.className = "vid-status " + kind; }
+async function vidUpload() {
+  const name = vidName(), file = $("vid-file").files[0];
+  if (!name) return;
+  if (!file) { toast("Choose the recording first"); return; }
+  $("vid-upload").disabled = true;
+  vidSay("vid-upload-status", "Listening to it… (a 5 minute recording takes about 10 seconds)");
+  try {
+    const res = await fetch(`/api/voiceid/upload?name=${encodeURIComponent(name)}&file=${encodeURIComponent(file.name)}`,
+      { method: "POST", body: file, headers: S.token ? { "X-Buddy-Token": S.token } : {} });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(j.detail || res.statusText);
+    vidSay("vid-upload-status", `Done: learnt ${Math.round(j.seconds)} s of ${j.name}'s voice. ` +
+      (j.match < 0.5 ? "It sounded quite mixed. Was anyone else talking in it?" : "Sounds consistent ✓"), j.match < 0.5 ? "bad" : "ok");
+    $("vid-file").value = "";
+    loadVoiceID();
+  } catch (err) { vidSay("vid-upload-status", "Couldn't: " + err.message, "bad"); }
+  finally { $("vid-upload").disabled = false; }
+}
+let vidRecording = false;
+async function vidRec(on) {
+  const name = on ? vidName() : "";
+  if (on && !name) return;
+  const target = $("vid-source").value;
+  if (on && target === "me") {
+    try { await Mic.start(); } catch (err) { toast("Microphone: " + err.message, 5000); return; }
+  }
+  vidRecording = on;
+  S.micTest = on;
+  send({ type: "mic_test", on, target, enroll: name });
+  $("vid-rec").textContent = on ? "Stop" : "Start";
+  vidSay("vid-rec-status", on ? "Listening… read the sentences out. Each one is added as you finish it." : "Stopped.");
+  if (!on && !S.handsFree && !S.ptt) Mic.stop();
+  if (!on) loadVoiceID();
+}
+function vidEvent(m) {
+  if (m.error) { vidSay("vid-rec-status", m.error, "bad"); return; }
+  vidSay("vid-rec-status", `Got it ✓ ${m.total_seconds ? Math.round(m.total_seconds) + " s of " + m.name + "'s voice saved so far." : ""}` +
+    (m.like_before != null && m.like_before < 0.35 ? " That one didn't sound like the rest. Is it the same person?" : " Keep going."),
+    m.like_before != null && m.like_before < 0.35 ? "bad" : "ok");
 }
 
 async function saveSetting(input) {
@@ -552,6 +624,10 @@ async function loadStatus() {
   mts.replaceChildren(el("option", { value: "me" }, "this browser"),
     ...devices.map((d) => el("option", { value: d.id }, `desk unit mic (${d.name})`)));
   mts.value = [...mts.options].some((o) => o.value === mcur) ? mcur : (devices[0]?.id || "me");
+  const vs = $("vid-source"), vcur = vs.value;
+  vs.replaceChildren(...devices.map((d) => el("option", { value: d.id }, `Buddy's mic (${d.name})`)),
+    el("option", { value: "me" }, "this browser"));
+  vs.value = [...vs.options].some((o) => o.value === vcur) ? vcur : (devices[0]?.id || "me");
   showKeys(st.keys);
   const sp = st.spotify || {};
   $("spotify-status").textContent = sp.connected
@@ -734,6 +810,8 @@ function init() {
       document.querySelectorAll(".panel").forEach((p) => (p.hidden = p.id !== "panel-" + tab.dataset.tab));
       if (tab.dataset.tab === "weather") loadWeather();
       if (tab.dataset.tab === "activity") loadStatus();
+      if (tab.dataset.tab === "yourvoice") loadVoiceID();
+      if (tab.dataset.tab !== "yourvoice" && vidRecording) vidRec(false);
     };
   }
   $("meter-source").onchange = (e) => (S.meterSource = e.target.value);
@@ -824,6 +902,9 @@ function init() {
   };
   $("spotify-redirect").textContent = `http://127.0.0.1:${location.port || 80}/spotify/callback`;
   $("mt-start").onclick = () => micTest(!S.micTest);
+  $("vid-install").onclick = async () => { try { await api("/api/voiceid/install", { method: "POST" }); } catch (err) { toast(err.message); } loadVoiceID(); };
+  $("vid-upload").onclick = vidUpload;
+  $("vid-rec").onclick = () => vidRec(!vidRecording);
   $("update-now").onclick = async () => {
     if (!confirm("Update Buddy now? It restarts by itself; give it a minute or two.")) return;
     try {

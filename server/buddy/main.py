@@ -608,6 +608,62 @@ def create_app(settings: Settings | None = None, http=None, claude_http=None, st
         transcript, hub.conv.transcript = hub.conv.transcript, []
         return await hub.memory_mgr.learn_from(transcript)
 
+    # ---------- your voice (voice recognition) ----------
+    @app.get("/api/voiceid")
+    async def voiceid_status():
+        return hub.voiceid.status()
+
+    @app.post("/api/voiceid/install")
+    async def voiceid_install():
+        if not hub.voiceid.installed() and not hub.voiceid.installing:
+            async def run():
+                try:
+                    await asyncio.to_thread(hub.voiceid.install)
+                except Exception as e:  # noqa: BLE001 - shown on the page via status()
+                    log.warning("voice model download failed: %s", e)
+            asyncio.create_task(run())
+            hub.voiceid.installing = True
+        return hub.voiceid.status()
+
+    @app.post("/api/voiceid/upload")
+    async def voiceid_upload(request: Request):
+        """A recording of one person talking (the request body). It's turned into a voiceprint and
+        then deleted: the recording itself isn't kept."""
+        from .study import AUDIO_EXT, StudyError, read_audio
+        from .voiceid import VoiceIDError
+        name = request.query_params.get("name", "")
+        if not hub.voiceid.installed():
+            raise HTTPException(409, "Download the voice model first.")
+        import tempfile
+        from pathlib import Path
+        ext = Path(request.query_params.get("file", "")).suffix.lower()
+        tmp = Path(tempfile.mkstemp(suffix=ext if ext in AUDIO_EXT else ".m4a", dir=settings.data_dir)[1])
+        size = 0
+        try:
+            with tmp.open("wb") as f:
+                async for chunk in request.stream():
+                    size += len(chunk)
+                    if size > 200 * 1024 * 1024:
+                        raise HTTPException(413, "That recording is too big (over 200 MB).")
+                    f.write(chunk)
+            if size < 1000:
+                raise HTTPException(400, "That file is empty.")
+            try:
+                audio = await asyncio.to_thread(read_audio, tmp)
+                result = await asyncio.to_thread(hub.voiceid.add_audio, name, audio, "uploaded recording")
+            except (StudyError, VoiceIDError) as e:
+                raise HTTPException(400, str(e)) from e
+        finally:
+            tmp.unlink(missing_ok=True)
+        hub.record("voice_added", name=result["name"], seconds=result["seconds"], source="upload")
+        return result
+
+    @app.delete("/api/voiceid/{name}")
+    async def voiceid_delete(name: str):
+        if not hub.voiceid.remove(name):
+            raise HTTPException(404, "No saved voice with that name.")
+        return hub.voiceid.status()
+
     # ---------- weather ----------
     @app.get("/api/weather")
     async def weather(day: str = "today"):

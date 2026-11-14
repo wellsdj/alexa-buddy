@@ -405,3 +405,26 @@ a.btn { text-decoration: none; }
   letter-spacing: .02em; overflow-wrap: anywhere; }
 .empty h1, .setup-head h2 { line-height: 1.2; }
 .empty h1, .setup-head h2 { width: fit-content; }
+
+/* Your voice tab */
+.vid-name { display: grid; gap: 6px; margin: 4px 0 18px; font-size: 15px; font-weight: 600; }
+.vid-name input { font-size: 18px; padding: 12px 14px; }
+.vid-step { background: var(--s2); border-radius: 16px; padding: 16px 18px; margin-bottom: 14px; }
+.vid-step h3 { font-size: 18px; margin: 0 0 6px; display: flex; align-items: center; gap: 10px; }
+.vid-step h3 span { display: inline-grid; place-items: center; width: 28px; height: 28px; border-radius: 50%;
+  background: var(--ink); color: #000; font-size: 15px; }
+.vid-big { font-size: 17px; font-weight: 600; margin: 0 0 10px; }
+.vid-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 10px; }
+.vid-row input[type=file] { flex: 1 1 200px; min-width: 0; }
+.vid-status { margin: 10px 0 0; font-size: 15px; font-weight: 600; min-height: 1em; }
+.vid-status.ok { color: #46d37a; }
+.vid-status.bad { color: #ff6b6b; }
+.vid-lines { margin: 10px 0 0 20px; padding: 0; display: grid; gap: 4px; font-size: 16px; }
+.vid-people { list-style: none; margin: 6px 0 10px; padding: 0; display: grid; gap: 8px; }
+.vid-people li { display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 12px 14px; border-radius: 12px; background: var(--s3, var(--s2)); }
+.vid-people li b { font-size: 17px; }
+.vid-people li small { display: block; color: var(--faint); font-size: 12.5px; margin-top: 2px; }
+.mt-lines li .who { display: inline-block; margin-top: 6px; padding: 2px 10px; border-radius: 999px;
+  font-size: 13px; font-weight: 700; background: rgba(70, 211, 122, .15); color: #46d37a; }
+.mt-lines li .who.unknown { background: rgba(255, 255, 255, .08); color: var(--faint); }

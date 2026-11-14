@@ -87,6 +87,22 @@ def install_ears(which: str = "parakeet") -> bool:
     return ok
 
 
+def install_voice_id() -> None:
+    """The voice model that tells who is speaking (about 40 MB). Optional: Buddy works without it."""
+    sys.path.insert(0, str(ROOT))
+    try:
+        from buddy.voiceid import MODEL_MB, VoiceID
+        v = VoiceID(ROOT / "data")
+        if v.installed():
+            print("Voice model already installed.")
+            return
+        print(f"Downloading the voice model (about {MODEL_MB} MB)...")
+        v.install()
+        print("Voice model installed.")
+    except Exception as e:  # noqa: BLE001
+        print(f"  Couldn't get the voice model ({e}). The Your voice tab can download it later.")
+
+
 def main() -> int:
     for name in ("hey-buddy.onnx", "melspectrogram.onnx", "embedding_model.onnx", "silero_vad.onnx"):
         if not (ROOT / "models" / name).exists():
@@ -94,6 +110,7 @@ def main() -> int:
             return 1
     if not install_ears("parakeet"):
         install_ears("moonshine")  # at least the small backup, so Buddy can hear
+    install_voice_id()
     VOICES.mkdir(parents=True, exist_ok=True)
     if list(VOICES.glob("*.onnx")):
         print("Offline voice already installed:", ", ".join(p.name for p in VOICES.glob("*.onnx")))

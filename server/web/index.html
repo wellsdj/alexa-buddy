@@ -86,6 +86,7 @@
     <button role="tab" data-tab="settings" aria-selected="false">Settings</button>
     <button role="tab" data-tab="activity" aria-selected="false">Activity</button>
     <button role="tab" data-tab="mictest" aria-selected="false">Mic test</button>
+    <button role="tab" data-tab="yourvoice" aria-selected="false">Your voice</button>
   </nav>
   <div class="drawer-body">
     <div class="panel" id="panel-alarms" role="tabpanel">
@@ -267,6 +268,45 @@
       <p class="mt-partial" id="mt-partial"></p>
     </div>
 
+    <div class="panel" id="panel-yourvoice" role="tabpanel" hidden>
+      <header class="panel-head"><h2>Your voice</h2><p>Buddy learns what you sound like, so it knows who's talking. It all stays on this computer.</p></header>
+      <section class="vid-step" id="vid-setup" hidden>
+        <p class="vid-big">First, download the voice model (40 MB, free).</p>
+        <button class="btn primary" id="vid-install" type="button">Download</button>
+        <p class="note" id="vid-install-status"></p>
+      </section>
+      <div id="vid-main">
+        <label class="vid-name">Whose voice? <input id="vid-name" type="text" maxlength="40" placeholder="Your name" autocomplete="off"></label>
+        <section class="vid-step">
+          <h3><span>1</span>Upload a recording</h3>
+          <p class="note">1 to 5 minutes of only you talking. Voice memos, m4a, mp3 and wav all work. The recording itself isn't kept.</p>
+          <div class="vid-row"><input id="vid-file" type="file" accept="audio/*,.m4a,.mp3,.wav,.aac,.caf"><button class="btn primary" id="vid-upload" type="button">Upload</button></div>
+          <p class="vid-status" id="vid-upload-status"></p>
+        </section>
+        <section class="vid-step">
+          <h3><span>2</span>Top up on Buddy's mic</h3>
+          <p class="note">Press Start, then read these out from where you usually sit. About 30 seconds.</p>
+          <ol class="vid-lines">
+            <li>Hey Buddy, what's the weather like tomorrow morning?</li>
+            <li>Set an alarm for half past seven on weekdays.</li>
+            <li>I've got a maths test on Thursday, so remind me to revise.</li>
+            <li>Play something relaxing while I do my homework.</li>
+            <li>How long does it take to get to London by train?</li>
+            <li>Turn the volume down a little, please.</li>
+            <li>Tell me a fun fact about space.</li>
+            <li>What time is it in New York right now?</li>
+          </ol>
+          <div class="vid-row"><select id="vid-source" aria-label="Which microphone"><option value="me">this browser</option></select><button class="btn primary" id="vid-rec" type="button">Start</button></div>
+          <p class="vid-status" id="vid-rec-status"></p>
+        </section>
+        <section class="vid-step">
+          <h3>Saved voices</h3>
+          <ul class="vid-people" id="vid-people"></ul>
+          <p class="note">Check it on the Mic test tab: each line says who it sounds like.</p>
+        </section>
+      </div>
+    </div>
+
     <div class="panel" id="panel-activity" role="tabpanel" hidden>
       <header class="panel-head"><h2>Activity</h2><p>What Buddy is doing right now, and everything it heard.</p></header>
       <section class="mic-box" aria-label="Microphone">
@@ -281,6 +321,6 @@
 </aside>
 
 <div class="toast" id="toast" role="status" hidden></div>
-<script src="/static/app.js?v=chat9"></script>
+<script src="/static/app.js?v=chat10"></script>
 </body>
 </html>

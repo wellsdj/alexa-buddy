@@ -52,6 +52,7 @@ from .stt import LocalSTT, STTError
 from .tts import ElevenLabsTTS, TTSRouter, TTSUnavailable
 from .vad import CHUNK as VAD_CHUNK
 from .vad import Endpointer, StreamingVad
+from .voiceid import VoiceID, VoiceIDError
 from .wakeword import WakeDetector
 from .weather import Weather
 
@@ -98,6 +99,8 @@ class Session:
         self.mic_test = False  # being tested: transcribe everything live for the Mic test page
         self.mic_test_viewer: "Session | None" = None
         self.mic_test_until = 0.0
+        self.enroll_name = ""  # Your voice tab: add what's said in the mic test to this person's voice
+        self.speaker: dict = {}  # who said the sentence being answered
         self.mt_buf: list[np.ndarray] = []
         self.mt_silence = 0
         self.mt_busy = False
@@ -210,10 +213,21 @@ class Session:
             if not final:
                 self.mt_busy = False
         ms = int((time.monotonic() - t0) * 1000)
+        who: dict = {}
+        if final and self.enroll_name and self.mic_test_viewer:
+            source = "desk unit mic" if self.role == "device" else "browser mic"
+            try:
+                res = await asyncio.to_thread(self.hub.voiceid.add_audio, self.enroll_name, audio, source)
+                await self.mic_test_viewer.send_json({"type": "event", "kind": "voice_enroll", **res})
+            except VoiceIDError as e:
+                await self.mic_test_viewer.send_json({"type": "event", "kind": "voice_enroll", "error": str(e)})
+        elif final:
+            who = await self.hub.who_spoke(audio)
         if self.mic_test_viewer:
             await self.mic_test_viewer.send_json({
                 "type": "event", "kind": "mic_test", "text": text, "final": final, "ms": ms,
-                "engine": self.hub.stt.status().get("engine", ""), "seconds": round(len(audio) / SR, 1), **stats})
+                "engine": self.hub.stt.status().get("engine", ""), "seconds": round(len(audio) / SR, 1),
+                **({"speaker": who.get("name", ""), "voice_score": who.get("score", 0.0)} if who else {}), **stats})
 
     # ---------- audio in ----------
     def feed(self, pcm_bytes: bytes) -> None:
@@ -569,7 +583,7 @@ class Session:
             if self.state == "speaking":
                 await self.stop_speaking()
         elif t == "mic_test":
-            await self.hub.mic_test(self, bool(msg.get("on")), msg.get("target") or "me")
+            await self.hub.mic_test(self, bool(msg.get("on")), msg.get("target") or "me", msg.get("enroll") or "")
         elif t == "text":
             text = (msg.get("text") or "").strip()
             if text:
@@ -592,6 +606,7 @@ class Hub:
         self.listener = GroqLLM(settings, http)  # optional: judges whether room talk is for Buddy
         self.judge = ContextJudge(settings, self.listener)
         self.stt = stt or LocalSTT(settings)
+        self.voiceid = VoiceID(settings.data_dir)  # knows who is speaking
         self.awake = True  # "off" sets this to False until the next "hey buddy"
         self.device_gone_at: dict[str, float] = {}
         self.ring_started: dict = {}  # alarm id -> when it started ringing
@@ -655,6 +670,7 @@ class Hub:
         asyncio.create_task(self.listener.discover())
         if hasattr(self.stt, "warm"):
             asyncio.create_task(asyncio.to_thread(self.stt.warm))
+        asyncio.create_task(asyncio.to_thread(self.voiceid.warm))
         asyncio.create_task(self.tts.eleven.refresh_quota())
         asyncio.create_task(self.weather.fetch())
         self.study_worker.start()
@@ -710,11 +726,12 @@ class Hub:
                 await s.play_startup_sound()
         self.record("connect", session=s.id, role=s.role, info=s.info)
 
-    async def mic_test(self, viewer: Session, on: bool, target: str) -> None:
-        """Start or stop the live mic test. target: "me" (this browser) or a desk unit's session id."""
+    async def mic_test(self, viewer: Session, on: bool, target: str, enroll: str = "") -> None:
+        """Start or stop the live mic test. target: "me" (this browser) or a desk unit's session id.
+        enroll: a name, to add everything said to that person's voice (the Your voice tab)."""
         for x in self.sessions.values():  # only one test at a time, per viewer
             if x.mic_test_viewer is viewer:
-                x.mic_test, x.mic_test_viewer = False, None
+                x.mic_test, x.mic_test_viewer, x.enroll_name = False, None, ""
         if not on:
             return
         who = viewer if target == "me" else self.sessions.get(target)
@@ -722,6 +739,7 @@ class Hub:
             await viewer.send_json({"type": "event", "kind": "mic_test", "error": "That mic isn't connected."})
             return
         who.mic_test, who.mic_test_viewer = True, viewer
+        who.enroll_name = " ".join(str(enroll or "").split())[:40]
         who.mic_test_until = time.time() + 300  # switches itself off after 5 minutes
         who.mt_buf, who.mt_silence, who.mt_peak, who.mt_clipped = [], 0, 0.0, 0
         self.record("mic_test", target=who.id)
@@ -756,9 +774,20 @@ class Hub:
             self.record("awake" if on else "asleep")
             self._soon(self.broadcast_ui({"type": "event", "kind": "settings"}))
 
+    async def who_spoke(self, audio: np.ndarray) -> dict:
+        """{"name": ..., "score": ...} for whoever said this ("" if unknown); {} when voice ID is off."""
+        if not self.settings["voice_id_on"] or not self.voiceid.people or not self.voiceid.installed():
+            return {}
+        try:
+            return await asyncio.to_thread(self.voiceid.identify, audio, float(self.settings["voice_id_threshold"]))
+        except Exception as e:  # noqa: BLE001 - never let this stop an answer
+            log.info("voice ID skipped: %s", e)
+            return {}
+
     async def process_audio(self, s: Session, audio: np.ndarray, speech_s: float, silent: str | None = None,
                             mentioned: bool = False) -> None:
         t0 = time.monotonic()
+        who_task = asyncio.create_task(self.who_spoke(audio))  # alongside the transcribing: no extra wait
         try:
             text = await self.stt.transcribe(audio, "", speech_s)
         except STTError as e:
@@ -770,6 +799,7 @@ class Hub:
             await self.announce(s, str(e) if "Update Buddy" in str(e) else "Hmm, I didn't quite get that. Say it again for me?")
             return
         stt_ms = int((time.monotonic() - t0) * 1000)
+        s.speaker = await who_task
         if s.interrupted_text and time.time() - s.interrupted_at < 20 and text.strip():
             cleaned = intents.strip_echo(text, s.interrupted_text)
             if cleaned != text:
@@ -781,7 +811,9 @@ class Hub:
             peak = float(np.abs(audio.astype(np.int32)).max())
             self.record("capture", session=s.id, heard=text, speech_s=round(speech_s, 2),
                         loudest_db=round(20 * np.log10(max(peak, 1.0) / 32768), 1),
-                        level_db=round(rms_dbfs(audio), 1), clipped=bool(peak >= 32000), mode=silent or "normal")
+                        level_db=round(rms_dbfs(audio), 1), clipped=bool(peak >= 32000), mode=silent or "normal",
+                        **({"speaker": s.speaker.get("name") or "unknown", "voice_score": s.speaker.get("score")}
+                           if s.speaker else {}))
         if silent == "wake":
             # A soft "hey buddy" out of nowhere. If the words are clearly something else, ignore it;
             # if they're unclear, wake up anyway to be sure.
@@ -886,7 +918,9 @@ class Hub:
             s.turn_running -= 1
 
     async def _respond(self, s: Session, text: str, stt_ms: int = 0) -> None:
-        await self.broadcast_ui({"type": "event", "kind": "transcript", "session": s.id, "role": "user", "text": text})
+        speaker, s.speaker = s.speaker, {}
+        await self.broadcast_ui({"type": "event", "kind": "transcript", "session": s.id, "role": "user", "text": text,
+                                 **({"speaker": speaker.get("name", "")} if speaker else {})})
         ctx = {"ringing": s.ringing or next((d.ringing for d in self.devices() if d.ringing), None),
                "say": s.interim}
         work = asyncio.create_task(self.brain.handle(text, self.conv, ctx))
@@ -1237,4 +1271,5 @@ class Hub:
             "spotify": self.spotify.status(),
             "music": self.music.status(),
             "alarm_sounds": self.sounds.status(),
+            "voiceid": self.voiceid.status(),
         }
