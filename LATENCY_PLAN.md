@@ -268,3 +268,21 @@ Details:
 - It updates by itself the moment the ESP32 connects or drops, with no page refresh.
 - Buddy's state (listening, thinking, speaking) moves into the small line under the badge.
 - Hover or tap the badge to see the ESP32's Wi-Fi strength and firmware version.
+
+---
+
+# Next: echo cancelling (Buddy not hearing itself)
+
+Status: **not started.**
+- Do it on the ESP32, which knows exactly what it's playing at the moment the mic hears it. The method is an adaptive filter (NLMS) that subtracts Buddy's own sound from the mic.
+- It only switches on while Buddy is making sound (and a moment after), so "hey buddy" and normal listening are never touched.
+- It resets itself if it ever makes the sound worse.
+- **Needs testing on the real Buddy.** It depends on the radio's speaker and the room, so it can't be checked from here.
+
+# Next: booking things online (e.g. tennis courts)
+
+Status: **idea, not started.**
+- Buddy drives a browser on the Mac (Claude computer use / browser control): it opens the booking site, picks the time and fills in the form.
+- **It always asks you before anything final**, like "Book court 2 at 6 pm for £8?", and never pays without a yes.
+- **Logins:** you sign in once in the browser it uses, and it never says passwords out loud.
+- **Cost:** this uses a bigger Claude model and many steps, so roughly a few pence per booking.
