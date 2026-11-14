@@ -88,7 +88,7 @@ class Endpointer:
                 self.speech_chunks += 1
                 if self.voiced_run >= self.start_chunks:
                     self.started = True
-            elif self.started and p >= self.on:
+            elif self.started and p >= max(self.on, self.off):
                 self.speech_chunks += 1  # a quiet voice: still talking (doesn't count as quiet either)
             elif p < (self.off if self.started else self.on):
                 self.voiced_run = 0
