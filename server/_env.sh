@@ -67,6 +67,7 @@ buddy_env() {
   fi
   # The browser Buddy uses online (downloaded once, about 150 MB).
   if [ -z "$BUDDY_SKIP_MODELS" ] && [ ! -f "$dir/.venv/.browser" ]; then
+    echo "Downloading the web browser Buddy uses online (once, about 150 MB, a few minutes)..."
     "$VENV_PY" -m playwright install chromium >/dev/null 2>&1 && touch "$dir/.venv/.browser"
   fi
   # The board button only needs esptool, not the ears or the backup voice.
