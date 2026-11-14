@@ -117,6 +117,7 @@ class Session:
         self.reply_task: asyncio.Task | None = None  # the answer being worked out (cancelled if cut off)
         self.sound_until = 0.0  # a sound effect is playing until then
         self.woken = False  # this listen started with "hey buddy" (not a follow-up)
+        self.cut_in = False  # this listen started by cutting in while Buddy talked
         self.barge_buf: list[np.ndarray] = []  # the last 2 s heard while Buddy talks
         self.barge_voiced = 0.0
         self.barge_checking = False
@@ -370,7 +371,8 @@ class Session:
                 if was_off:
                     self.hub._soon(self.wake_sound())  # only when Buddy was off (not when cutting in)
                 await self.start_listening(preroll_s=0.8, earcon=True)
-                self.woken = True
+                self.woken = was_off  # cutting in isn't waking it: no "didn't hear you" sound
+                self.cut_in = not was_off and not self.ringing
                 return
             if self.state == "idle" and self._verify_allowed(now):
                 self.verify_times.append(now)
@@ -458,6 +460,7 @@ class Session:
             await self.stop_speaking()
             # Listen from a moment ago, so the words they said over Buddy are kept.
             await self.start_listening(preroll_s=1.6, earcon=False)
+            self.cut_in = True
         else:
             self.barge_voiced = 0.0  # Buddy's own voice, or someone it doesn't know: carry on
 
@@ -500,6 +503,7 @@ class Session:
         self.mentioned = False
         self.captured = 0
         self.woken = False  # set right after, if "hey buddy" started this listen
+        self.cut_in = False
         if self.early:
             self.early["task"].cancel()
         self.early = None
@@ -550,6 +554,14 @@ class Session:
                 self.hub.trouble.append((time.time(), "not_heard"))
             self.state = "idle"
             await self.send_json({"type": "state", "state": "idle"})
+            rest = self.hub.conv.interrupted if self.cut_in else ""
+            self.cut_in = False
+            if rest and not silent:
+                # It stopped for nothing (most likely its own voice): carry on where it was.
+                self.hub.record("false_cut_in", session=self.id)
+                self.hub.conv.interrupted = ""
+                await self.speak(rest)
+                return
             if not silent and self.woken:  # only after "hey buddy", not a follow-up listen
                 await self.earcon("nospeech")
             return

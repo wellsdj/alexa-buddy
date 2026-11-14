@@ -150,3 +150,19 @@ def test_room_noise_doesnt_keep_it_listening_after_you_stop():
     talk_then_noise = [0.9] * 20 + [0.32] * 40  # a fan or the radio, a bit speech-like
     ep = Endpointer(silence_ms=600, no_speech_s=6.0, on=0.3)
     assert ep.update(talk_then_noise) == "end"  # ends after 0.6 s, not when the noise stops
+
+
+def test_a_false_cut_in_carries_on_instead_of_the_nothing_sound(settings):
+    from types import SimpleNamespace
+    hub, s, ws, spoken = setup(settings, "")
+
+    async def run():
+        s.state = "speaking"
+        s.speaking_text, s.speak_started, s.speak_total_s = "First bit. Second bit is here.", None, 0.0
+        await s._on_audio(np.zeros(512, np.int16), SimpleNamespace(confident=True, score=0.9), [0.0])
+        for _ in range(int(6.2 / 0.032)):  # then nobody says anything
+            await s._on_audio(np.zeros(512, np.int16), None, [0.0])
+        await asyncio.sleep(0.2)
+    asyncio.run(run())
+    assert sounds(ws) == []
+    assert spoken == ["First bit. Second bit is here."]
