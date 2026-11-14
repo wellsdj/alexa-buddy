@@ -279,34 +279,56 @@ def find_inbox_folder() -> Path | None:
 
 
 # ---------- turning a recording into text ----------
+def _convert_attempts(path: Path, out: Path) -> list[list[str]]:
+    """Ways to turn any audio file into a WAV, best first. The Mac's own afconvert is tried two ways
+    (some files refuse the sample-rate change), then ffmpeg if it's installed."""
+    tries = []
+    if shutil.which("afconvert"):
+        tries.append(["afconvert", "-f", "WAVE", "-d", "LEI16@16000", "-c", "1", str(path), str(out)])
+        tries.append(["afconvert", "-f", "WAVE", "-d", "LEI16", str(path), str(out)])  # resampled below
+    if shutil.which("ffmpeg"):
+        tries.append(["ffmpeg", "-v", "error", "-y", "-i", str(path), "-ac", "1", "-ar", "16000", "-f", "wav", str(out)])
+    return tries
+
+
 def read_audio(path: Path) -> np.ndarray:
     """Any audio file the Mac (afconvert) or ffmpeg can read, as 16 kHz mono 16-bit."""
-    wav = path.with_suffix(".wav16")
+    out = path.with_name(path.stem + ".converted.wav")
+    errors = []
+    tries = _convert_attempts(path, out) or [None]  # no converter: only plain WAV files work
     try:
-        if shutil.which("afconvert"):
-            subprocess.run(["afconvert", "-f", "WAVE", "-d", "LEI16@16000", "-c", "1", str(path), str(wav)],
-                           check=True, capture_output=True, timeout=600)
-        elif shutil.which("ffmpeg"):
-            subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(path), "-ac", "1", "-ar", "16000",
-                            "-f", "wav", str(wav)], check=True, capture_output=True, timeout=600)
-        else:
-            wav = path  # only plain WAV files work without a converter
-        with wave.open(str(wav)) as w:
-            rate, ch, width = w.getframerate(), w.getnchannels(), w.getsampwidth()
-            raw = w.readframes(w.getnframes())
-    except (subprocess.CalledProcessError, wave.Error, EOFError) as e:
-        raise StudyError("Couldn't read that recording. Try a different file (voice memos, mp3 and m4a work).") from e
+        for cmd in tries:
+            src = path
+            if cmd:
+                out.unlink(missing_ok=True)
+                try:
+                    subprocess.run(cmd, check=True, capture_output=True, timeout=600)
+                except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as e:
+                    detail = (getattr(e, "stderr", b"") or b"").decode(errors="ignore").strip()
+                    errors.append(f"{cmd[0]}: {detail or e}"[:200])
+                    continue
+                src = out
+            try:
+                with wave.open(str(src)) as w:
+                    rate, ch, width = w.getframerate(), w.getnchannels(), w.getsampwidth()
+                    raw = w.readframes(w.getnframes())
+            except (wave.Error, EOFError, OSError) as e:
+                errors.append(f"reading it: {e}"[:200])
+                continue
+            if width != 2:
+                errors.append("not 16-bit audio")
+                continue
+            x = np.frombuffer(raw, dtype="<i2")
+            if ch > 1:
+                x = x.reshape(-1, ch).mean(axis=1).astype(np.int16)
+            if rate != SR:
+                x = np.clip(resample(x.astype(np.float64), rate, SR), -32768, 32767).astype(np.int16)
+            return x
     finally:
-        if wav != path:
-            wav.unlink(missing_ok=True)
-    if width != 2:
-        raise StudyError("Couldn't read that recording (it isn't 16-bit audio).")
-    x = np.frombuffer(raw, dtype="<i2")
-    if ch > 1:
-        x = x.reshape(-1, ch).mean(axis=1).astype(np.int16)
-    if rate != SR:
-        x = np.clip(resample(x.astype(np.float64), rate, SR), -32768, 32767).astype(np.int16)
-    return x
+        out.unlink(missing_ok=True)
+    log.warning("couldn't read %s: %s", path.name, " | ".join(errors))
+    raise StudyError("Couldn't read that recording (voice memos, mp3 and m4a should work). "
+                     f"What went wrong: {errors[-1] if errors else 'no audio converter found'}")
 
 
 def split_at_pauses(x: np.ndarray) -> list[np.ndarray]:

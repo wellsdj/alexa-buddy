@@ -298,3 +298,39 @@ def test_once_connected_recordings_go_to_the_website(settings, monkeypatch):
         rec = w.recordings.add("cloud", make_wav(settings.data_dir / "x.wav", 150), 1794000000, "pocket")
         asyncio.run(w.check_recording("cloud", rec["id"]))
         assert sent == [("cloud", "Maths lesson")]
+
+
+def test_audio_still_reads_when_the_macs_converter_fails(tmp_path, monkeypatch):
+    """afconvert can refuse a file (seen with an m4a on the Mac): fall back to the next way to read it."""
+    import shutil as sh
+    import subprocess as sp
+    import wave as wv
+    from buddy import study as st
+    if not sh.which("ffmpeg"):
+        pytest.skip("needs ffmpeg")
+    src = tmp_path / "talk.wav"
+    with wv.open(str(src), "wb") as w:
+        w.setnchannels(1), w.setsampwidth(2), w.setframerate(44100)
+        w.writeframes((np.sin(np.arange(44100) / 10) * 8000).astype("<i2").tobytes())
+    real_which, real_run, tried = sh.which, sp.run, []
+    monkeypatch.setattr(st.shutil, "which", lambda name: "/usr/bin/afconvert" if name == "afconvert" else real_which(name))
+
+    def run(cmd, **kw):
+        tried.append(cmd[0])
+        if cmd[0] == "afconvert":
+            raise sp.CalledProcessError(1, cmd, stderr=b"Error: couldn't convert")
+        return real_run(cmd, **kw)
+
+    monkeypatch.setattr(st.subprocess, "run", run)
+    x = st.read_audio(src)
+    assert tried == ["afconvert", "afconvert", "ffmpeg"] and abs(len(x) - 16000) < 50
+    assert list(tmp_path.iterdir()) == [src]  # nothing left behind
+
+
+def test_unreadable_audio_says_what_went_wrong(tmp_path):
+    from buddy import study as st
+    bad = tmp_path / "broken.m4a"
+    bad.write_bytes(b"not audio at all" * 100)
+    with pytest.raises(st.StudyError) as e:
+        st.read_audio(bad)
+    assert "What went wrong" in str(e.value)
