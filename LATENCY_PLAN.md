@@ -59,7 +59,16 @@ Every stage waits for the stage before it to finish completely.
 
 ---
 
-## Step 1: Measure (no behaviour change)
+## Step 1: Measure (no behaviour change). **Built, waiting for your 10-turn baseline.**
+
+**How to run the baseline:**
+1. Update Buddy, and restart it.
+2. Ask Buddy 10 normal questions, not timers or the weather. For example: "what's the capital of Peru", "tell me a fun fact", "how far is the moon".
+3. Open **http://localhost:8000/api/timings** in the browser on the Mac, and send me what it says.
+
+Every turn also prints a `TURN …` line in the Buddy window, and shows in the Activity tab as `timing`.
+
+
 
 1. Add a small `timing.py` that keeps one timer for each turn. It is carried through the async tasks, so no function signatures change.
 2. Record these moments:

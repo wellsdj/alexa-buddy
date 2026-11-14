@@ -35,7 +35,7 @@ from zoneinfo import ZoneInfo
 import numpy as np
 from fastapi import WebSocket
 
-from . import intents
+from . import intents, timing
 from .alarms import Alarm, AlarmStore, DAY_NAMES, spoken_time
 from .audio import Leveller, peak_db, rms_dbfs
 from .brain import Brain, Conversation, Reply
@@ -427,6 +427,10 @@ class Session:
         silent, self.silent, self.ptt = self.silent, None, False
         mentioned, self.mentioned = self.mentioned, False
         speech_s = self.endpointer.speech_seconds if self.endpointer else 0.0
+        # When you actually stopped talking: the end-of-speech wait is the trailing quiet it just waited for.
+        now = time.monotonic()
+        quiet_s = self.endpointer.silent_run * self.endpointer.chunk_s if (self.endpointer and reason == "end") else 0.0
+        timer = timing.TurnTimer(speech_end=now - quiet_s, endpoint=now) if self.hub.settings["timing_log"] else None
         self.capture = []
         if reason == "timeout" or len(audio) < SR * 0.3:
             if not silent and self.endpointer:
@@ -443,7 +447,7 @@ class Session:
         else:
             await self.set_state("thinking")
             await self.earcon("end")
-        asyncio.create_task(self.hub.process_audio(self, audio, speech_s, silent, mentioned))
+        asyncio.create_task(self.hub.process_audio(self, audio, speech_s, silent, mentioned, timer=timer))
 
     # ---------- speaking ----------
     async def interim(self, text: str) -> None:
@@ -488,6 +492,8 @@ class Session:
         held = bytearray()  # the first half second, collected before playing starts
         started_at = None  # the clock starts when the first sound is sent, not before the voice arrives
 
+        timer = timing.current.get() if after == "idle" else None  # a "one sec" line isn't the answer
+
         async def send(pcm: bytes, final: bool = False) -> None:
             nonlocal sent, started_at
             if started_at is None:
@@ -497,6 +503,10 @@ class Session:
                 pcm, started_at = bytes(held), time.monotonic()
                 if self.speaking_text == text:
                     self.speak_started = started_at
+                if timer:
+                    # The board plays as soon as this arrives (a few tens of ms over Wi-Fi).
+                    timer.mark("first_audio", started_at)
+                    self.hub.finish_timing(timer)
             for i in range(0, len(pcm), 3200):  # 100 ms frames
                 part = pcm[i:i + 3200]
                 ahead = sent / BYTES_PER_S - (time.monotonic() - started_at)
@@ -508,7 +518,11 @@ class Session:
                     self.speak_total_s = sent / BYTES_PER_S
 
         try:
+            if timer:
+                timer.mark("tts_sent")
             async for chunk in self.hub.tts.stream(text):
+                if timer:
+                    timer.mark("tts_first_byte")
                 await send(leveller.process(chunk))
             await send(leveller.flush(), final=True)
             t0 = started_at or t0
@@ -792,7 +806,9 @@ class Hub:
             return {}
 
     async def process_audio(self, s: Session, audio: np.ndarray, speech_s: float, silent: str | None = None,
-                            mentioned: bool = False) -> None:
+                            mentioned: bool = False, timer: "timing.TurnTimer | None" = None) -> None:
+        if timer:
+            timing.current.set(timer)  # every stage of this turn marks its time on it
         t0 = time.monotonic()
         who_task = asyncio.create_task(self.who_spoke(audio))  # alongside the transcribing: no extra wait
         try:
@@ -806,6 +822,7 @@ class Hub:
             await self.announce(s, str(e) if "Update Buddy" in str(e) else "Hmm, I didn't quite get that. Say it again for me?")
             return
         stt_ms = int((time.monotonic() - t0) * 1000)
+        timing.mark("stt_done")
         s.speaker = await who_task
         if s.interrupted_text and time.time() - s.interrupted_at < 20 and text.strip():
             cleaned = intents.strip_echo(text, s.interrupted_text)
@@ -921,10 +938,18 @@ class Hub:
 
     async def respond(self, s: Session, text: str, stt_ms: int = 0) -> None:
         s.turn_running += 1
+        timer = timing.current.get()
+        if timer:
+            timer.text = text
         try:
             await self._respond(s, text, stt_ms)
         finally:
             s.turn_running -= 1
+            self.finish_timing(timer)  # if Buddy didn't speak (it's already done if it did)
+
+    def finish_timing(self, timer: "timing.TurnTimer | None") -> None:
+        if timer and self.settings["timing_log"]:
+            timer.finish(self.settings.data_dir, self.record)
 
     async def _respond(self, s: Session, text: str, stt_ms: int = 0) -> None:
         speaker, s.speaker = s.speaker, {}

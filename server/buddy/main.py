@@ -528,6 +528,13 @@ def create_app(settings: Settings | None = None, http=None, claude_http=None, st
                 message = "Key saved, but ElevenLabs couldn't be reached to check it."
         return {"keys": settings.secret_status(), "check": {"ok": code == 200, "message": message}}
 
+    @app.get("/api/timings")
+    async def timings(last: int = 10):
+        """How long the last spoken turns took, stage by stage (open it in the browser)."""
+        from .timing import report
+        from fastapi.responses import PlainTextResponse
+        return PlainTextResponse(report(settings.data_dir / "timings.jsonl", max(1, min(last, 200))))
+
     @app.get("/api/log")
     async def get_log():
         return list(hub.log)

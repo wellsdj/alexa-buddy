@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from . import intents
+from . import intents, timing
 from .alarms import DAY_NAMES, AlarmStore, human_duration, ordinal, spoken_time
 from .config import Settings
 from .llm import LLMError, parse_json_loose
@@ -477,7 +477,8 @@ class Brain:
         msgs = [{"role": "system", "content": system},
                 {"role": "user", "content": f'They said: "{said_by_user}"\nReply: "{reply}"'}]
         try:
-            res = await asyncio.wait_for(self.llm.chat(msgs, tier="fast", max_tokens=300), timeout=4.0)
+            with timing.span("reword"):
+                res = await asyncio.wait_for(self.llm.chat(msgs, tier="fast", max_tokens=300), timeout=4.0)
             out = (res.content or "").strip().strip('"').strip()
         except Exception as e:  # noqa: BLE001
             log.info("missed-alarm mention fell back: %s", e)
@@ -523,7 +524,9 @@ class Brain:
         msgs = [{"role": "system", "content": system},
                 {"role": "user", "content": f"Question: {question}\nAnswer: {answer}\nEvidence:\n{evidence}"}]
         try:
-            res = await asyncio.wait_for(self.llm.chat(msgs, tier="fast", json_mode=True, max_tokens=300), timeout=8.0)
+            with timing.span("check"):
+                res = await asyncio.wait_for(self.llm.chat(msgs, tier="fast", json_mode=True, max_tokens=300),
+                                             timeout=8.0)
             data = parse_json_loose(res.content or "")
         except Exception as e:  # noqa: BLE001 - a broken check mustn't block the answer
             log.info("fact-check skipped: %s", e)
@@ -579,7 +582,8 @@ class Brain:
         msgs = [{"role": "system", "content": system},
                 {"role": "user", "content": f'They said: "{said_by_user}"\nReply to reword: "{reply}"'}]
         try:
-            res = await asyncio.wait_for(self.llm.chat(msgs, tier="fast", max_tokens=200), timeout=4.0)
+            with timing.span("reword"):
+                res = await asyncio.wait_for(self.llm.chat(msgs, tier="fast", max_tokens=200), timeout=4.0)
         except (asyncio.TimeoutError, LLMError, Exception) as e:  # noqa: BLE001 - never lose the reply
             log.info("rewording skipped: %s", e)
             return reply
@@ -725,7 +729,8 @@ class Brain:
         model = ""
         intent = "llm_deep" if tier == "smart" else "llm"
         for _ in range(6):  # room to try again when a tool comes back empty
-            res = await self.llm.chat(messages, tier=tier, tools=tools, max_tokens=900 if tier == "smart" else 500)
+            with timing.span("haiku"):
+                res = await self.llm.chat(messages, tier=tier, tools=tools, max_tokens=900 if tier == "smart" else 500)
             model = res.model
             if not res.tool_calls:
                 text = res.content or " ".join(confirmations)
@@ -845,7 +850,8 @@ class Brain:
                 return await self._study_progress_any(a.get("person", "")), "", []
             if name == "web_search":
                 await say_while(ctx, "search")
-                found = await self.llm.web_search(a.get("query", ""))
+                with timing.span("search"):
+                    found = await self.llm.web_search(a.get("query", ""))
                 ctx.setdefault("searched", []).append((a.get("query", ""), found))
                 return found, "", []
             if name == "think_harder":

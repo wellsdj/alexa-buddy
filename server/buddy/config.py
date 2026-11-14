@@ -57,6 +57,7 @@ DEFAULTS: dict[str, Any] = {
     # Just after "hey buddy", how speech-like a sound must be to count as you talking (0-1). Was 0.5,
     # which missed quiet voices: the light came on, then went off after 6 s.
     "listen_sensitivity": 0.3,
+    "timing_log": True,  # one line per spoken turn with how long each stage took (data/timings.jsonl)
     "voice_id_on": True,  # notice who is speaking (needs a saved voice on the "Your voice" tab)
     "voice_id_threshold": 0.35,  # how alike a voice must be to count as that person (0-1)
     "max_listen_s": 15,

@@ -21,6 +21,7 @@ try:
 except ImportError:  # an old install that hasn't been updated yet
     anthropic = None
 
+from . import timing
 from .config import Settings
 from .llm import ChatResult, LLMError
 
@@ -189,6 +190,8 @@ class ClaudeLLM:
                  for b in r.content if b.type == "tool_use"]
         self.last_error = ""
         self.last_model = model
+        timing.note("haiku_tokens_in", int(getattr(r.usage, "input_tokens", 0) or 0))
+        timing.note("haiku_tokens_out", int(getattr(r.usage, "output_tokens", 0) or 0))
         return ClaudeResult(content=text, tool_calls=calls, model=model,
                             usage=r.usage.model_dump(exclude_none=True), ms=int((time.monotonic() - t0) * 1000),
                             blocks=[b.model_dump(exclude_none=True) for b in r.content])
