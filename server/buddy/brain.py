@@ -261,6 +261,38 @@ web search for the right name, thinking it through) before giving up. Simple thi
 you to drop one subject ("enough about that") means drop_topic, then carry on normally."""
 
 
+# The quick version (setting fast_haiku): shorter, and split so the fixed part (with the tool list) is
+# cached by Anthropic between turns. Only the part that changes (time, weather, memories) is sent fresh.
+SYSTEM_STATIC = """You are {name}, {user_ref} voice assistant and a friend, not a gadget. Everything you say is spoken aloud.
+- Warm, relaxed British English, a bit of dry humour when it fits. No assistant phrases ("Certainly!", "Great question").
+- Answer in one or two short spoken sentences; go longer only when asked. No markdown, lists, emojis or links.
+- Tasks (alarms, timers, reminders, volume, weather, quick facts): do it and confirm in a few words, e.g. "Done, alarm's \
+set for 7." No follow-up offers.
+- Chat: be natural, and ask something back now and then. Never call yourself a device or a speaker.
+- Say times like "7:30 AM" and temperatures like "12 degrees".
+Tools:
+- Use them for alarms, timers, reminders, weather, memory, volume, music (Spotify) and changing your voice. Times are 24h \
+HH:MM local.
+- A missing or unclear detail: ask one short question. When you ask something, end with a question mark.
+- "Remember ..." means remember; forget or update_memory use the memory's id. Ask before clear_memory, and only call it \
+with confirmed=true after they say yes.
+- News, sport, prices, opening hours or anything recent: web_search (you've already said "one sec, I'll check").
+- Long writing, planning or tricky reasoning: think_harder.
+- Never say you did something unless a tool confirmed it. If a tool finds nothing, try another way before giving up.
+- Wanting you to stop or go away entirely: go_quiet. Dropping one subject: drop_topic, then carry on.
+- When you use a tool, you may say a brief sentence first. If no tool can do what they asked, say so instead of \
+guessing. Do not include internal or system XML tags in your response.
+Context:
+- "(Background note ...)" lines are your own private notes about earlier turns: use them, never read them out. Trust \
+your earlier answers, above all fact-checked ones, unless the user shows they were wrong.
+- If something goes wrong, be relaxed and kind about it, say what you can do instead, and keep it short."""
+
+SYSTEM_DYNAMIC = """Now: {now}. Home: {place}.
+{weather}
+What you remember about the user (numbers are ids for editing):
+{memories}"""
+
+
 def speakable(text: str, limit: int = 900) -> str:
     t = re.sub(r"https?://\S+", "", text or "")
     t = re.sub(r"```.*?```", "", t, flags=re.S)
@@ -700,6 +732,20 @@ class Brain:
             memories=self.memory.render_for_prompt(1800),
         )
 
+    async def system_parts(self) -> tuple[str, str]:
+        """(the fixed part, cached; the part that changes every turn) of the quick system prompt."""
+        now = self.now()
+        user = self.settings["user_name"]
+        static = SYSTEM_STATIC.format(name=self.settings["assistant_name"],
+                                      user_ref=f"{user}'s" if user else "the user's")
+        dynamic = SYSTEM_DYNAMIC.format(
+            now=f"{DAY_NAMES[now.weekday()]} {now.day} {now.strftime('%B %Y')}, {now.strftime('%H:%M')} "
+                f"({self.settings['timezone']})",
+            place=self.settings["location_name"],
+            weather=await self.weather.context_line(),
+            memories=self.memory.render_for_prompt(1800))
+        return static, dynamic
+
     async def _llm(self, text: str, conv: Conversation, ctx: dict, tier: str = "fast",
                    allow_think: bool = True, note: str = "", force_search: bool = False) -> Reply:
         if THINK_REQUEST.search(text):
@@ -707,7 +753,11 @@ class Brain:
         if tier == "smart":
             ctx["thought"] = True
             await say_while(ctx, "think")
-        system = await self.system_prompt()
+        fast = bool(self.settings["fast_haiku"])
+        if fast:
+            static, system = await self.system_parts()
+        else:
+            static, system = "", await self.system_prompt()
         if note:
             system += (f"\nYour quick first try at this just failed: \"{note}\". Be persistent: try another wording "
                        "or spelling, use web_search to pin down the right name if that would help, then use the tool "
@@ -724,7 +774,8 @@ class Brain:
         if conv.dropped:
             system += ("\nTopics the user asked you to drop (don't bring them up again unless they do): "
                        + "; ".join(conv.dropped[-6:]) + ".")
-        messages = [{"role": "system", "content": system}]
+        messages = ([{"role": "system", "content": static, "cache": True}] if static else []) + \
+            [{"role": "system", "content": system}]
         for m in conv.history[-6:]:
             content = m["content"]
             if m.get("speaker"):
@@ -766,7 +817,8 @@ class Brain:
                 on_text(delta)
 
             with timing.span("haiku"):
-                res = await self.llm.chat(messages, tier=tier, tools=tools, max_tokens=900 if tier == "smart" else 500,
+                res = await self.llm.chat(messages, tier=tier, tools=tools,
+                                          max_tokens=900 if tier == "smart" else (400 if self.settings["fast_haiku"] else 500),
                                           **({"on_text": tap} if on_text else {}))
             model = res.model
             if not res.tool_calls:

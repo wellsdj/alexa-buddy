@@ -217,3 +217,13 @@ def test_out_of_credit_says_so(settings, apis, claude):
     assert "out of credit" in r.text
     run(brain.handle("another joke", Conversation()))
     assert len(claude.requests) == 1  # it doesn't keep hammering the API
+
+
+def test_quick_prompt_is_short_and_split_for_caching(settings, apis, claude):
+    brain = make_brain(settings, apis, claude)
+    brain.memory.add("Allergic to peanuts", pinned=True)
+    run(brain.handle("tell me a joke", Conversation()))
+    system = claude.requests[0]["system"]
+    assert system[0]["cache_control"] == {"type": "ephemeral"} and "Now:" not in system[0]["text"]
+    assert "Now:" in system[1]["text"] and "#1 Allergic to peanuts." in system[1]["text"]
+    assert len(system[0]["text"]) < len(__import__("buddy.brain", fromlist=["SYSTEM"]).SYSTEM)

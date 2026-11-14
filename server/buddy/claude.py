@@ -55,13 +55,17 @@ def convert_tools(tools: list[dict]) -> list[dict]:
     return out
 
 
-def convert_messages(messages: list[dict]) -> tuple[str, list[dict]]:
-    """OpenAI-style messages -> (system prompt, Claude messages)."""
+def convert_messages(messages: list[dict]) -> tuple[str | list[dict], list[dict]]:
+    """OpenAI-style messages -> (system prompt, Claude messages). A system message marked "cache" makes
+    the system prompt a list of blocks, with a cache point after the marked (unchanging) part."""
     system: list[str] = []
+    cached: set[int] = set()
     out: list[dict] = []
     for m in messages:
         role = m.get("role")
         if role == "system":
+            if m.get("cache") and m.get("content"):
+                cached.add(len(system))
             system.append(m.get("content") or "")
         elif role == "tool":
             result = {"type": "tool_result", "tool_use_id": m.get("tool_call_id", ""),
@@ -91,6 +95,9 @@ def convert_messages(messages: list[dict]) -> tuple[str, list[dict]]:
             out.append({"role": "user", "content": m["content"]})
     while out and out[0]["role"] == "assistant":
         out.pop(0)  # the conversation has to start with the user
+    if cached:
+        return [{"type": "text", "text": t, **({"cache_control": {"type": "ephemeral"}} if i in cached else {})}
+                for i, t in enumerate(system) if t], out
     return "\n\n".join(s for s in system if s), out
 
 
@@ -177,7 +184,10 @@ class ClaudeLLM:
         model = self.model(tier)
         system, msgs = convert_messages(messages)
         if json_mode:
-            system = f"{system}\n\n{JSON_ONLY}".strip()
+            if isinstance(system, list):
+                system = system + [{"type": "text", "text": JSON_ONLY}]
+            else:
+                system = f"{system}\n\n{JSON_ONLY}".strip()
         params: dict = {
             "model": model,
             # Thinking counts towards max_tokens, so leave room for it on top of the reply.
@@ -185,6 +195,11 @@ class ClaudeLLM:
             "messages": msgs,
             "output_config": {"effort": EFFORT.get(tier, "low")},
         }
+        if self.settings["fast_haiku"] and tier != "smart" and model.startswith("claude-haiku-5"):
+            # Everyday answers: no thinking first (Haiku 5.x allows it off at low effort), so the first
+            # word comes sooner, and a low cap since spoken answers are a sentence or two.
+            params["thinking"] = {"type": "disabled"}
+            params["max_tokens"] = max_tokens
         if system:
             params["system"] = system
         if tools:

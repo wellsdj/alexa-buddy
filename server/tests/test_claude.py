@@ -36,8 +36,30 @@ def test_haiku_request_shape(settings, claude):
     assert body["system"] == "Be brief." and body["messages"] == [{"role": "user", "content": "hi"}]
     assert body["tools"] == [{"name": "set_timer", "description": "Timer.",
                               "input_schema": {"type": "object", "properties": {}}}]
-    assert "temperature" not in body and body["max_tokens"] >= 4096
+    # Quick answers (fast_haiku): no thinking first, and the cap is the size asked for.
+    assert "temperature" not in body and body["thinking"] == {"type": "disabled"} and body["max_tokens"] == 600
     assert res.content == "Okay." and res.model == "claude-haiku-5-5"
+
+
+def test_thinking_stays_on_when_fast_haiku_is_off(settings, claude):
+    settings.update({"fast_haiku": False})
+    run(ClaudeLLM(settings, claude.client()).chat([{"role": "user", "content": "hi"}]))
+    body = claude.requests[0]
+    assert "thinking" not in body and body["max_tokens"] >= 4096  # room for Haiku's thinking
+
+
+def test_the_fixed_instructions_are_cached(settings, claude):
+    run(ClaudeLLM(settings, claude.client()).chat([
+        {"role": "system", "content": "Fixed rules.", "cache": True}, {"role": "system", "content": "Now: 10:30."},
+        {"role": "user", "content": "hi"}]))
+    assert claude.requests[0]["system"] == [
+        {"type": "text", "text": "Fixed rules.", "cache_control": {"type": "ephemeral"}},
+        {"type": "text", "text": "Now: 10:30."}]
+
+
+def test_the_smart_tier_keeps_thinking(settings, claude):
+    run(ClaudeLLM(settings, claude.client()).chat([{"role": "user", "content": "hi"}], tier="smart"))
+    assert "thinking" not in claude.requests[0]
 
 
 def test_deep_thinking_model_and_effort(settings, claude):
