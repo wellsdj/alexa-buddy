@@ -772,7 +772,9 @@ class Session:
         self.quiet_until = time.time() + 1.0  # the last of Buddy's voice is still in the room
         self.hub.last_spoke_at = time.time()
         if then_listen_of() and self.hands_free:
-            await self.start_listening(earcon=True, no_speech_s=5.0)
+            # Keep the last moment too: people often start answering as Buddy finishes. And give them
+            # a bit longer to start (a reply can need a second's thought).
+            await self.start_listening(preroll_s=0.6, earcon=True, no_speech_s=8.0)
         else:
             await self.set_state(after)  # "thinking" after a "one sec" line: the answer is on its way
 
@@ -1057,7 +1059,21 @@ class Hub:
         if v is None or not self.settings["voice_learn_on"]:
             return
         thr = float(self.settings["voice_id_threshold"])
-        if who.get("learning") or (who.get("name") and who.get("score", 0) >= thr + 0.15):
+        score = float(who.get("score", 0))
+        if who.get("name") and score >= thr:
+            self.last_sure = (who["name"], time.time())
+        sure_name, sure_at = getattr(self, "last_sure", ("", 0.0))
+        # Mid-conversation with someone it was sure about: a so-so match to the same person is them
+        # too (the voice changes a bit: tired, quieter, further away). Learning from these is what
+        # makes it better at recognising them.
+        if (not who.get("name") and sure_name and who.get("best") == sure_name and score >= thr - 0.15
+                and time.time() - sure_at < 180):
+            who["name"], name = sure_name, sure_name
+            self.last_sure = (sure_name, time.time())
+            self.record("voice_kept_up", name=sure_name, score=round(score, 2))
+            await asyncio.to_thread(self.voiceid.add_print, name, v, float(who.get("seconds", 0)))
+            return
+        if who.get("learning") or (who.get("name") and score >= thr + 0.05):
             was = self.voiceid.trusted(name, float(self.settings["voice_trust_seconds"]))
             await asyncio.to_thread(self.voiceid.add_print, name, v, float(who.get("seconds", 0)))
             if not was and self.voiceid.trusted(name, float(self.settings["voice_trust_seconds"])):
