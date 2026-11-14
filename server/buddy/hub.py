@@ -342,6 +342,7 @@ class Session:
         if self.state == "listening":
             self.capture.append(pcm)
             self.captured += len(pcm)
+            self.listen_loudest = max(self.listen_loudest, rms_dbfs(pcm))
             if self.silent and wake and wake.confident:
                 # Measured in audio, not clock time: audio can arrive in bursts over Wi-Fi.
                 if self.silent == "room" and self.captured / SR > 1.8:
@@ -533,6 +534,11 @@ class Session:
             self.endpointer.update(list(self.vad_history)[-n:])
         if self.detector and not silent:
             self.detector.reset()
+        self.listen_id = getattr(self, "listen_id", 0) + 1
+        self.listen_loudest = -120.0
+        self.reply_until = 0.0
+        if not silent:
+            asyncio.create_task(self._mic_watch(self.listen_id))
         if earcon:
             await self.earcon("wake")
         if not silent:
@@ -540,6 +546,33 @@ class Session:
             await self.set_state("listening")
         else:
             self.state = "listening"  # silent: no LED, no chime unless it turns out to be for Buddy
+
+    async def listen_for_reply(self, window_s: float, kind: str) -> None:
+        """Waiting for their answer: the whole window counts, even if a noise ends one listen early."""
+        await self.start_listening(earcon=True, no_speech_s=window_s, ignore_s=0.35)
+        self.follow_up = kind
+        self.reply_until = time.time() + window_s
+
+    async def keep_waiting_for_reply(self) -> bool:
+        """A listen ended with nothing usable but there's still time left to answer: keep listening."""
+        left = getattr(self, "reply_until", 0) - time.time()
+        if self.follow_up and left > 1.5:
+            kind, until = self.follow_up, self.reply_until
+            await self.start_listening(earcon=False, no_speech_s=left)
+            self.follow_up, self.reply_until = kind, until
+            return True
+        return False
+
+    async def _mic_watch(self, listen_id: int) -> None:
+        """Listening for 7 s and the mic gives nothing at all (silence, not a quiet room): reset it."""
+        await asyncio.sleep(7.0)
+        if self.listen_id != listen_id or self.state != "listening" or self.role != "device":
+            return
+        if self.listen_loudest < -80 or self.captured == 0:
+            self.hub.record("mic_reset", session=self.id, loudest_db=round(self.listen_loudest, 1),
+                            got_audio=self.captured > 0)
+            await self.hub.note(self, "The microphone went quiet, so I reset it.")
+            await self.send_json({"type": "mic_reset"})
 
     async def end_ptt(self) -> None:
         if self.state == "listening" and self.ptt:
@@ -556,6 +589,8 @@ class Session:
         timer = timing.TurnTimer(speech_end=now - quiet_s, endpoint=now) if self.hub.settings["timing_log"] else None
         early = self._take_early()
         self.capture = []
+        if reason != "timeout" and len(audio) < SR * 0.3 and not silent and await self.keep_waiting_for_reply():
+            return  # a click or a bump, not an answer: keep waiting for it
         if reason == "timeout" or len(audio) < SR * 0.3:
             if self.early:
                 self.early["task"].cancel()
@@ -788,8 +823,8 @@ class Session:
             # No look-back here: the moment before is Buddy's own voice, which made it think you'd
             # already spoken and answer itself. Give them a bit longer to start instead.
             self.asked_text, self.asked_at = text_of(), time.time()
-            await self.start_listening(earcon=True, no_speech_s=8.0, ignore_s=0.35)
-            self.follow_up = "question" if text_of().rstrip().endswith("?") else "after"
+            question = text_of().rstrip().endswith("?")
+            await self.listen_for_reply(15.0 if question else 8.0, "question" if question else "after")
         else:
             await self.set_state(after)  # "thinking" after a "one sec" line: the answer is on its way
 
@@ -1161,7 +1196,8 @@ class Hub:
                 self.record("echo_removed", heard=text, kept=cleaned)
                 text = cleaned
                 if not text.strip():
-                    await s.set_state("idle")
+                    if not await s.keep_waiting_for_reply():
+                        await s.set_state("idle")
                     return
         if s.interrupted_text and time.time() - s.interrupted_at < 20 and text.strip():
             cleaned = intents.strip_echo(text, s.interrupted_text)
@@ -1223,6 +1259,8 @@ class Hub:
                 await s.start_listening(earcon=False, no_speech_s=6.0)
                 return
             s.relistened = False
+            if await s.keep_waiting_for_reply():
+                return
             if s.woken:  # the "didn't hear anything" sound only after "hey buddy", never mid-conversation
                 await s.earcon("nospeech")
             await s.set_state("idle")
@@ -1235,7 +1273,8 @@ class Hub:
             if not await self.judge.is_for_buddy(text, False, self.conv.last_reply, since):
                 self.record("heard", session=s.id, heard=text, for_buddy=False, how=self.judge.last_how)
                 await self.note(s, f'Heard "{text}" and decided it wasn\'t for me.')
-                await s.set_state("idle")
+                if not await s.keep_waiting_for_reply():
+                    await s.set_state("idle")
                 return
         if not intents.strip_wake(text):  # just "hey buddy" and a pause: wait for the question
             await s.start_listening(earcon=False, no_speech_s=6.0)
