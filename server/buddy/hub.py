@@ -875,6 +875,10 @@ class Hub:
         self.brain.study_cloud = self.study_cloud
         self.brain.insight = self.insight  # so Buddy can say how it's doing (get_settings)
         self.brain.wifi = self  # so Buddy can change the desk unit's Wi-Fi when asked
+        from .online import OnlineAgent
+        self.online = OnlineAgent(settings, self.brain.llm)
+        self.online.say = self.online_say
+        self.brain.online = self.online
         self.last_scan: list[dict] = []
         self.wifi_current = ""
         self._wifi_wait: asyncio.Future | None = None
@@ -1202,6 +1206,22 @@ class Hub:
     async def note(self, s: Session, text: str) -> None:
         """A small grey line in the chat explaining why Buddy went quiet (not spoken)."""
         await self.broadcast_ui({"type": "event", "kind": "transcript", "session": s.id, "role": "note", "text": text})
+
+    async def online_say(self, text: str, listen: bool = False) -> None:
+        """The online job speaking up: a question for you, or how it went."""
+        targets = self.devices() or [x for x in self.sessions.values() if x.role == "ui"]
+        if not targets:
+            return
+        s = targets[0]
+        for _ in range(200):  # don't talk over a conversation: wait until Buddy's free (up to a minute)
+            if s.state == "idle" and not s.turn_running:
+                break
+            await asyncio.sleep(0.3)
+        if listen:
+            self.conv.pending = {"intent": "online_answer"}
+        self.conv.add("assistant", text, "(said while doing a job online)")
+        await self.broadcast_ui({"type": "event", "kind": "transcript", "session": s.id, "role": "assistant", "text": text})
+        await s.speak(text, then_listen=listen)
 
     async def announce(self, s: Session, text: str) -> None:
         """Speak something that isn't a reply to what was just said, and show it in the chat."""

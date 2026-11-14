@@ -234,6 +234,17 @@ TOOLS = [
         "parameters": {"type": "object", "properties": {
             "person": {"type": "string", "description": "Only if they name someone else's profile"}}}}},
     {"type": "function", "function": {
+        "name": "go_online", "description": "Do a job on a website for the user, in a real browser in the "
+        "background: booking a tennis court or a table, checking or changing an order, filling in a form, finding "
+        "and comparing things across pages. Use when it needs clicking through a site, not just a quick fact "
+        "(that's web_search). Put everything they said into task (what, where, when, who for, limits on price). "
+        "It asks them before anything final and reports back when done.",
+        "parameters": {"type": "object", "properties": {"task": {"type": "string"}}, "required": ["task"]}}},
+    {"type": "function", "function": {
+        "name": "online_job", "description": "How the job you're doing online is going (status), or stop it.",
+        "parameters": {"type": "object", "properties": {"action": {"type": "string", "enum": ["status", "stop"]}},
+                       "required": ["action"]}}},
+    {"type": "function", "function": {
         "name": "web_search", "description": "Search the web for current or factual info (news, sport, prices, opening times, events).",
         "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}},
     {"type": "function", "function": {
@@ -242,7 +253,7 @@ TOOLS = [
         "parameters": {"type": "object", "properties": {"reason": {"type": "string"}}}}},
 ]
 ACTION_TOOLS = {"set_alarm", "set_timer", "set_reminder", "cancel_alarm", "remember", "forget",
-                "update_memory", "clear_memory", "set_volume", "switch_voice", "music"}
+                "update_memory", "clear_memory", "set_volume", "switch_voice", "music", "go_online"}
 
 SYSTEM = """You are {name}, {user_ref} voice assistant. You live in {user_ref} bedroom and you've known \
 {user_obj} for a while: you're a friend, not a gadget or a servant. Everything you say is spoken aloud.
@@ -349,6 +360,7 @@ class Brain:
         self.study_cloud = None  # the hub's study_cloud(), set by the hub
         self.insight = None  # the hub's insight(): speed, connection, voice credits... (for get_settings)
         self.wifi = None  # the hub: wifi_scan / wifi_join on the desk unit
+        self.online = None  # OnlineAgent: doing jobs on websites (set by the hub)
 
     def now(self) -> datetime:
         return datetime.now(ZoneInfo(self.settings["timezone"]))
@@ -418,6 +430,13 @@ class Brain:
             return None
         if p.get("intent") == "wifi_pass":
             return await self._wifi_password(text, conv, p)
+        if p.get("intent") == "online_answer" and self.online and self.online.waiting:
+            if re.search(r"\b(stop|cancel|forget it|never mind)\b", text, re.I) and not re.search(
+                    r"\b(cancel(ling)? (the|my) (booking|order))\b", text, re.I):
+                self.online.stop()
+                return Reply("Okay, I've stopped. Nothing final was done.", intent="online")
+            self.online.answer(text)
+            return Reply(random.choice(["Okay.", "Got it.", "Righto."]), intent="online")
         if p.get("intent") == "think":
             if YES.search(text):
                 await say_while(ctx, "think")
@@ -1078,6 +1097,24 @@ class Brain:
                     found = await self.llm.web_search(a.get("query", ""))
                 ctx.setdefault("searched", []).append((a.get("query", ""), found))
                 return found, "", []
+            if name == "go_online":
+                if not self.online:
+                    return "going online isn't available", "", []
+                r = self.online.start(a.get("task", ""), who=ctx.get("speaker", ""), today=self.now().strftime("%A %d %B %Y"),
+                                      home=self.settings.get("home_name", "") or "")
+                if r == "started":
+                    line = random.choice(["On it. I'll have a look online and come back to you.",
+                                          "Okay, I'll sort that online and let you know.",
+                                          "Leave it with me, I'll come back to you."])
+                    return "started in the background; say only the confirmation", line, []
+                return r, "", []
+            if name == "online_job":
+                if not self.online:
+                    return "nothing running", "", []
+                if a.get("action") == "stop":
+                    r = self.online.stop()
+                    return r, ("Okay, I've stopped. Nothing final was done." if r.startswith("stopped") else ""), []
+                return self.online.status(), "", []
             if name == "think_harder":
                 return "already using the larger model", "", []
         except (KeyError, ValueError, TypeError) as e:
