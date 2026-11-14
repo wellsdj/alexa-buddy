@@ -772,9 +772,10 @@ class Session:
         self.quiet_until = time.time() + 1.0  # the last of Buddy's voice is still in the room
         self.hub.last_spoke_at = time.time()
         if then_listen_of() and self.hands_free:
-            # Keep the last moment too: people often start answering as Buddy finishes. And give them
-            # a bit longer to start (a reply can need a second's thought).
-            await self.start_listening(preroll_s=0.6, earcon=True, no_speech_s=8.0)
+            # No look-back here: the moment before is Buddy's own voice, which made it think you'd
+            # already spoken and answer itself. Give them a bit longer to start instead.
+            self.asked_text, self.asked_at = text_of(), time.time()
+            await self.start_listening(earcon=True, no_speech_s=8.0)
         else:
             await self.set_state(after)  # "thinking" after a "one sec" line: the answer is on its way
 
@@ -1123,6 +1124,16 @@ class Hub:
         s.speaker = await who_task
         s.turn_audio = audio
         await self._learn_voice(s.speaker)
+        asked = getattr(s, "asked_text", "")
+        if asked and time.time() - getattr(s, "asked_at", 0) < 15 and text.strip():
+            cleaned = intents.strip_echo(text, asked)  # the tail of Buddy's own question, heard back
+            s.asked_text = ""
+            if cleaned != text:
+                self.record("echo_removed", heard=text, kept=cleaned)
+                text = cleaned
+                if not text.strip():
+                    await s.set_state("idle")
+                    return
         if s.interrupted_text and time.time() - s.interrupted_at < 20 and text.strip():
             cleaned = intents.strip_echo(text, s.interrupted_text)
             if cleaned != text:
