@@ -243,6 +243,12 @@ TOOLS = [
         "It asks them before anything final and reports back when done.",
         "parameters": {"type": "object", "properties": {"task": {"type": "string"}}, "required": ["task"]}}},
     {"type": "function", "function": {
+        "name": "save_account", "description": "Save one of the user's accounts for signing in to websites, when they "
+        "tell you about it: label (e.g. \"school email\", \"home email\"), the email or username, and the password "
+        "if they give it. Updates it if it's already saved. All kept on their own Mac.",
+        "parameters": {"type": "object", "properties": {"label": {"type": "string"}, "email": {"type": "string"},
+                                                        "password": {"type": "string"}}, "required": ["label"]}}},
+    {"type": "function", "function": {
         "name": "school", "description": "Check the user's school portal (Bromcom) online: homework coming up, "
         "what their day/timetable is today or another day, or anything else on it. Runs in the background and "
         "reports back. what: homework | today | timetable | other. detail: anything specific they asked.",
@@ -262,7 +268,7 @@ TOOLS = [
         "parameters": {"type": "object", "properties": {"reason": {"type": "string"}}}}},
 ]
 ACTION_TOOLS = {"set_alarm", "set_timer", "set_reminder", "cancel_alarm", "remember", "forget",
-                "update_memory", "clear_memory", "set_volume", "switch_voice", "music", "go_online"}
+                "update_memory", "clear_memory", "set_volume", "switch_voice", "music", "go_online", "save_account"}
 
 SYSTEM = """You are {name}, {user_ref} voice assistant. You live in {user_ref} bedroom and you've known \
 {user_obj} for a while: you're a friend, not a gadget or a servant. Everything you say is spoken aloud.
@@ -321,6 +327,8 @@ It runs in the background and asks before anything final.
 - Change the Wi-Fi of your desk unit, with the password spelt out (wifi).
 - Look at and change your own settings, and say how fast you're answering (get_settings, change_setting).
 - Study Buddy: how their revising is going (study_progress).
+- Remember their accounts for signing in to sites ("my school email is ...", with the password if they say it): \
+save_account. Then going online signs in with them by itself.
 - Their school portal, Bromcom: homework coming up and what their day is (school). If they ask you to keep them \
 on top of homework, check it, then set reminders for each piece before it's due.
 - Recognise people by voice, carry on after being interrupted, think harder about tricky things (think_harder).
@@ -743,8 +751,8 @@ class Brain:
         }
         return (f"On the user's school portal: {portal}. Sign in with the school account (use 'Sign in with Google' "
                 "or 'Sign in with Microsoft' if offered: the school account may already be signed in to this browser; "
-                "if it asks for a password, use fill_login, or ask them to sign in themselves in the browser window "
-                f"and say done). {jobs.get(what, jobs['other'])} {detail}".strip()
+                "if it asks for an email or password, use fill_login with their school account, or ask_user for them and "
+                f"save_login as their \"school email\" once it works). {jobs.get(what, jobs['other'])} {detail}".strip()
                 + " In the summary, say it like a friend would, briefly, most urgent first.")
 
     async def _wifi_tool(self, a: dict, conv: Conversation) -> tuple[str, str, list]:
@@ -1194,6 +1202,11 @@ class Brain:
                                           "Leave it with me, I'll come back to you."])
                     return "started in the background; say only the confirmation", line, []
                 return r, "", []
+            if name == "save_account":
+                if not self.online or not self.online.logins:
+                    return "not available", "", []
+                label = self.online.logins.save_account(a.get("label", ""), a.get("email", ""), a.get("password", ""))
+                return f'saved "{label}"', f"Got it, saved as your {label}.", []
             if name == "school":
                 if not self.online:
                     return "going online isn't available", "", []

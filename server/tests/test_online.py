@@ -61,14 +61,14 @@ def run_job(tmp_path, calls, answers):
     return asyncio.run(go()), said, llm, agent
 
 
-def test_books_only_after_a_yes_and_never_types_passwords(tmp_path):
+def test_books_only_after_a_yes(tmp_path):
     url = (tmp_path / "site.html").as_uri()
     calls = [("open_url", {"url": url}), ("type_text", {"n": 1, "text": "hunter2"}),
              ("choose", {"n": 2, "option": "18:00"}), ("click", {"n": 3}),
              ("ask_user", {"question": "Court 2 at 6pm for £8. Shall I book it?", "final": True}),
              ("click", {"n": 3}), ("look", {}), ("finish", {"summary": "Booked court 2 at 6pm, £8."})]
     msg, said, llm, agent = run_job(tmp_path, calls, ["yes please"])
-    assert any("Don't type passwords" in s for s in llm.seen)
+    assert agent.job.typed_password == "hunter2" and "hunter2" not in " ".join(agent.job.steps)
     assert any("finishes something for real" in s for s in llm.seen)  # the first click was refused
     assert msg == "Booked court 2 at 18:00"
     assert said == ["Court 2 at 6pm for £8. Shall I book it?", "Booked court 2 at 6pm, £8."]
@@ -116,7 +116,33 @@ def test_logs_in_with_a_saved_login_without_claude_seeing_the_password(tmp_path)
         return text
     assert asyncio.run(go()) == "hi me@example.com ok"
     assert not any("s3cret" in str(x) for x in llm.seen)  # Claude never saw it
-    assert any("Filled in the saved login" in str(x) for x in llm.seen)
+    assert any("from the saved login for" in str(x) for x in llm.seen)
+
+
+def test_a_login_you_give_is_saved_for_next_time(tmp_path):
+    from buddy.logins import LoginStore
+    page = tmp_path / "login.html"
+    page.write_text(LOGIN)
+    store = LoginStore(tmp_path)
+    calls = [("open_url", {"url": page.as_uri()}), ("type_text", {"n": 1, "text": "me@school.org"}),
+             ("type_text", {"n": 2, "text": "s3cret!"}), ("click", {"n": 3}),
+             ("save_login", {"account": "School email"}), ("finish", {"summary": "Signed in."})]
+    llm = Script(calls)
+    agent = OnlineAgent({"online_on": True}, llm, Browser(tmp_path / "profile", visible=False))
+    agent.logins = store
+    agent.say = lambda t, l: asyncio.sleep(0)
+
+    async def go():
+        try:
+            await agent.browser.start()
+        except Exception as e:  # noqa: BLE001
+            pytest.skip(f"no browser here: {str(e)[:80]}")
+        agent.start("sign in")
+        await agent.job.task_handle
+        await agent.browser.close()
+    asyncio.run(go())
+    assert store.account("school email")[1] == {"email": "me@school.org", "password": "s3cret!"}
+    assert store.account("me@school.org")[0] == "school email"
 
 
 def test_saved_logins_match_the_site():

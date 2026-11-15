@@ -23,6 +23,7 @@ def site_of(text: str) -> str:
 class LoginStore:
     def __init__(self, data_dir: Path):
         self.path = Path(data_dir) / "web_logins.json"
+        self.accounts_path = Path(data_dir) / "web_accounts.json"
         self._lock = threading.Lock()
 
     def _read(self) -> dict:
@@ -31,12 +32,49 @@ class LoginStore:
         except (OSError, json.JSONDecodeError):
             return {}
 
-    def _write(self, data: dict) -> None:
-        self.path.write_text(json.dumps(data, indent=2))
+    def _write(self, data: dict, path: Path | None = None) -> None:
+        path = path or self.path
+        path.write_text(json.dumps(data, indent=2))
         try:
-            os.chmod(self.path, 0o600)
+            os.chmod(path, 0o600)
         except OSError:
             pass
+
+    # ---------- accounts: "school email", "home email"... (an email/username and its password) ----------
+    def accounts(self) -> dict:
+        try:
+            return json.loads(self.accounts_path.read_text())
+        except (OSError, json.JSONDecodeError):
+            return {}
+
+    def account_list(self, passwords: bool = False) -> list[dict]:
+        return [{"label": k, "email": v.get("email", ""), **({"password": v.get("password", "")} if passwords else
+                                                              {"has_password": bool(v.get("password"))})}
+                for k, v in sorted(self.accounts().items())]
+
+    def save_account(self, label: str, email: str = "", password: str = "") -> str:
+        label = re.sub(r"\s+", " ", (label or "").strip().lower())
+        if not label:
+            raise ValueError("Give the account a name, like school email.")
+        with self._lock:
+            data = self.accounts()
+            old = data.get(label, {})
+            data[label] = {"email": email.strip() or old.get("email", ""), "password": password or old.get("password", "")}
+            self._write(data, self.accounts_path)
+        return label
+
+    def remove_account(self, label: str) -> None:
+        with self._lock:
+            data = self.accounts()
+            data.pop((label or "").strip().lower(), None)
+            self._write(data, self.accounts_path)
+
+    def account(self, label_or_email: str) -> tuple[str, dict] | None:
+        q = (label_or_email or "").strip().lower()
+        for k, v in self.accounts().items():
+            if q in (k, v.get("email", "").lower()) or (q and q in k):
+                return k, v
+        return None
 
     def list(self) -> list[dict]:
         """Sites and usernames only (never passwords)."""

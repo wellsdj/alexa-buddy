@@ -225,7 +225,13 @@
         <legend>Website logins</legend>
         <p class="note"><b>Your Google account:</b> open Buddy's browser and sign in to Google once. From then on every site Buddy opens is signed in as you (and "Sign in with Google" just works).</p>
         <span class="row"><button class="btn small" id="browser-open" type="button">Open Buddy's browser to sign in</button></span>
-        <p class="note">When Buddy does a job online and a site asks you to log in, it uses these. They're saved only on this computer, and Buddy fills the password straight into the site: it never goes to Claude or the chat.</p>
+        <p class="note"><b>Your accounts</b>: name them (school email, home email…) and Buddy signs in with the right one, or asks which. Buddy also adds and updates these itself when you tell it, or after you give it a login.</p>
+        <div id="account-list"></div>
+        <label>Name <input id="acct-label" type="text" placeholder="e.g. school email" autocomplete="off"></label>
+        <label>Email or username <input id="acct-email" type="text" autocomplete="off"></label>
+        <label>Password <input id="acct-pass" type="password" autocomplete="new-password"></label>
+        <span class="row"><button class="btn primary small" id="acct-save" type="button">Save account</button></span>
+        <p class="note"><b>Logins for particular sites</b>. When Buddy does a job online and a site asks you to log in, it uses these. They're saved only on this computer, and Buddy fills the password straight into the site: it never goes to Claude or the chat.</p>
         <div id="login-list"></div>
         <label>Website <input id="login-site" type="text" placeholder="e.g. clubspark.lta.org.uk" autocomplete="off"></label>
         <label>Username or email <input id="login-user" type="text" autocomplete="off"></label>

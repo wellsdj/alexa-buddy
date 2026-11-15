@@ -847,6 +847,36 @@ function init() {
       } catch (e) { status.textContent = e.message; }
     };
     document.querySelector('[data-open="logins"]').addEventListener("click", refresh);
+    // Accounts (school email, home email...): edit in place, passwords shown only on request.
+    const alist = $("account-list");
+    const drawAccounts = (accounts) => {
+      alist.replaceChildren(...accounts.map((a) => {
+        const row = document.createElement("div");
+        row.className = "row";
+        const text = document.createElement("span");
+        text.textContent = `${a.label}: ${a.email || "(no email)"}${a.password ? " · password saved" : ""}`;
+        const edit = document.createElement("button");
+        edit.className = "btn small"; edit.type = "button"; edit.textContent = "Edit";
+        edit.onclick = () => { $("acct-label").value = a.label; $("acct-email").value = a.email; $("acct-pass").value = a.password || ""; };
+        const del = document.createElement("button");
+        del.className = "btn small"; del.type = "button"; del.textContent = "Remove";
+        del.onclick = async () => drawAccounts((await api(`/api/accounts/${encodeURIComponent(a.label)}`, { method: "DELETE" })).accounts);
+        row.append(text, edit, del);
+        return row;
+      }));
+      if (!accounts.length) alist.textContent = "No accounts saved yet.";
+    };
+    const refreshAccounts = async () => { try { drawAccounts((await api("/api/accounts")).accounts); } catch { /* offline */ } };
+    $("acct-save").onclick = async () => {
+      try {
+        const r = await api("/api/accounts", { method: "POST", body: { label: $("acct-label").value,
+          email: $("acct-email").value, password: $("acct-pass").value } });
+        ["acct-label", "acct-email", "acct-pass"].forEach((id) => { $(id).value = ""; });
+        status.textContent = `Saved your ${r.saved}.`;
+        drawAccounts(r.accounts);
+      } catch (e) { status.textContent = e.message; }
+    };
+    document.querySelector('[data-open="logins"]').addEventListener("click", refreshAccounts);
     $("browser-open").onclick = async () => {
       status.textContent = "Opening the browser on the Mac…";
       try {

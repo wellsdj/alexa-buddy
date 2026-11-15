@@ -6,8 +6,8 @@ the background while you carry on, and Buddy speaks up when it needs you or when
 
 Safety, enforced here in code (not just asked of Claude):
 - Anything final (book, pay, confirm, buy, submit, send...) needs a "yes" from you first, spoken.
-- It never types passwords or card numbers. When a site needs you to log in, Buddy asks you to do
-  it in the browser window on the Mac; the login is then remembered for next time.
+- Logins: it uses the ones saved on this Mac (per site, or your named accounts like "school email"),
+  or asks you for them and saves them once signing in works. It never types card or bank details.
 - At most 60 steps and 15 minutes per job, and you can say "stop" at any time.
 """
 from __future__ import annotations
@@ -76,6 +76,8 @@ class Job:
     question: str = ""
     result: str = ""
     topic: str = ""
+    typed_user: str = ""
+    typed_password: str = ""
     kind: str = ""  # e.g. school_homework: the result is also remembered
     allowed_final: int = 0  # final clicks you've said yes to
     answer: asyncio.Future | None = None
@@ -218,11 +220,15 @@ TOOLS = [
      "enter=true presses Enter after (e.g. for a search box).",
      "parameters": {"type": "object", "properties": {"n": {"type": "integer"}, "text": {"type": "string"},
                                                      "enter": {"type": "boolean"}}, "required": ["n", "text"]}}},
-    {"type": "function", "function": {"name": "fill_login", "description": "Log in with the user's saved login for "
-     "this site: fills box user_n with their username/email and box password_n with their password (you never see "
-     "it). Then click the log in button yourself.",
-     "parameters": {"type": "object", "properties": {"user_n": {"type": "integer"}, "password_n": {"type": "integer"}},
-                    "required": ["password_n"]}}},
+    {"type": "function", "function": {"name": "fill_login", "description": "Fill in a saved login: the one saved "
+     "for this site, or one of their accounts by name (account: e.g. \"school email\"). user_n: the email/username "
+     "box, password_n: the password box (either or both: sign-ins often ask on two pages). Then click next/log in.",
+     "parameters": {"type": "object", "properties": {"user_n": {"type": "integer"}, "password_n": {"type": "integer"},
+                                                     "account": {"type": "string"}}}}},
+    {"type": "function", "function": {"name": "save_login", "description": "After signing in worked with details "
+     "the user gave you, save them: for this site, and as one of their accounts if they named it (account: e.g. "
+     "\"school email\"). Saves the email/username and password you typed in this job.",
+     "parameters": {"type": "object", "properties": {"account": {"type": "string"}}}}},
     {"type": "function", "function": {"name": "choose", "description": "Pick an option in drop-down n.",
      "parameters": {"type": "object", "properties": {"n": {"type": "integer"}, "option": {"type": "string"}},
                     "required": ["n", "option"]}}},
@@ -270,11 +276,14 @@ different attempts, and then say exactly what you tried and what stopped you.
 final=true first, saying exactly what will happen and the price. Only after a yes, click it.
 - The browser is signed in to the user's Google account (if they've signed in to it once): use "Sign in with \
 Google" where a site offers it, and Google services (Gmail, Calendar, Drive) are already signed in.
-- Logging in: use fill_login (their saved login for that site). If there isn't one saved, use ask_user to ask \
-them to log in themselves in the browser window on their Mac (or save the login in Buddy's settings under \
-Website logins) and say "done". Logins stay remembered in this browser afterwards.
-- Never type passwords or card details yourself. If payment details are needed, ask them to fill those in \
-themselves in the browser window.
+- Logging in (the user is happy for you to handle their logins and passwords; it all stays on their own Mac):
+  1. A login saved for this site: fill_login.
+  2. Otherwise, their saved accounts: {accounts}. If it's obvious which (a school site: the school one), use it \
+with fill_login(account=...); if not, ask_user which one ("your school email or your home email?").
+  3. Nothing saved: ask_user for the email and password (they can say them out loud), type them in with \
+type_text, and once you're signed in, call save_login (with account= if they said which one it is, e.g. "school \
+email"), so next time it's automatic. Never read a password back out loud.
+- Card or bank details: don't type them; ask them to fill those in themselves in the browser window.
 - Don't accept extra paid add-ons, insurance or newsletters unless asked.
 - When finished, call finish with a short spoken summary (what, when, where, price, reference number if any).
 Today is {today}. The user's home: {home}. Who asked: {who}."""
@@ -382,8 +391,10 @@ class OnlineAgent:
                 self.on_busy(False)
 
     async def _loop(self, job: Job, today: str, home: str) -> None:
+        accts = self.logins.account_list() if self.logins else []
+        known = ", ".join(f"{a['label']} ({a['email']})" for a in accts) or "none yet"
         system = SYSTEM.format(today=today or time.strftime("%A %d %B %Y"), home=home or "unknown",
-                               who=job.who or "the user")
+                               who=job.who or "the user", accounts=known)
         messages: list[dict] = [{"role": "system", "content": system},
                                 {"role": "user", "content": f"The job: {job.task}"}]
         for _ in range(MAX_STEPS):
@@ -448,30 +459,66 @@ class OnlineAgent:
                 it = b.item(a.get("n", 0))
                 if not it:
                     return "No such number on the page: look again."
-                if "password" in it["kind"] or "password" in it["meta"].lower():
-                    return "Don't type passwords: use fill_login for this box."
+                is_pw = "password" in it["kind"] or "password" in it["meta"].lower()
                 if CARD.search(f"{it['label']} {it['meta']}"):
                     return ("Never type card or bank details. Use ask_user to ask them to fill those in themselves "
                             "in the browser window, then look again.")
-                job.steps.append(f"typed into {it['label'][:30]}")
-                await b.type(it["n"], str(a.get("text", "")), bool(a.get("enter")))
+                text = str(a.get("text", ""))
+                if is_pw:
+                    job.typed_password = text  # kept for save_login; never shown in the steps or logs
+                    job.steps.append("typed the password")
+                else:
+                    if re.search(r"email|user|login|identifier|account", f"{it['kind']} {it['meta']} {it['label']}", re.I):
+                        job.typed_user = text
+                    job.steps.append(f"typed into {it['label'][:30]}")
+                await b.type(it["n"], text, bool(a.get("enter")))
                 return await b.look()
+            if name == "save_login":
+                if not self.logins or not job.typed_password:
+                    return "Nothing to save: no password was typed in this job."
+                try:
+                    site = self.logins.save(b.page.url, job.typed_user, job.typed_password)
+                    note = f"Saved the login for {site}"
+                except ValueError:  # a page with no web address (e.g. a file)
+                    note = "Saved"
+                if a.get("account"):
+                    label = self.logins.save_account(a["account"], job.typed_user, job.typed_password)
+                    note += f' and as their "{label}"'
+                job.steps.append("saved the login")
+                return note + "."
             if name == "fill_login":
-                found = self.logins.find(b.page.url) if self.logins else None
-                if not found:
-                    return ("No saved login for this site. Use ask_user to ask them to log in themselves in the "
-                            "browser window on the Mac (or save it in Buddy's settings, Website logins), then look again.")
-                site, login = found
-                pw = b.item(a.get("password_n", 0))
-                if not pw or "password" not in f"{pw['kind']} {pw['meta']}".lower():
-                    return "password_n isn't a password box: look again."
+                if not self.logins:
+                    return "No saved logins."
+                if a.get("account"):
+                    found = self.logins.account(a["account"])
+                    login = {"username": found[1].get("email", ""), "password": found[1].get("password", "")} if found else None
+                    where = f'their "{found[0]}"' if found else ""
+                else:
+                    f = self.logins.find(b.page.url)
+                    login, where = (f[1], f"the saved login for {f[0]}") if f else (None, "")
+                if not login:
+                    return ("Nothing saved for that. Check their saved accounts, or ask_user for the email and "
+                            "password, type them in, and save_login once signed in.")
+                done = []
                 if a.get("user_n"):
                     if not b.item(a["user_n"]):
                         return "user_n isn't on the page: look again."
                     await b.type(a["user_n"], login.get("username", ""))
-                await b.type(pw["n"], login.get("password", ""))
-                job.steps.append(f"filled in the saved login for {site}")
-                return f"Filled in the saved login for {site} (username {login.get('username', '')}). Now click log in."
+                    job.typed_user = login.get("username", "")
+                    done.append(f"username {login.get('username', '')}")
+                if a.get("password_n"):
+                    pw = b.item(a["password_n"])
+                    if not pw or "password" not in f"{pw['kind']} {pw['meta']}".lower():
+                        return "password_n isn't a password box: look again."
+                    if not login.get("password"):
+                        return "There's no password saved for that: ask_user for it."
+                    await b.type(pw["n"], login["password"])
+                    job.typed_password = login["password"]
+                    done.append("the password")
+                if not done:
+                    return "Give user_n and/or password_n."
+                job.steps.append(f"filled in {where}")
+                return f"Filled in {' and '.join(done)} from {where}. Now click next or log in."
             if name == "choose":
                 it = b.item(a.get("n", 0))
                 if not it:

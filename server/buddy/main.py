@@ -516,6 +516,24 @@ def create_app(settings: Settings | None = None, http=None, claude_http=None, st
             raise HTTPException(400, str(e)) from e
         return {"saved": site, "logins": hub.logins.list()}
 
+    @app.get("/api/accounts")
+    async def get_accounts():
+        return {"accounts": hub.logins.account_list(passwords=True)}  # your own page, on your own Mac
+
+    @app.post("/api/accounts")
+    async def post_account(body: dict):
+        try:
+            label = hub.logins.save_account(str(body.get("label", "")), str(body.get("email", "")),
+                                            str(body.get("password", "")))
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+        return {"saved": label, "accounts": hub.logins.account_list(passwords=True)}
+
+    @app.delete("/api/accounts/{label}")
+    async def delete_account(label: str):
+        hub.logins.remove_account(label)
+        return {"accounts": hub.logins.account_list(passwords=True)}
+
     @app.post("/api/browser/open")
     async def open_browser():
         """Opens Buddy's browser on the Mac at Google's sign-in page, so you can sign in once."""
