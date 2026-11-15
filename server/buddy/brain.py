@@ -112,6 +112,7 @@ class Conversation:
     pending: dict | None = None
     clear_requested: float = 0.0
     dropped: list[str] = field(default_factory=list)
+    strays: list[float] = field(default_factory=list)  # when stray words were heard (for "I'll leave you to it")
     interrupted: str = ""  # the rest of an answer that got cut off, for "carry on"  # topics the user asked Buddy to leave alone
 
     def add(self, role: str, content: str, note: str = "", speaker: str = "") -> None:
@@ -357,6 +358,15 @@ What you remember about the user (numbers are ids for editing):
 {memories}"""
 
 
+# Words on their own that are almost never a request: heard by accident.
+STRAY_WORDS = {"um", "umm", "uh", "uhh", "er", "erm", "hmm", "hm", "mm", "mmm", "ah", "oh", "ooh", "okay", "ok",
+               "yeah", "yep", "right", "so", "well", "nice", "cool", "alright", "anyway", "huh", "the",
+               "and", "but", "i", "a", "like", "just", "yes", "no", "wow", "hey", "buddy", "lol", "haha", "ha"}
+# Buddy saying it's leaving them be: then it stops listening, rather than waiting for an answer.
+LEAVING = re.compile(r"\b(leave you to it|let you get on|i'?ll be here if|here if you need me|i'?ll leave you|"
+                     r"talk (to you )?later|catch you later|i'?ll let you go)\b", re.I)
+
+
 def speakable(text: str, limit: int = 900) -> str:
     t = re.sub(r"https?://\S+", "", text or "")
     t = re.sub(r"```.*?```", "", t, flags=re.S)
@@ -402,6 +412,8 @@ class Brain:
             return Reply("", intent="empty")
         ctx["said"] = text
         reply = await self._pending(text, conv, ctx)
+        if reply is None:
+            reply = self._stray(text, conv)
         if reply is None:
             intent = intents.match(text, self.now(), {"ringing": ctx.get("ringing"), "pager": conv.pager is not None})
             reply = await self._intent(intent, conv, ctx) if intent else None
@@ -449,8 +461,29 @@ class Brain:
             reply.follow_up = False
         if reply.intent == "off":
             reply.follow_up = False  # it's going to sleep: don't keep listening
+        if LEAVING.search(reply.text or ""):
+            reply.follow_up = False  # "I'll leave you to it": then it really does
         reply.ms = int((time.monotonic() - t0) * 1000)
         return reply
+
+    def _stray(self, text: str, conv: Conversation) -> Reply | None:
+        """A stray word ("um", "okay", "nice") that wasn't really for Buddy, when it hadn't asked anything:
+        the first time, "I'm here if you need me"; again soon after, "Sorry, I'll leave you to it". Either
+        way it stops listening."""
+        words = re.findall(r"[a-z']+", text.lower())
+        asked = (conv.last_reply or "").rstrip().endswith("?") and time.time() - conv.last_active < 30
+        if not words or len(words) > 2 or asked or conv.pending:
+            return None
+        if not all(w in STRAY_WORDS for w in words):
+            return None
+        now = time.time()
+        conv.strays = [t for t in conv.strays if now - t < 300] + [now]
+        if len(conv.strays) >= 2:
+            line = random.choice(["Oh, sorry. I'll leave you to it.", "Sorry, I'll leave you to it.",
+                                  "Oops, my mistake. I'll leave you to it."])
+        else:
+            line = random.choice(["I'm here if you need me.", "I'm here if you need me, just say."])
+        return Reply(line, intent="stray", follow_up=False)
 
     # ---------- things we were waiting for ----------
     async def _pending(self, text: str, conv: Conversation, ctx: dict) -> Reply | None:
