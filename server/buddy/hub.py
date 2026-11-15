@@ -693,6 +693,7 @@ class Session:
         leveller = Leveller()  # same loudness whichever voice spoke
         held = bytearray()  # the first bit of sound, collected before playing starts
         started_at = None  # the clock starts when the first sound is sent, not before the voice arrives
+        board_end = [0.0]  # when the board will have played all the sound sent so far
         timer = timing.current.get() if answer else None
 
         async def begin() -> int:
@@ -728,12 +729,18 @@ class Session:
                     self.hub.finish_timing(timer)
             for i in range(0, len(pcm), 3200):  # 100 ms frames
                 part = pcm[i:i + 3200]
-                ahead = sent / BYTES_PER_S - (time.monotonic() - started_at)
-                if ahead > lead:
-                    await asyncio.sleep(ahead - lead)
-                elif ahead < -0.05 and gaps is not None and sent:
-                    gaps.gaps += 1  # the sound ran out mid-answer: a pause the listener can hear
+                # When the board will have played everything sent so far. After a gap (the voice was
+                # slow to arrive) it restarts from now: sending the backlog all at once would overflow
+                # the board, which drops pieces and sounds rushed.
+                now = time.monotonic()
+                if board_end[0] < now:
+                    if sent and gaps is not None:
+                        gaps.gaps += 1  # the sound ran out mid-answer: a pause the listener can hear
+                    board_end[0] = now
+                if board_end[0] - now > lead:
+                    await asyncio.sleep(board_end[0] - now - lead)
                 await self.send_audio(seq, part)
+                board_end[0] += len(part) / BYTES_PER_S
                 sent += len(part)
                 if answer:
                     self.speaking_text = text_of()

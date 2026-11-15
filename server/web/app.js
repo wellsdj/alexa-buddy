@@ -847,6 +847,14 @@ function init() {
       } catch (e) { status.textContent = e.message; }
     };
     document.querySelector('[data-open="logins"]').addEventListener("click", refresh);
+    $("browser-open").onclick = async () => {
+      status.textContent = "Opening the browser on the Mac…";
+      try {
+        const r = await api("/api/browser/open", { method: "POST" });
+        status.textContent = "It's open on the Mac: sign in to Google there, then you can close this." +
+          (r.chrome ? "" : " (Google Chrome isn't installed, so it's the browser that came with Buddy.)");
+      } catch (e) { status.textContent = e.message; }
+    };
   }
 
   // Settings: a short menu of sections; tap one to see just that section, or search.

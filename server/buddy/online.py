@@ -90,6 +90,7 @@ class Browser:
         self._ctx = None
         self.page = None
         self.items: dict[int, dict] = {}
+        self.chrome = False
 
     async def start(self) -> None:
         if self.page is not None and not self.page.is_closed():
@@ -102,10 +103,31 @@ class Browser:
             self._pw = await async_playwright().start()
         if self._ctx is None:
             self.profile.mkdir(parents=True, exist_ok=True)
-            self._ctx = await self._pw.chromium.launch_persistent_context(
-                str(self.profile), headless=not self.visible, viewport={"width": 1280, "height": 860},
-                executable_path=os.environ.get("BUDDY_CHROMIUM") or None)
+            # Your real Google Chrome (not a bare test browser), with Buddy's own profile: sign in to your
+            # Google account in it once and every site Buddy opens is signed in as you from then on.
+            # Without the "being controlled" flags, Google lets you sign in.
+            opts = dict(headless=not self.visible, viewport={"width": 1280, "height": 860},
+                        ignore_default_args=["--enable-automation"],
+                        args=["--disable-blink-features=AutomationControlled"])
+            exe = os.environ.get("BUDDY_CHROMIUM")
+            try:
+                if exe:
+                    raise RuntimeError("test browser asked for")
+                self._ctx = await self._pw.chromium.launch_persistent_context(str(self.profile), channel="chrome",
+                                                                             **opts)
+                self.chrome = True
+            except Exception:  # noqa: BLE001 - Chrome not installed: the browser that came with Buddy
+                self._ctx = await self._pw.chromium.launch_persistent_context(str(self.profile),
+                                                                             executable_path=exe or None, **opts)
+                self.chrome = False
         self.page = self._ctx.pages[0] if self._ctx.pages else await self._ctx.new_page()
+
+    async def open_for_you(self, url: str = "https://accounts.google.com/") -> None:
+        """Open the browser window for you (to sign in to Google or a site). It stays signed in."""
+        self.visible = True
+        await self.start()
+        await self.page.goto(url, wait_until="domcontentloaded", timeout=30000)
+        await self.page.bring_to_front()
 
     async def close(self) -> None:
         try:
@@ -242,6 +264,8 @@ different attempts, and then say exactly what you tried and what stopped you.
 (e.g. which of several times) or something is missing.
 - Anything that commits them (booking, paying, ordering, sending, signing up, cancelling) needs ask_user with \
 final=true first, saying exactly what will happen and the price. Only after a yes, click it.
+- The browser is signed in to the user's Google account (if they've signed in to it once): use "Sign in with \
+Google" where a site offers it, and Google services (Gmail, Calendar, Drive) are already signed in.
 - Logging in: use fill_login (their saved login for that site). If there isn't one saved, use ask_user to ask \
 them to log in themselves in the browser window on their Mac (or save the login in Buddy's settings under \
 Website logins) and say "done". Logins stay remembered in this browser afterwards.

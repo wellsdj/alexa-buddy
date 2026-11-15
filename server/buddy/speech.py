@@ -78,7 +78,7 @@ class LiveVoice:
             "voice_settings": {"stability": 0.45, "similarity_boost": 0.8, "style": 0.0, "use_speaker_boost": True,
                                "speed": float(s["voice_speed"])},
             # Start making sound after 50 characters instead of the default 120: sooner first sound.
-            "generation_config": {"chunk_length_schedule": [50, 90, 120, 160]},
+            "generation_config": {"chunk_length_schedule": [80, 120, 200, 260]},
         }))
         self.opened_at = time.monotonic()
 

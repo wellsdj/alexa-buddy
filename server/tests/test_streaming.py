@@ -193,8 +193,8 @@ def test_live_voice_talks_to_elevenlabs_the_documented_way(settings, monkeypatch
     assert sum(len(c) for c in chunks) == 2 * 1600 and sp.engine == "elevenlabs live"
     headers, init, first, second, close = got
     assert headers["xi-api-key"] == "xi-test"
-    assert init["text"] == " " and init["generation_config"]["chunk_length_schedule"][0] == 50
-    assert init["voice_settings"]["speed"] == 1.0
+    assert init["text"] == " " and init["generation_config"]["chunk_length_schedule"][0] == 80
+    assert init["voice_settings"]["speed"] == 0.9  # a calmer default
     assert first == {"text": "Hello there. ", "flush": True} and second == {"text": "How are you? "}
     assert close == {"text": ""}
 
@@ -303,3 +303,29 @@ def test_buddys_own_voice_doesnt_interrupt_it(settings):
 
     asyncio.run(run())
     assert s.state == "speaking" and not any(m["type"] == "stop_audio" for m in board.msgs)
+
+
+def test_after_a_gap_the_backlog_isnt_dumped_on_the_board(settings):
+    """The voice stalls, then a lot arrives at once: it must still go out at speaking pace."""
+    import time as _t
+    from tests.test_quiet_wake import setup
+    hub, s, ws, spoken = setup(settings, "")
+    sent_at = []
+    real = s.send_audio
+
+    async def spy(seq, part):
+        sent_at.append(_t.monotonic())
+        await real(seq, part)
+    s.send_audio = spy
+
+    async def voice():
+        yield b"\0" * 3200 * 4  # 0.4 s
+        await asyncio.sleep(0.6)  # stalls: the board runs dry
+        yield b"\0" * 3200 * 20  # then 2 s at once
+
+    async def run():
+        await s._play(voice(), lambda: "hi", lambda: False, "idle", hold_s=0.05, engine=lambda: "x")
+    asyncio.run(run())
+    burst = [t for t in sent_at[4:]]
+    # with a 0.8 s lead, 2 s of sound can't all be sent within the first 0.5 s after it arrives
+    assert burst[-1] - burst[0] > 0.9

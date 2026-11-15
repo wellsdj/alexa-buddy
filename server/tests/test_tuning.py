@@ -31,12 +31,12 @@ def test_nothing_secret_is_shown(settings):
 
 def test_buddy_changes_a_setting_when_asked(settings, apis, claude):
     brain = make_brain(settings, apis, claude)
-    claude.script = [claude_message(claude_tool("change_setting", {"name": "voice_speed", "value": "0.9"})),
+    claude.script = [claude_message(claude_tool("change_setting", {"name": "voice_speed", "value": "0.8"})),
                      claude_message(claude_text("Done, I'll talk a bit slower."))]
     r = asyncio.run(brain.handle("can you talk a bit slower", Conversation()))
-    assert settings["voice_speed"] == 0.9 and r.text == "Done, I'll talk a bit slower."
+    assert settings["voice_speed"] == 0.8 and r.text == "Done, I'll talk a bit slower."
     result = claude.requests[1]["messages"][-1]["content"][0]["content"]
-    assert "from 1.0 to 0.9" in result
+    assert "from 0.9 to 0.8" in result
 
 
 def test_buddy_can_see_how_its_doing(settings, apis, claude):

@@ -21,7 +21,7 @@ load_dotenv(ROOT / ".env")
 # in the room was meant for Buddy. Groq retires models regularly, so its model names are
 # preferences, not hard requirements: llm.py checks what the account can actually see.
 DEFAULTS: dict[str, Any] = {
-    "settings_version": 2,
+    "settings_version": 3,
     "assistant_name": "Buddy",
     "user_name": "",
     "location_name": "Richmond, London",
@@ -49,7 +49,7 @@ DEFAULTS: dict[str, Any] = {
     "reword_replies": True,  # quick replies (timers, weather...) said in Claude's own words, not word-for-word
     "voices": [],  # up to 8 of {"name": ..., "id": ...}; "change your voice" cycles through them
     "elevenlabs_model": "eleven_flash_v2_5",
-    "voice_speed": 1.0,
+    "voice_speed": 0.9,
     "piper_voice": "",  # path to a Piper .onnx voice; empty = first one found in data/voices
     "wake_threshold": 0.5,
     "wake_verify_threshold": 0.15,
@@ -61,7 +61,7 @@ DEFAULTS: dict[str, Any] = {
     "listen_sensitivity": 0.3,
     "timing_log": True,
     "stream_replies": True,  # speak Claude's answer while it's still being written (off: wait for all of it)
-    "play_hold_ms": 200,  # sound collected before Buddy starts playing a streamed answer (raise if it stutters)
+    "play_hold_ms": 350,  # sound collected before Buddy starts playing a streamed answer (raise if it stutters)
     "warm_connections": True,
     "fast_haiku": True,
     "online_on": True,  # Buddy can do jobs on websites (booking etc.), asking before anything final
@@ -111,6 +111,13 @@ class Settings:
                     # Version 2: a proper back-and-forth. Buddy keeps listening after every answer, and only
                     # "hey buddy" cuts it off (talking over it let its own voice stop it).
                     target.update({"follow_up": "always", "barge_in": False, "settings_version": 2})
+                if target is self._values and int(target.get("settings_version", 1)) < 3:
+                    # Version 3: a calmer voice (it was too quick to follow) and a little more sound
+                    # collected before speaking, so streamed answers don't stop and start.
+                    if float(target.get("voice_speed", 1.0)) >= 1.0:
+                        target["voice_speed"] = 0.9
+                    target["play_hold_ms"] = max(int(target.get("play_hold_ms", 200)), 350)
+                    target["settings_version"] = 3
 
     def __getitem__(self, key: str) -> Any:
         with self._lock:
