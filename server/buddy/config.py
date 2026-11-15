@@ -66,7 +66,7 @@ DEFAULTS: dict[str, Any] = {
     "fast_haiku": True,
     "online_on": True,  # Buddy can do jobs on websites (booking etc.), asking before anything final
     "online_show_browser": True,  # show the browser window on the Mac (so you can log in and watch)
-    "school_portal_url": "",  # their school's Bromcom login page (empty: Buddy finds it)
+    "school_portal_url": "https://www.bromcomvle.com/",  # their school's Bromcom login page
     "school_name": "",  # helps Buddy find the right Bromcom login
     "echo_cancel": True,  # the board takes Buddy's own voice out of the mic (firmware 1.7.0+)
     "sound_effects": True,  # switch-on, "hey buddy" heard, and "didn't hear anything" sounds

@@ -1,5 +1,6 @@
 """A quiet "hey buddy": it must be checked and answered, and a quiet voice afterwards must still count."""
 import asyncio
+import re
 
 import numpy as np
 
@@ -30,7 +31,7 @@ def test_a_soft_hey_buddy_that_checks_out_gets_answered(settings):
     # This used to crash (a missing line in hub.py), so nothing happened at all.
     hub, s, ws, spoken = setup(settings, "Hey buddy, what time is it?")
     asyncio.run(hub.process_audio(s, np.zeros(32000, np.int16), 1.5, silent="wake"))
-    assert spoken and ":" in spoken[0]  # it said the time
+    assert spoken and re.search(r"\d( AM| PM|:)", spoken[0])  # it said the time
     assert any(e["event"] == "wake_verified" for e in hub.log)
 
 
@@ -73,14 +74,14 @@ def test_words_are_written_down_at_the_first_pause(settings):
     hub, s, ws, spoken = setup(settings, "what time is it")
     listen(hub, s, [0.9] * 30 + [0.05] * 25)  # talk, then stop
     assert len(hub.stt.apis.stt_requests) == 1  # the early one was used: no second go
-    assert spoken and ":" in spoken[0]
+    assert spoken and re.search(r"\d( AM| PM|:)", spoken[0])
 
 
 def test_carrying_on_after_a_pause_throws_the_early_words_away(settings):
     hub, s, ws, spoken = setup(settings, "what time")
     hub.stt.apis.transcripts.append("what time is it")
     listen(hub, s, [0.9] * 20 + [0.05] * 10 + [0.9] * 20 + [0.05] * 25)  # a pause mid-sentence
-    assert spoken and ":" in spoken[0]  # the whole sentence was answered, not "what time"
+    assert spoken and re.search(r"\d( AM| PM|:)", spoken[0])  # the whole sentence was answered, not "what time"
 
 
 def sounds(ws):

@@ -1304,6 +1304,7 @@ class Hub:
         if not targets:
             return
         s = targets[0]
+        await self._until_awake()  # told "off": nothing until they say "hey buddy" again
         for _ in range(200):  # don't talk over a conversation: wait until Buddy's free (up to a minute)
             if s.state == "idle" and not s.turn_running:
                 break
@@ -1313,6 +1314,10 @@ class Hub:
         self.conv.add("assistant", text, "(said while doing a job online)")
         await self.broadcast_ui({"type": "event", "kind": "transcript", "session": s.id, "role": "assistant", "text": text})
         await s.speak(text, then_listen=listen)
+
+    async def _until_awake(self) -> None:
+        while not self.awake:
+            await asyncio.sleep(0.5)
 
     async def online_report(self, job) -> None:
         """A job finished. Don't cut into a conversation: once it's gone quiet, offer the result."""
@@ -1324,6 +1329,7 @@ class Hub:
         if not targets:
             return
         s = targets[0]
+        await self._until_awake()  # told "off": it keeps the result until they say "hey buddy" again
         for _ in range(2000):  # up to 10 minutes
             quiet_for = time.time() - (self.last_spoke_at or 0)
             if s.state == "idle" and not s.turn_running and not self.conv.pending and quiet_for > 4:

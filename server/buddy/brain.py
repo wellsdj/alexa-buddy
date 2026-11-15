@@ -332,6 +332,8 @@ save_account. Then going online signs in with them by itself.
 - Their school portal, Bromcom: homework coming up and what their day is (school). If they ask you to keep them \
 on top of homework, check it, then set reminders for each piece before it's due.
 - Recognise people by voice, carry on after being interrupted, think harder about tricky things (think_harder).
+Names you hear are approximate (speech-to-text): use common sense ("Broncom" is Bromcom) and never ask them to \
+spell out a site, address or name: the online helper works it out.
 Be persistent: if one way doesn't work, try another (a different search, another site, a different tool) before \
 saying you couldn't, and then say what you tried.
 Tools:
@@ -749,7 +751,10 @@ class Brain:
             "timetable": "Find the timetable (the day they asked about, or this week): lessons with times and rooms.",
             "other": "Find what they asked about.",
         }
-        return (f"On the user's school portal: {portal}. Sign in with the school account (use 'Sign in with Google' "
+        accts = self.online.logins.account_list() if self.online and self.online.logins else []
+        school = next((a for a in accts if re.search(r"school|bromcom|\.sch\.|\.school\b", f"{a['label']} {a['email']}", re.I)), None)
+        acct = f" Their school account is {school['email']} (saved as \"{school['label']}\")." if school else ""
+        return (f"On the user's school portal: {portal}.{acct} Sign in with the school account (use 'Sign in with Google' "
                 "or 'Sign in with Microsoft' if offered: the school account may already be signed in to this browser; "
                 "if it asks for an email or password, use fill_login with their school account, or ask_user for them and "
                 f"save_login as their \"school email\" once it works). {jobs.get(what, jobs['other'])} {detail}".strip()

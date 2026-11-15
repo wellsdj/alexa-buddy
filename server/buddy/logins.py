@@ -105,4 +105,9 @@ class LoginStore:
             if host == s or host.endswith("." + s) or s.endswith("." + host):
                 if best is None or len(s) > len(best[0]):
                     best = (s, v)
+        if best is None:  # an account named after the site ("bromcomvle.com")
+            for label, v in self.accounts().items():
+                s = site_of(label) if "." in label else ""
+                if s and (host == s or host.endswith("." + s)):
+                    return s, {"username": v.get("email", ""), "password": v.get("password", "")}
         return best
