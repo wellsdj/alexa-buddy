@@ -66,6 +66,8 @@ DEFAULTS: dict[str, Any] = {
     "fast_haiku": True,
     "online_on": True,  # Buddy can do jobs on websites (booking etc.), asking before anything final
     "online_show_browser": True,  # show the browser window on the Mac (so you can log in and watch)
+    "school_portal_url": "",  # their school's Bromcom login page (empty: Buddy finds it)
+    "school_name": "",  # helps Buddy find the right Bromcom login
     "echo_cancel": True,  # the board takes Buddy's own voice out of the mic (firmware 1.7.0+)
     "sound_effects": True,  # switch-on, "hey buddy" heard, and "didn't hear anything" sounds
     "barge_in": False,  # just talking over Buddy stops it (off: its own voice could do it too; "hey buddy" always works)  # everyday answers: no thinking first, short cached instructions, 1-2 sentences  # connect to Claude and the voice as soon as "hey buddy" is heard  # sound collected before Buddy starts playing a streamed answer  # one line per spoken turn with how long each stage took (data/timings.jsonl)

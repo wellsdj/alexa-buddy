@@ -929,6 +929,7 @@ class Hub:
         from .online import OnlineAgent
         self.online = OnlineAgent(settings, self.brain.llm)
         self.online.say = self.online_say
+        self.online.report = self.online_report
         from .logins import LoginStore
         self.logins = LoginStore(settings.data_dir)
         self.online.logins = self.logins
@@ -1312,6 +1313,29 @@ class Hub:
         self.conv.add("assistant", text, "(said while doing a job online)")
         await self.broadcast_ui({"type": "event", "kind": "transcript", "session": s.id, "role": "assistant", "text": text})
         await s.speak(text, then_listen=listen)
+
+    async def online_report(self, job) -> None:
+        """A job finished. Don't cut into a conversation: once it's gone quiet, offer the result."""
+        if job.status == "done" and job.kind == "school_homework" and job.result:
+            # Remembered, so Buddy can keep them on top of it later ("what homework have I got?")
+            self.memory.add(f"Homework from Bromcom, checked {time.strftime('%a %d %b')}: {job.result}",
+                            "plans", source="learned")
+        targets = self.devices() or [x for x in self.sessions.values() if x.role == "ui"]
+        if not targets:
+            return
+        s = targets[0]
+        for _ in range(2000):  # up to 10 minutes
+            quiet_for = time.time() - (self.last_spoke_at or 0)
+            if s.state == "idle" and not s.turn_running and not self.conv.pending and quiet_for > 4:
+                break
+            await asyncio.sleep(0.3)
+        what = job.topic or "that job"
+        line = (f"By the way, I've got {what}. Want to hear it?" if job.status == "done"
+                else f"By the way, I couldn't quite manage {what}. Want to hear what happened?")
+        self.conv.pending = {"intent": "online_report", "text": job.result}
+        self.conv.add("assistant", line, "(the online job finished; offering the result)")
+        await self.broadcast_ui({"type": "event", "kind": "transcript", "session": s.id, "role": "assistant", "text": line})
+        await s.speak(line, then_listen=True)
 
     async def announce(self, s: Session, text: str) -> None:
         """Speak something that isn't a reply to what was just said, and show it in the chat."""

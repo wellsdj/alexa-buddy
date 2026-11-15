@@ -75,6 +75,8 @@ class Job:
     steps: list[str] = field(default_factory=list)
     question: str = ""
     result: str = ""
+    topic: str = ""
+    kind: str = ""  # e.g. school_homework: the result is also remembered
     allowed_final: int = 0  # final clicks you've said yes to
     answer: asyncio.Future | None = None
     task_handle: asyncio.Task | None = None
@@ -235,8 +237,10 @@ TOOLS = [
      "parameters": {"type": "object", "properties": {"question": {"type": "string"}, "final": {"type": "boolean"}},
                     "required": ["question"]}}},
     {"type": "function", "function": {"name": "finish", "description": "The job is done (or can't be done). summary: "
-     "one or two spoken sentences for the user saying what happened, with the important details.",
-     "parameters": {"type": "object", "properties": {"summary": {"type": "string"}, "success": {"type": "boolean"}},
+     "what you found or did, spoken, with the important details (a few sentences at most). topic: what it was "
+     "about in 2-4 words, e.g. \"your emails\" or \"the tennis courts\".",
+     "parameters": {"type": "object", "properties": {"summary": {"type": "string"}, "topic": {"type": "string"},
+                                                     "success": {"type": "boolean"}},
                     "required": ["summary"]}}},
 ]
 
@@ -292,6 +296,7 @@ class OnlineAgent:
         self.job: Job | None = None
         self.say = None  # async (text, wait_for_answer: bool): the hub speaks it out loud
         self.logins = None  # LoginStore: saved website logins (passwords never go to Claude)
+        self.report = None  # async (job): the hub offers the result when you're free
         self.on_busy = None  # (bool): a job started / ended (the board shows a slow pink light)
         self.history: list[Job] = []
 
@@ -303,12 +308,12 @@ class OnlineAgent:
     def waiting(self) -> bool:
         return self.job is not None and self.job.status == "waiting"
 
-    def start(self, task: str, who: str = "", today: str = "", home: str = "") -> str:
+    def start(self, task: str, who: str = "", today: str = "", home: str = "", kind: str = "") -> str:
         if not self.settings.get("online_on", True):
             return "Going online to do things is switched off in Settings (online_on)."
         if self.busy:
             return f"Already busy with: {self.job.task}. Say stop first if you want something else."
-        self.job = Job(task=task, who=who)
+        self.job = Job(task=task, who=who, kind=kind)
         self.job.task_handle = asyncio.create_task(self._run(self.job, today, home))
         if self.on_busy:
             self.on_busy(True)
@@ -490,7 +495,11 @@ class OnlineAgent:
                 job.result = str(a.get("summary", "")).strip() or "Done."
                 job.status = "done" if a.get("success", True) else "failed"
                 job.steps.append("finished")
-                await self._speak(job.result)
+                job.topic = str(a.get("topic", "")).strip()[:40]
+                if self.report:
+                    await self.report(job)  # told when the conversation's over, not over the top of it
+                else:
+                    await self._speak(job.result)
                 return "ok"
         except Exception as e:  # noqa: BLE001 - a page error goes back to Claude to try another way
             return f"That didn't work: {str(e).splitlines()[0][:200]}. Look again and try another way."

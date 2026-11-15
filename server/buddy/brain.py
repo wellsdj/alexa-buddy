@@ -242,6 +242,13 @@ TOOLS = [
         "It asks them before anything final and reports back when done.",
         "parameters": {"type": "object", "properties": {"task": {"type": "string"}}, "required": ["task"]}}},
     {"type": "function", "function": {
+        "name": "school", "description": "Check the user's school portal (Bromcom) online: homework coming up, "
+        "what their day/timetable is today or another day, or anything else on it. Runs in the background and "
+        "reports back. what: homework | today | timetable | other. detail: anything specific they asked.",
+        "parameters": {"type": "object", "properties": {
+            "what": {"type": "string", "enum": ["homework", "today", "timetable", "other"]},
+            "detail": {"type": "string"}}, "required": ["what"]}}},
+    {"type": "function", "function": {
         "name": "online_job", "description": "How the job you're doing online is going (status), or stop it.",
         "parameters": {"type": "object", "properties": {"action": {"type": "string", "enum": ["status", "stop"]}},
                        "required": ["action"]}}},
@@ -313,6 +320,8 @@ It runs in the background and asks before anything final.
 - Change the Wi-Fi of your desk unit, with the password spelt out (wifi).
 - Look at and change your own settings, and say how fast you're answering (get_settings, change_setting).
 - Study Buddy: how their revising is going (study_progress).
+- Their school portal, Bromcom: homework coming up and what their day is (school). If they ask you to keep them \
+on top of homework, check it, then set reminders for each piece before it's due.
 - Recognise people by voice, carry on after being interrupted, think harder about tricky things (think_harder).
 Be persistent: if one way doesn't work, try another (a different search, another site, a different tool) before \
 saying you couldn't, and then say what you tried.
@@ -450,6 +459,13 @@ class Brain:
             return None
         if p.get("intent") == "wifi_pass":
             return await self._wifi_password(text, conv, p)
+        if p.get("intent") == "online_report":
+            if re.search(r"\b(yes|yeah|yep|sure|go on|go ahead|please|okay|ok|tell me|what is it|what did you find)\b",
+                         text, re.I) and not re.search(r"\b(no|not now|later)\b", text, re.I):
+                return Reply(p["text"], intent="online")
+            if re.search(r"\b(no|nope|not now|later|nah)\b", text, re.I):
+                return Reply("No problem, just ask me when you want it.", intent="online")
+            return None  # something else: answer that (they can ask how the job went any time)
         if p.get("intent") == "online_answer" and self.online and self.online.waiting:
             if re.search(r"\b(stop|cancel|forget it|never mind)\b", text, re.I) and not re.search(
                     r"\b(cancel(ling)? (the|my) (booking|order))\b", text, re.I):
@@ -681,6 +697,23 @@ class Brain:
                      "information on that. I'd rather not guess.", reply.actions, model=reply.model, intent="llm")
 
     # ---------- Wi-Fi by voice ----------
+    def _school_task(self, what: str, detail: str) -> str:
+        portal = self.settings["school_portal_url"] or "the Bromcom student portal (search for the Bromcom " \
+            "student login" + (f" for {self.settings['school_name']}" if self.settings["school_name"] else "") + ")"
+        jobs = {
+            "homework": "Find all homework that's set and not handed in yet: for each, the subject, what to do, "
+                        "the due date and whether it's been submitted. Soonest first.",
+            "today": f"Find today's ({self.now():%A %d %B}) timetable: each lesson in order with the time, subject, "
+                     "teacher and room, plus any homework due today.",
+            "timetable": "Find the timetable (the day they asked about, or this week): lessons with times and rooms.",
+            "other": "Find what they asked about.",
+        }
+        return (f"On the user's school portal: {portal}. Sign in with the school account (use 'Sign in with Google' "
+                "or 'Sign in with Microsoft' if offered: the school account may already be signed in to this browser; "
+                "if it asks for a password, use fill_login, or ask them to sign in themselves in the browser window "
+                f"and say done). {jobs.get(what, jobs['other'])} {detail}".strip()
+                + " In the summary, say it like a friend would, briefly, most urgent first.")
+
     async def _wifi_tool(self, a: dict, conv: Conversation) -> tuple[str, str, list]:
         if self.wifi is None or not self.wifi.devices():
             return "The desk unit isn't connected, so its Wi-Fi can't be changed right now.", "", []
@@ -1127,6 +1160,17 @@ class Brain:
                                           "Okay, I'll sort that online and let you know.",
                                           "Leave it with me, I'll come back to you."])
                     return "started in the background; say only the confirmation", line, []
+                return r, "", []
+            if name == "school":
+                if not self.online:
+                    return "going online isn't available", "", []
+                r = self.online.start(self._school_task(a.get("what", "homework"), a.get("detail", "")),
+                                      who=ctx.get("speaker", ""), today=self.now().strftime("%A %d %B %Y"),
+                                      home=self.settings["location_name"] or "", kind=f"school_{a.get('what', 'other')}")
+                if r == "started":
+                    return "started in the background; say only the confirmation", random.choice([
+                        "On it, I'll have a look at Bromcom and come back to you.",
+                        "Okay, checking your school portal now. I'll tell you what I find."]), []
                 return r, "", []
             if name == "online_job":
                 if not self.online:
