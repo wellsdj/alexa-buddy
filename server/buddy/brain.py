@@ -249,6 +249,12 @@ TOOLS = [
         "parameters": {"type": "object", "properties": {"label": {"type": "string"}, "email": {"type": "string"},
                                                         "password": {"type": "string"}}, "required": ["label"]}}},
     {"type": "function", "function": {
+        "name": "timetable", "description": "Their school timetable (Week A / Week B), instantly, no going online: "
+        "what lessons they have on a day. day: today, tomorrow, a weekday name, or YYYY-MM-DD. this_week: set only "
+        "when they tell you whether this week is week A or week B.",
+        "parameters": {"type": "object", "properties": {"day": {"type": "string"},
+                                                        "this_week": {"type": "string", "enum": ["A", "B"]}}}}},
+    {"type": "function", "function": {
         "name": "school", "description": "Check the user's school portal (Bromcom) online: homework coming up, "
         "what their day/timetable is today or another day, or anything else on it. Runs in the background and "
         "reports back. what: homework | today | timetable | other. detail: anything specific they asked.",
@@ -329,6 +335,8 @@ It runs in the background and asks before anything final.
 - Study Buddy: how their revising is going (study_progress).
 - Remember their accounts for signing in to sites ("my school email is ...", with the password if they say it): \
 save_account. Then going online signs in with them by itself.
+- Their school timetable, Week A and Week B (timetable): instant, use it for "what's my day" and "what have I \
+got tomorrow". Use the school portal only for homework or if no timetable is saved.
 - Their school portal, Bromcom: homework coming up and what their day is (school). If they ask you to keep them \
 on top of homework, check it, then set reminders for each piece before it's due.
 - Recognise people by voice, carry on after being interrupted, think harder about tricky things (think_harder).
@@ -1207,6 +1215,12 @@ class Brain:
                                           "Leave it with me, I'll come back to you."])
                     return "started in the background; say only the confirmation", line, []
                 return r, "", []
+            if name == "timetable":
+                from .timetable import Timetable, which_day
+                tt = Timetable(self.settings.data_dir)
+                if a.get("this_week"):
+                    tt.set_this_week(a["this_week"], self.now().date())
+                return tt.spoken(which_day(a.get("day", "today"), self.now())), "", []
             if name == "save_account":
                 if not self.online or not self.online.logins:
                     return "not available", "", []

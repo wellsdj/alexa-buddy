@@ -819,6 +819,48 @@ function init() {
     document.querySelector('[data-open="studyweb"]').addEventListener("click", refresh);
   }
 
+  // Timetable: Week A / Week B photos, read by Buddy.
+  {
+    const status = $("tt-status"), view = $("tt-view");
+    const draw = (data) => {
+      $("tt-this").value = data.this_week || "";
+      view.replaceChildren(...["A", "B"].filter((w) => data.weeks?.[w]).map((w) => {
+        const box = document.createElement("div");
+        const h = document.createElement("p");
+        h.innerHTML = `<b>Week ${w}</b>`;
+        box.append(h);
+        for (const [day, lessons] of Object.entries(data.weeks[w])) {
+          const p = document.createElement("p");
+          p.className = "note";
+          p.textContent = `${day}: ` + (lessons.map((l) => `${l.start || ""} ${l.subject}${l.room ? " (" + l.room + ")" : ""}`.trim()).join(", ") || "nothing");
+          box.append(p);
+        }
+        return box;
+      }));
+    };
+    const refresh = async () => { try { draw(await api("/api/timetable")); } catch { /* offline */ } };
+    const upload = (week) => async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      status.textContent = `Reading Week ${week}… (about 20 seconds)`;
+      const image = await new Promise((ok) => { const r = new FileReader(); r.onload = () => ok(r.result.split(",")[1]); r.readAsDataURL(file); });
+      try {
+        await api("/api/timetable/photo", { method: "POST", body: { week, image, type: file.type || "image/jpeg" } });
+        status.textContent = `Got Week ${week}. Check it below.`;
+        refresh();
+      } catch (err) { status.textContent = err.message; }
+      e.target.value = "";
+    };
+    $("tt-a").onchange = upload("A");
+    $("tt-b").onchange = upload("B");
+    $("tt-this").onchange = async () => {
+      if (!$("tt-this").value) return;
+      await api("/api/timetable/this_week", { method: "POST", body: { week: $("tt-this").value } });
+      status.textContent = `Okay: this week is Week ${$("tt-this").value}, and it alternates from there.`;
+    };
+    document.querySelector('[data-open="timetable"]').addEventListener("click", refresh);
+  }
+
   // Website logins for Buddy's online jobs: list (no passwords), add, remove.
   {
     const list = $("login-list"), status = $("login-status");

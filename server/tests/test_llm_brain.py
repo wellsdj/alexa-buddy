@@ -226,4 +226,4 @@ def test_quick_prompt_is_short_and_split_for_caching(settings, apis, claude):
     system = claude.requests[0]["system"]
     assert system[0]["cache_control"] == {"type": "ephemeral"} and "Now:" not in system[0]["text"]
     assert "Now:" in system[1]["text"] and "#1 Allergic to peanuts." in system[1]["text"]
-    assert len(system[0]["text"]) < 4500  # the unchanging part is cached, so a list of skills is cheap
+    assert len(system[0]["text"]) < 6000  # the unchanging part is cached, so a list of skills is cheap

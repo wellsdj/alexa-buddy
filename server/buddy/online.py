@@ -25,7 +25,7 @@ log = logging.getLogger("buddy.online")
 
 MAX_STEPS = 60
 MAX_SECONDS = 15 * 60
-PAGE_TEXT = 6000  # characters of page text Claude sees per look
+PAGE_TEXT = 4500  # characters of page text Claude sees per look
 
 # Clicking one of these finishes something for real: it needs a spoken yes first.
 FINAL = re.compile(r"\b(book|booking|reserve|confirm|pay|payment|purchase|buy|order|checkout|check out|submit|"
@@ -151,7 +151,7 @@ class Browser:
 
     async def _settle(self) -> None:
         try:
-            await self.page.wait_for_load_state("networkidle", timeout=4000)
+            await self.page.wait_for_load_state("networkidle", timeout=1500)
         except Exception:  # noqa: BLE001 - busy pages never go idle; carry on
             pass
 
@@ -279,6 +279,8 @@ their area to the search when it's about somewhere local.
 search engine, or a different page on the site.
 
 How to work:
+- Be quick: when you know the next few steps, do them in one go (e.g. type the email, type the password and click \
+next as three tool calls in the same turn).
 - Prefer the site's own buttons and forms. If something doesn't work, look again, scroll, or try another way.
 - Be persistent: keep going until the job is really done. Only finish without success after several genuinely \
 different attempts, and then say exactly what you tried and what stopped you.
@@ -407,12 +409,18 @@ class OnlineAgent:
         known = ", ".join(f"{a['label']} ({a['email']})" for a in accts) or "none yet"
         system = SYSTEM.format(today=today or time.strftime("%A %d %B %Y"), home=home or "unknown",
                                who=job.who or "the user", accounts=known)
-        messages: list[dict] = [{"role": "system", "content": system},
-                                {"role": "user", "content": f"The job: {job.task}"}]
+        start = f"The job: {job.task}"
+        shortcut = self.shortcuts().get(job.kind) if job.kind else None
+        if shortcut:
+            start += (f"\n\nLast time a job like this ended up at {shortcut}: open that first (you're probably "
+                      "still signed in), and only go the long way round if it doesn't work.")
+        messages: list[dict] = [{"role": "system", "content": system}, {"role": "user", "content": start}]
+        # The quick model for each step (much faster); the bigger one takes over if it keeps getting stuck.
+        tier, stuck = "fast", 0
         for _ in range(MAX_STEPS):
             if job.status == "stopped":
                 return
-            res = await self.llm.chat(messages, tier="smart", tools=TOOLS, max_tokens=1200)
+            res = await self.llm.chat(messages, tier=tier, tools=TOOLS, max_tokens=1200)
             if not res.tool_calls:
                 messages.append({"role": "assistant", "content": res.content or "..."})
                 messages.append({"role": "user", "content": "Use the tools: carry on with the job, or call finish."})
@@ -422,11 +430,36 @@ class OnlineAgent:
                 name, a = call["function"]["name"], _args(call)
                 result = await self._tool(job, name, a)
                 if job.status in ("done", "stopped"):
+                    if job.status == "done" and job.kind and self.browser.page is not None:
+                        self.save_shortcut(job.kind, self.browser.page.url)
                     return
+                if result.startswith(("That didn't work", "No such number", "Nothing saved", "unknown tool")):
+                    stuck += 1
+                    if stuck >= 3 and tier == "fast":
+                        tier = "smart"
                 messages.append({"role": "tool", "tool_call_id": call.get("id", name), "content": result})
             self._trim(messages)
         job.status, job.result = "failed", "too many steps"
         await self._speak(f"I couldn't finish {job.task}: it needed too many steps. Nothing was booked or paid.")
+
+    def shortcuts(self) -> dict:
+        try:
+            return json.loads(self._shortcut_path().read_text())
+        except (OSError, json.JSONDecodeError, TypeError, AttributeError):
+            return {}
+
+    def save_shortcut(self, kind: str, url: str) -> None:
+        if not url.startswith("http"):
+            return
+        data = self.shortcuts()
+        data[kind] = url
+        try:
+            self._shortcut_path().write_text(json.dumps(data, indent=2))
+        except (OSError, TypeError, AttributeError):
+            pass
+
+    def _shortcut_path(self) -> Path:
+        return Path(self.settings.data_dir) / "online_shortcuts.json"
 
     @staticmethod
     def _trim(messages: list[dict]) -> None:

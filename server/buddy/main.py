@@ -516,6 +516,40 @@ def create_app(settings: Settings | None = None, http=None, claude_http=None, st
             raise HTTPException(400, str(e)) from e
         return {"saved": site, "logins": hub.logins.list()}
 
+    # ---------- timetable (Week A / Week B photos, read by Claude) ----------
+    @app.get("/api/timetable")
+    async def get_timetable():
+        from .timetable import Timetable
+        tt = Timetable(settings.data_dir)
+        data = tt.load()
+        today = hub.brain.now().date()
+        return {**data, "this_week": tt.week_of(today)}
+
+    @app.post("/api/timetable/photo")
+    async def timetable_photo(body: dict):
+        """{week: "A"|"B", image: base64, type: "image/jpeg"}"""
+        import base64
+        from .timetable import Timetable, read_photo
+        week = str(body.get("week", "")).upper()
+        if week not in ("A", "B"):
+            raise HTTPException(400, "Week A or week B?")
+        try:
+            days = await read_photo(hub.llm, base64.b64decode(body.get("image", "")),
+                                    str(body.get("type") or "image/jpeg"), week)
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(400, f"Couldn't read that photo: {e}") from e
+        Timetable(settings.data_dir).set_week(week, days)
+        return {"week": week, "days": days}
+
+    @app.post("/api/timetable/this_week")
+    async def timetable_this_week(body: dict):
+        from .timetable import Timetable
+        try:
+            week = Timetable(settings.data_dir).set_this_week(str(body.get("week", "")), hub.brain.now().date())
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+        return {"this_week": week}
+
     @app.get("/api/accounts")
     async def get_accounts():
         return {"accounts": hub.logins.account_list(passwords=True)}  # your own page, on your own Mac
