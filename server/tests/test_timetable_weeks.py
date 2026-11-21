@@ -33,3 +33,20 @@ def test_days():
     assert which_day("tomorrow", now) == date(2026, 11, 19)
     assert which_day("monday", now) == date(2026, 11, 23)
     assert which_day("what's on today", now) == date(2026, 11, 18)
+
+
+def test_asking_about_the_day_never_goes_online(settings, apis, claude):
+    import asyncio
+    from buddy.brain import Conversation
+    from tests.test_llm_brain import make_brain
+    brain = make_brain(settings, apis, claude)
+    brain.now = lambda: datetime(2026, 11, 18, 9)  # a Wednesday
+    conv = Conversation()
+    r = asyncio.run(brain.handle("what do I have today", conv))
+    assert r.text == "Is this week A or week B?" and not claude.requests
+    r = asyncio.run(brain.handle("it's week A", conv))
+    assert r.text.startswith("Wednesday, week A: form, then period 1 Maths") and not claude.requests
+    r = asyncio.run(brain.handle("what have I got tomorrow", conv))
+    assert not claude.requests
+    r = asyncio.run(brain.handle("what's my homework", conv))
+    assert r.intent != "timetable"

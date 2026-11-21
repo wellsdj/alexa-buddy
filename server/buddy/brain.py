@@ -377,6 +377,9 @@ What you remember about the user (numbers are ids for editing):
 {memories}"""
 
 
+TIMETABLE_Q = re.compile(r"\b(what('?s| is| do i have| have i got| lessons?)\b.*\b(today|tomorrow|monday|tuesday|"
+                         r"wednesday|thursday|friday|on)\b|what'?s my day|my timetable|timetable|what lessons|"
+                         r"which lessons|what have i got (today|tomorrow|next)|^(this|it'?s) week [ab]\b)")
 # Words on their own that are almost never a request: heard by accident.
 STRAY_WORDS = {"um", "umm", "uh", "uhh", "er", "erm", "hmm", "hm", "mm", "mmm", "ah", "oh", "ooh", "okay", "ok",
                "yeah", "yep", "right", "so", "well", "nice", "cool", "alright", "anyway", "huh", "the",
@@ -434,6 +437,8 @@ class Brain:
         if reply is None:
             reply = self._stray(text, conv)
         if reply is None:
+            reply = self._timetable_quick(text)
+        if reply is None:
             intent = intents.match(text, self.now(), {"ringing": ctx.get("ringing"), "pager": conv.pager is not None})
             reply = await self._intent(intent, conv, ctx) if intent else None
             if reply is not None and quick_failed(reply.text):
@@ -484,6 +489,22 @@ class Brain:
             reply.follow_up = False  # "I'll leave you to it": then it really does
         reply.ms = int((time.monotonic() - t0) * 1000)
         return reply
+
+    def _timetable_quick(self, text: str) -> Reply | None:
+        """"What have I got today?", "what's my day tomorrow?", "what lessons on Friday?": straight from the
+        timetable, instantly. Never online."""
+        t = text.lower()
+        if "homework" in t or not TIMETABLE_Q.search(t):
+            return None
+        from .timetable import Timetable, which_day
+        tt = Timetable(self.settings.data_dir)
+        wk = re.search(r"\b(?:this|it'?s) (?:is )?week ([ab])\b", t)
+        if wk:
+            tt.set_this_week(wk.group(1), self.now().date())
+        said = tt.spoken(which_day(t, self.now()))
+        if said.startswith("I don't know yet"):
+            return Reply("Is this week A or week B?", intent="timetable", follow_up=True)
+        return Reply(said, intent="timetable")
 
     def _stray(self, text: str, conv: Conversation) -> Reply | None:
         """A stray word ("um", "okay", "nice") that wasn't really for Buddy, when it hadn't asked anything:
