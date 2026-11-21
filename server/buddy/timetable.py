@@ -16,15 +16,28 @@ times if shown (empty if not). Empty strings for anything not on the timetable. 
 read only Week {week}."""
 
 
+DEFAULT = Path(__file__).with_name("timetable_default.json")  # your Week A / Week B, five periods a day
+
+
+def _lessons(day: list) -> list[dict]:
+    """A day is a list of subjects (or lessons read from a photo)."""
+    return [{"subject": x} if isinstance(x, str) else x for x in day]
+
+
 class Timetable:
     def __init__(self, data_dir: Path):
         self.path = Path(data_dir) / "timetable.json"
 
     def load(self) -> dict:
-        try:
-            return json.loads(self.path.read_text())
-        except (OSError, json.JSONDecodeError):
-            return {"weeks": {}, "week_a_monday": ""}
+        for path in (self.path, DEFAULT):
+            try:
+                data = json.loads(path.read_text())
+            except (OSError, json.JSONDecodeError):
+                continue
+            weeks = {w: {d: _lessons(v) for d, v in days.items()} for w, days in data.get("weeks", {}).items()}
+            if weeks:
+                return {**data, "weeks": weeks}
+        return {"weeks": {}, "week_a_monday": ""}
 
     def save(self, data: dict) -> None:
         self.path.write_text(json.dumps(data, indent=2))
@@ -44,7 +57,7 @@ class Timetable:
             monday -= timedelta(days=7)
         data = self.load()
         data["week_a_monday"] = monday.isoformat()
-        self.save(data)
+        self.save(data)  # from now on this file (with the timetable in it) is the one used
         return week
 
     def week_of(self, day: date) -> str:
@@ -70,9 +83,9 @@ class Timetable:
         wk, lessons = self.day(day, week)
         if not lessons:
             return f"Nothing saved for {day:%A} in week {wk}."
-        parts = [f"{l.get('start', '')} {l.get('subject', '')}" + (f" with {l['teacher']}" if l.get("teacher") else "")
-                 + (f" in {l['room']}" if l.get("room") else "") for l in lessons]
-        return f"{day:%A %d %B} is week {wk}: " + "; ".join(p.strip() for p in parts) + "."
+        # Just the subjects, period by period: no times, rooms or teachers. Form comes first.
+        periods = ", ".join(f"period {i} {l.get('subject', '')}" for i, l in enumerate(lessons, 1))
+        return f"{day:%A}, week {wk}: form, then {periods}."
 
 
 async def read_photo(llm, image: bytes, media_type: str, week: str) -> dict:
