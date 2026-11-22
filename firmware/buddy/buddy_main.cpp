@@ -1056,15 +1056,12 @@ static void sdTest() {
   bool upHigh = digitalRead(SD_MISO_PIN);
   pinMode(SD_MISO_PIN, INPUT_PULLDOWN);
   delay(2);
-  bool downLow = !digitalRead(SD_MISO_PIN);
+  (void)digitalRead(SD_MISO_PIN);  // high here is normal: the card pulls SO up itself
   if (!upHigh) {
     steps.add("SO (pin 13) is stuck at GND: the SO wire is touching GND, or SO and GND are swapped.");
     hint = "Check the SO wire goes to pin 13 and isn't touching anything else.";
-  } else if (!downLow) {
-    steps.add("SO (pin 13) is stuck at 3V: the SO wire is touching 3V, or SO and 3V are swapped.");
-    hint = "Check the SO wire goes to pin 13 and isn't touching the 3V line.";
   } else {
-    steps.add("SO (pin 13) is not shorted: good.");
+    steps.add("SO (pin 13) is not stuck at GND: good.");
   }
   // 2. Does the card answer at all? Slow first.
   sdSpi.begin(SD_SCK_PIN, SD_MISO_PIN, SD_MOSI_PIN, SD_CS_PIN);
