@@ -1629,8 +1629,8 @@ class Hub:
         except asyncio.TimeoutError:
             ver = str(devs[0].info.get("fw", "") or devs[0].info.get("version", ""))
             return {"ok": False, "steps": [],
-                    "hint": f"Buddy didn't answer the test. It needs firmware 1.7.4 or newer (it has {ver or 'an older one'}): "
-                            "press Update Buddy first."}
+                    "hint": f"Buddy didn't answer the test. The board needs firmware 1.7.4 or newer (it has {ver or 'an older one'}). "
+                            "Plug the board into the Mac by USB and double-click \"Put Buddy on the board\" on the Desktop."}
         result = {"ok": bool(msg.get("ok")), "steps": list(msg.get("steps", [])), "hint": str(msg.get("hint", ""))}
         self.record("sd_test", **result)
         return result
