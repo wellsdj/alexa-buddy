@@ -24,13 +24,24 @@
 
 #include "config.h"
 
-#define FW_VERSION "1.7.7"
+#define FW_VERSION "1.7.10"
 #define SAMPLE_RATE 16000
 #define MIC_FRAMES 320               // 20 ms per I2S read
 #define SEND_BYTES 1280              // 40 ms of 16-bit audio per WebSocket frame
-#define MIC_BUFFER_BYTES (16 * 1024) // 0.5 s
-#define SPK_BUFFER_BYTES (96 * 1024) // 3 s of speech, 1.5 s of music; the server stays ~0.6 s ahead
-#define SPK_BUFFER_MIN (48 * 1024)  // if memory is short
+// Memory budget. The board has no spare RAM. Measured on the board (1.7.8): with the SD card in, the card, the
+// recording buffer and the two recording tasks take 36 KB, leaving 15 KB after start-up; the web socket then ran
+// dry (4 KB after connecting) and the hello message could not be sent. Sizes below leave about 36 KB after connecting.
+// tests/test_firmware_rules.py adds these up and fails if they grow.
+#define MIC_BUFFER_BYTES (8 * 1024)  // 0.25 s
+#define SPK_BUFFER_BYTES (24 * 1024) // 0.75 s of speech, 0.4 s of music; the server stays ~0.6 s ahead
+#define SPK_BUFFER_MIN (16 * 1024)   // if memory is short
+#define REC_BUFFER_BYTES (12 * 1024) // 0.4 s of lesson audio waiting for the SD card
+#define STACK_MIC 6144
+#define STACK_PLAY 6144
+#define STACK_AEC 4096
+#define STACK_REC 6144
+#define STACK_UPLOAD 6144
+#define MIN_FREE_HEAP_KB 50          // after start-up; below this the log says so
 #define MAX_FIRES 64
 
 // ------------------------------------------------------------------ state
@@ -104,11 +115,14 @@ static bool shouldSaveConfig = false;
 // ------------------------------------------------------------------ small helpers
 static bool timeValid() { return time(nullptr) > 1700000000; }
 
+static void logMem(const char *when);  // defined once the log is set up, below
+static void logSendFailed();
+
 static void sendJson(JsonDocument &doc) {
   if (!wsConnected) return;
   String out;
   serializeJson(doc, out);
-  ws.sendTXT(out);
+  if (!ws.sendTXT(out)) logSendFailed();
 }
 
 // Empty the speaker buffer and wait until the play task has actually done it, so audio that
@@ -169,6 +183,17 @@ static LogOut logOut;
 #define logOut Serial
 #endif
 static AecPipeline aec;
+
+static void logMem(const char *when) {
+  logOut.printf("[mem] free heap %s: %u KB (largest piece %u KB, lowest ever %u KB)\n", when,
+                (unsigned)(ESP.getFreeHeap() / 1024), (unsigned)(ESP.getMaxAllocHeap() / 1024),
+                (unsigned)(ESP.getMinFreeHeap() / 1024));
+}
+
+static void logSendFailed() {
+  logOut.printf("[ws] couldn't send a message (free heap %u KB)\n", (unsigned)(ESP.getFreeHeap() / 1024));
+}
+
 static volatile bool aecOn = true;  // the server can switch it off ("echo_cancel" setting)
 
 static void aecTask(void *) {
@@ -615,7 +640,12 @@ static void checkAlarms() {
 // ------------------------------------------------------------------ server messages
 static void handleJson(uint8_t *payload, size_t len) {
   JsonDocument doc;
-  if (deserializeJson(doc, payload, len)) return;
+  DeserializationError jsonErr = deserializeJson(doc, payload, len);
+  if (jsonErr) {  // never drop a message silently: with little memory left this is where it would go
+    logOut.printf("[ws] couldn't read a message from the server (%s, %u bytes, free heap %u KB)\n", jsonErr.c_str(),
+                  (unsigned)len, (unsigned)(ESP.getFreeHeap() / 1024));
+    return;
+  }
   const char *type = doc["type"] | "";
 
   if (doc["server_time"].is<uint32_t>() && !timeValid()) {
@@ -684,6 +714,7 @@ static void handleJson(uint8_t *payload, size_t len) {
   } else if (!strcmp(type, "alarm_stop")) {
     stopRinging(doc["reason"] | (doc["quiet"] | false ? "snooze" : "voice"));
   } else if (!strcmp(type, "sd_test")) {
+    logOut.println("[sd] test requested by the server");
     if (!sdTestRunning) wantSdTest = true;  // done in loop(): it takes a moment
   } else if (!strcmp(type, "working")) {
     working = doc["on"] | false;
@@ -905,7 +936,9 @@ static void wsEvent(WStype_t type, uint8_t *payload, size_t len) {
       lastConnected = millis();
       serverState = "idle";
       logOut.printf("[ws] connected to %s:%u\n", resolvedHost.c_str(), resolvedPort);
+      logMem("after connecting to the server");
       sendHello();
+      logMem("after sending hello");
       break;
     case WStype_DISCONNECTED:
       if (wsConnected) logOut.println("[ws] disconnected");
@@ -1002,9 +1035,9 @@ static void uploadTask(void *);
 static void startRecTasks() {
   if (recTasksStarted || !sdOk) return;
   recTasksStarted = true;
-  if (!recStream) recStream = xStreamBufferCreate(ESP.getFreeHeap() > 220000 ? 24 * 1024 : 12 * 1024, 1);
-  xTaskCreatePinnedToCore(recTask, "rec", 6144, nullptr, 3, nullptr, 1);
-  xTaskCreatePinnedToCore(uploadTask, "upload", 8192, nullptr, 1, nullptr, 1);
+  if (!recStream) recStream = xStreamBufferCreate(REC_BUFFER_BYTES, 1);
+  xTaskCreatePinnedToCore(recTask, "rec", STACK_REC, nullptr, 3, nullptr, 1);
+  xTaskCreatePinnedToCore(uploadTask, "upload", STACK_UPLOAD, nullptr, 1, nullptr, 1);
 }
 
 static uint8_t sdRawCmd0(uint32_t hz);
@@ -1544,17 +1577,13 @@ void setup() {
 
   micStream = xStreamBufferCreate(MIC_BUFFER_BYTES, SEND_BYTES);
   spkStream = xStreamBufferCreate(SPK_BUFFER_BYTES, 1);
-  if (spkStream && ESP.getFreeHeap() < 200000) {  // Wi-Fi starts after this and needs plenty of room
-    vStreamBufferDelete(spkStream);
-    spkStream = nullptr;
-  }
   if (!spkStream) spkStream = xStreamBufferCreate(SPK_BUFFER_MIN, 1);
   logOut.printf("[audio] speaker buffer %u KB, free heap %u KB\n",
                 (unsigned)(xStreamBufferSpacesAvailable(spkStream) / 1024), (unsigned)(ESP.getFreeHeap() / 1024));
   setupI2S();
-  xTaskCreatePinnedToCore(micTask, "mic", 6144, nullptr, 6, nullptr, 0);
-  xTaskCreatePinnedToCore(playTask, "play", 6144, nullptr, 6, nullptr, 1);
-  xTaskCreatePinnedToCore(aecTask, "aec", 4096, nullptr, 1, nullptr, 0);
+  xTaskCreatePinnedToCore(micTask, "mic", STACK_MIC, nullptr, 6, nullptr, 0);
+  xTaskCreatePinnedToCore(playTask, "play", STACK_PLAY, nullptr, 6, nullptr, 1);
+  xTaskCreatePinnedToCore(aecTask, "aec", STACK_AEC, nullptr, 1, nullptr, 0);
 
   // Wi-Fi: first boot (or after a 10 s button hold) opens the "Buddy-Setup" hotspot.
   WiFi.mode(WIFI_STA);
@@ -1563,7 +1592,9 @@ void setup() {
   // ("Expected to init 4 rx buffer, actual is 0") and the board restarted over and over.
   sdBegin();
   startRecTasks();  // (only if the card was found)
-  logOut.printf("[mem] free heap after Wi-Fi and SD: %u KB\n", (unsigned)(ESP.getFreeHeap() / 1024));
+  logMem("after start-up (Wi-Fi started, SD mounted)");
+  if (ESP.getFreeHeap() < MIN_FREE_HEAP_KB * 1024U)
+    logOut.printf("[mem] LOW: under %d KB left, the board may not be able to send anything\n", MIN_FREE_HEAP_KB);
   // A moment to be set up over USB by the Mac (Wi-Fi name, password and its address), so the setup
   // hotspot isn't needed. Opening the USB port restarts the board, which lands it right here.
   for (uint32_t t0 = millis(); millis() - t0 < 4000 && !usbGotWifi;) {
@@ -1617,9 +1648,10 @@ void setup() {
     prefs.putString("token", cfgToken);
   }
   WiFi.setAutoReconnect(true);
-  if (WiFi.status() == WL_CONNECTED)
+  if (WiFi.status() == WL_CONNECTED) {
     logOut.printf("[wifi] connected, IP %s, RSSI %d\n", WiFi.localIP().toString().c_str(), WiFi.RSSI());
-  else
+    logMem("after Wi-Fi connected");
+  } else
     logOut.println("[wifi] not in range: working offline (lessons can still be recorded)");
 
   configTime(0, 0, "pool.ntp.org", "time.google.com", "time.cloudflare.com");
