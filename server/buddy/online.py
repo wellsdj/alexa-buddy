@@ -79,6 +79,7 @@ class Job:
     typed_user: str = ""
     typed_password: str = ""
     kind: str = ""  # e.g. school_homework: the result is also remembered
+    quiet: bool = False  # Buddy's own early-morning job: no light, no speaking, nothing asked
     allowed_final: int = 0  # final clicks you've said yes to
     answer: asyncio.Future | None = None
     task_handle: asyncio.Task | None = None
@@ -331,14 +332,17 @@ class OnlineAgent:
     def waiting(self) -> bool:
         return self.job is not None and self.job.status == "waiting"
 
-    def start(self, task: str, who: str = "", today: str = "", home: str = "", kind: str = "") -> str:
+    def start(self, task: str, who: str = "", today: str = "", home: str = "", kind: str = "",
+              quiet: bool = False) -> str:
         if not self.settings.get("online_on", True):
             return "Going online to do things is switched off in Settings (online_on)."
+        if self.busy and self.job.quiet:
+            self.stop()  # your request comes first; the early-morning job runs again later
         if self.busy:
             return f"Already busy with: {self.job.task}. Say stop first if you want something else."
-        self.job = Job(task=task, who=who, kind=kind)
+        self.job = Job(task=task, who=who, kind=kind, quiet=quiet)
         self.job.task_handle = asyncio.create_task(self._run(self.job, today, home))
-        if self.on_busy:
+        if self.on_busy and not quiet:
             self.on_busy(True)
         return "started"
 
@@ -373,10 +377,14 @@ class OnlineAgent:
         return s
 
     async def _speak(self, text: str, listen: bool = False) -> None:
+        if self.job is not None and self.job.quiet:
+            return
         if self.say:
             await self.say(text, listen)
 
     async def _ask(self, job: Job, question: str) -> str:
+        if job.quiet:
+            return ""  # nobody's up at 5am: carry on without, or finish and say what was missing
         job.status, job.question = "waiting", question
         job.answer = asyncio.get_running_loop().create_future()
         await self._speak(question, True)
@@ -401,7 +409,7 @@ class OnlineAgent:
             await self._speak(f"Sorry, something went wrong online, so I stopped: {str(e)[:120]}")
         finally:
             self.history = (self.history + [job])[-20:]
-            if self.on_busy:
+            if self.on_busy and not job.quiet:
                 self.on_busy(False)
 
     async def _loop(self, job: Job, today: str, home: str) -> None:

@@ -79,6 +79,13 @@ def _sound(name: str) -> bytes:
 STARTUP_SOUND = _sound("startup")  # the desk unit has just been switched on
 WAKE_SOUND = _sound("wake")  # it's sure it heard "hey buddy" (not when it listens again for an answer)
 NOTHING_SOUND = _sound("nothing_heard")  # it was listening, but you didn't say anything
+# Once a week Buddy reads the school's own term dates, so it knows half terms, INSET days and the end of term.
+CALENDAR_TASK = (
+    "Find Christ's School Richmond's term dates for this school year and next (the school's website, "
+    "christs.richmond.sch.uk: its calendar or term dates page, or a term dates PDF there). Then call finish with "
+    "summary set to ONLY this JSON, nothing else: {\"off\": [{\"from\": \"YYYY-MM-DD\", \"to\": \"YYYY-MM-DD\", "
+    "\"what\": \"October half term\"}, ...]} listing every weekday students are NOT in school: half terms, "
+    "Christmas, Easter and summer holidays, bank holidays and INSET / training days (from-to inclusive).")
 
 
 class Session:
@@ -901,7 +908,8 @@ class Hub:
         self.greeted: dict[str, float] = {}  # name -> when Buddy last said hello to them
         self.heard: dict[str, float] = {}  # name -> when Buddy last heard their voice
         self.awake = True  # "off" sets this to False until the next "hey buddy"
-        self.startup_played: dict[str, float] = {}  # board name -> when it switched on (sound played once)
+        self.startup_played: dict[str, float] = {}
+        self.weather_ready: tuple[float, str] = (0.0, "")  # (when, the spoken report), ready before you ask  # board name -> when it switched on (sound played once)
         self.device_gone_at: dict[str, float] = {}
         self.ring_started: dict = {}  # alarm id -> when it started ringing
         self.timed_out: set = set()  # alarms this server stopped because nobody answered  # desk unit name -> when it last disconnected
@@ -978,6 +986,7 @@ class Hub:
     # ---------- lifecycle ----------
     async def start(self) -> None:
         asyncio.create_task(self.music.start())
+        self.tasks.append(asyncio.create_task(self._morning_loop()))
         self.tasks.append(asyncio.create_task(self._scheduler()))
         self.tasks.append(asyncio.create_task(self._housekeeping()))
         asyncio.create_task(self.listener.discover())
@@ -1321,12 +1330,83 @@ class Hub:
         await self.broadcast_ui({"type": "event", "kind": "transcript", "session": s.id, "role": "assistant", "text": text})
         await s.speak(text, then_listen=listen)
 
+    # ---------- every morning at 5: homework, weather and term dates, ready before you ask ----------
+    def _morning_state(self) -> dict:
+        try:
+            return json.loads((self.settings.data_dir / "morning.json").read_text())
+        except (OSError, json.JSONDecodeError):
+            return {}
+
+    def _save_morning(self, state: dict) -> None:
+        (self.settings.data_dir / "morning.json").write_text(json.dumps(state, indent=2))
+
+    async def _morning_loop(self) -> None:
+        """At 5am (or as soon as the Mac is awake after that, if it slept through), once a day."""
+        while True:
+            try:
+                await asyncio.sleep(60)
+                now = self.brain.now()
+                state = self._morning_state()
+                today = now.date().isoformat()
+                if now.hour >= 5 and state.get("weather_day") != today:
+                    await self.prepare_weather()
+                    state = self._morning_state()
+                    state["weather_day"] = today
+                    self._save_morning(state)
+                elif now.hour >= 5 and time.time() - self.weather_ready[0] > 3600:
+                    await self.prepare_weather()  # keep it fresh through the day
+                busy = self.online.busy
+                if now.hour >= 5 and state.get("homework_day") != today and not busy:
+                    state["homework_day"] = today
+                    self._save_morning(state)
+                    self.online.start(self.brain._school_task("homework", ""), today=now.strftime("%A %d %B %Y"),
+                                      home=self.settings["location_name"] or "", kind="school_homework", quiet=True)
+                elif (now.hour >= 5 and not busy and state.get("homework_day") == today
+                      and time.time() - float(state.get("calendar_at", 0)) > 7 * 86400):
+                    state["calendar_at"] = time.time()
+                    self._save_morning(state)
+                    self.online.start(CALENDAR_TASK, today=now.strftime("%A %d %B %Y"), kind="school_calendar",
+                                      quiet=True)
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001
+                log.exception("morning routine failed")
+
+    async def prepare_weather(self) -> None:
+        """Works out today's weather report now, so asking for it is instant."""
+        try:
+            text = await self.weather.report("", "today")
+        except Exception as e:  # noqa: BLE001
+            log.info("weather not ready: %s", e)
+            return
+        if text:
+            self.weather_ready = (time.time(), text)
+            self.brain.weather_ready = self.weather_ready
+
+    def morning_job_done(self, job) -> None:
+        if job.kind == "school_homework" and job.status == "done" and job.result:
+            self.brain.homework_ready = (time.time(), job.result)
+            self.memory.add(f"Homework from Bromcom, checked {time.strftime('%a %d %b')} at "
+                            f"{time.strftime('%H:%M')}: {job.result}", "plans", source="learned")
+            self.record("homework_checked", result=job.result[:300])
+        elif job.kind == "school_calendar" and job.status == "done":
+            from .llm import parse_json_loose
+            from .school_calendar import SchoolCalendar
+            data = parse_json_loose(job.result or "")
+            off = data.get("off") if isinstance(data, dict) else data
+            if isinstance(off, list) and off:
+                SchoolCalendar(self.settings.data_dir).save(off)
+                self.record("term_dates_updated", days_off=len(off))
+
     async def _until_awake(self) -> None:
         while not self.awake:
             await asyncio.sleep(0.5)
 
     async def online_report(self, job) -> None:
         """A job finished. Don't cut into a conversation: once it's gone quiet, offer the result."""
+        if job.quiet:  # Buddy's own early-morning check: kept, not said
+            self.morning_job_done(job)
+            return
         if job.status == "done" and job.kind == "school_homework" and job.result:
             # Remembered, so Buddy can keep them on top of it later ("what homework have I got?")
             self.memory.add(f"Homework from Bromcom, checked {time.strftime('%a %d %b')}: {job.result}",

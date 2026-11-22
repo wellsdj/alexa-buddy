@@ -53,6 +53,8 @@ class Timetable:
         if week not in ("A", "B"):
             raise ValueError("Week A or week B?")
         monday = today - timedelta(days=today.weekday())
+        if today.weekday() >= 5:  # said at the weekend: "this week" is the one about to start
+            monday += timedelta(days=7)
         if week == "B":
             monday -= timedelta(days=7)
         data = self.load()
@@ -73,19 +75,25 @@ class Timetable:
         return week, lessons
 
     def spoken(self, day: date, week: str = "") -> str:
+        from .school_calendar import SchoolCalendar
         data = self.load()
         if not data.get("weeks"):
-            return "No timetable saved yet: add the Week A and Week B photos in Settings, Timetable."
-        if day.weekday() >= 5:
-            return f"{day:%A} is the weekend: no lessons."
+            return "No timetable saved yet."
+        cal = SchoolCalendar(self.path.parent)
+        why = cal.why_off(day)
+        if why:
+            if why == "the weekend":
+                return f"{day:%A} is the weekend, so no lessons."
+            return f"{day:%A} is {why}, so no school. You're back on {cal.next_school_day(day):%A %d %B}."
         if not week and not data.get("week_a_monday"):
             return "I don't know yet whether this is week A or week B: ask them, then call timetable with this_week."
         wk, lessons = self.day(day, week)
         if not lessons:
             return f"Nothing saved for {day:%A} in week {wk}."
-        # Just the subjects, period by period: no times, rooms or teachers. Form comes first.
-        periods = ", ".join(f"period {i} {l.get('subject', '')}" for i, l in enumerate(lessons, 1))
-        return f"{day:%A}, week {wk}: form, then {periods}."
+        # Slowly, one period at a time: just the subjects. Form comes first.
+        periods = " ".join(f"Period {i}, {l.get('subject', '')}." for i, l in enumerate(lessons, 1))
+        last = " And it's the last day of term." if cal.last_day_of_term(day) else ""
+        return f"{day:%A}, week {wk}. Form first. {periods}{last}"
 
 
 async def read_photo(llm, image: bytes, media_type: str, week: str) -> dict:

@@ -260,7 +260,9 @@ TOOLS = [
         "reports back. what: homework | today | timetable | other. detail: anything specific they asked.",
         "parameters": {"type": "object", "properties": {
             "what": {"type": "string", "enum": ["homework", "today", "timetable", "other"]},
-            "detail": {"type": "string"}}, "required": ["what"]}}},
+            "detail": {"type": "string"},
+            "check_now": {"type": "boolean", "description": "true only if they ask you to check again right now "
+                          "(homework is already checked every morning at 5)"}}, "required": ["what"]}}},
     {"type": "function", "function": {
         "name": "online_job", "description": "How the job you're doing online is going (status), or stop it.",
         "parameters": {"type": "object", "properties": {"action": {"type": "string", "enum": ["status", "stop"]}},
@@ -343,6 +345,9 @@ on top of homework, check it, then set reminders for each piece before it's due.
 - Recognise people by voice, carry on after being interrupted, think harder about tricky things (think_harder).
 Names you hear are approximate (speech-to-text): use common sense ("Broncom" is Bromcom) and never ask them to \
 spell out a site, address or name: the online helper works it out.
+You do these things yourself, confidently: say "I'm checking" or "I've checked", never "I've asked the portal" \
+or "the tool says". Don't second-guess your own results out loud or ask whether to check again: if you're unsure, \
+quietly check, then just give the answer.
 Be persistent: if one way doesn't work, try another (a different search, another site, a different tool) before \
 saying you couldn't, and then say what you tried.
 Tools:
@@ -377,6 +382,9 @@ What you remember about the user (numbers are ids for editing):
 {memories}"""
 
 
+CANCEL_JOB = re.compile(r"\b(cancel|stop|forget|never ?mind|abort|scrap|leave)\b.*\b(that|it|the (homework|search|job|"
+                        r"task|check|booking|login)|checking|looking|searching)\b|^(cancel|stop it|forget it|never ?mind)"
+                        r"( that| it)?( please)?\W*$")
 TIMETABLE_Q = re.compile(r"\b(what('?s| is| do i have| have i got| lessons?)\b.*\b(today|tomorrow|monday|tuesday|"
                          r"wednesday|thursday|friday|on)\b|what'?s my day|my timetable|timetable|what lessons|"
                          r"which lessons|what have i got (today|tomorrow|next)|^(this|it'?s) week [ab]\b)")
@@ -422,6 +430,8 @@ class Brain:
         self.insight = None  # the hub's insight(): speed, connection, voice credits... (for get_settings)
         self.wifi = None  # the hub: wifi_scan / wifi_join on the desk unit
         self.online = None  # OnlineAgent: doing jobs on websites (set by the hub)
+        self.weather_ready: tuple[float, str] = (0.0, "")  # today's weather, worked out in advance by the hub
+        self.homework_ready: tuple[float, str] = (0.0, "")  # this morning's 5am homework check
 
     def now(self) -> datetime:
         return datetime.now(ZoneInfo(self.settings["timezone"]))
@@ -438,6 +448,9 @@ class Brain:
             reply = self._stray(text, conv)
         if reply is None:
             reply = self._timetable_quick(text)
+        if reply is None and self.online and self.online.busy and CANCEL_JOB.search(text.lower()):
+            self.online.stop()
+            reply = Reply(random.choice(["Okay, stopped.", "Done, I've stopped that.", "Stopped."]), intent="online")
         if reply is None:
             intent = intents.match(text, self.now(), {"ringing": ctx.get("ringing"), "pager": conv.pager is not None})
             reply = await self._intent(intent, conv, ctx) if intent else None
@@ -447,7 +460,11 @@ class Brain:
                 reply = await self._llm(text, conv, ctx, note=reply.text)
         if reply is None:
             reply = await self._llm(text, conv, ctx)
-        if reply.intent in ("llm", "llm_deep") and reply.text and self.settings["fact_check"]:
+        # Answers built on Buddy's own records (timetable, school, jobs online, settings) aren't fact-checked:
+        # the checker can't see them, and second-guessing them out loud sounds unsure.
+        own = {"timetable", "school", "go_online", "online_job", "save_account", "get_settings", "change_setting",
+               "study_progress", "wifi"} & set(ctx.get("tools", []))
+        if reply.intent in ("llm", "llm_deep") and reply.text and self.settings["fact_check"] and not own:
             if reply.streamed:
                 ctx["check_later"] = True  # already being said: check it straight after (check_after)
             else:
@@ -640,7 +657,14 @@ class Brain:
                 return Reply(f"You don't have any {what}s set.", intent=n)
             return Reply(f"Done, I've cancelled {count} {what}{'s' if count != 1 else ''}.", intent=n)
         if n == "weather":
-            return Reply(await self.weather.report(a.get("place", ""), a.get("when", a.get("day", "today"))), intent=n)
+            when, place = a.get("when", a.get("day", "today")), a.get("place", "")
+            at, ready = self.weather_ready
+            other_day = re.search(r"\b(tomorrow|tonight|week|weekend|monday|tuesday|wednesday|thursday|friday|"
+                                  r"saturday|sunday|next|later|days?)\b", str(when or "").lower())
+            if ready and not place and not other_day and time.time() - at < 2 * 3600:
+                await asyncio.sleep(0.4)  # already worked out: a natural moment's pause, not an instant blurt
+                return Reply(ready, intent=n)
+            return Reply(await self.weather.report(place, when), intent=n)
         if n == "timer":
             al = self.alarms.add_timer(a["seconds"], a.get("label", ""))
             return Reply(self.alarms.confirm_text(al), intent=n)
@@ -1010,6 +1034,12 @@ class Brain:
             place=self.settings["location_name"],
             weather=await self.weather.context_line(),
             memories=self.memory.render_for_prompt(1800))
+        from .school_calendar import SchoolCalendar
+        from datetime import timedelta as _td
+        cal = SchoolCalendar(self.settings.data_dir)
+        school = [f"Today: {cal.note(now.date()) or ('a school day' if cal.is_school_day(now.date()) else 'the weekend')}",
+                  f"Tomorrow: {cal.note(now.date() + _td(days=1)) or ('a school day' if cal.is_school_day(now.date() + _td(days=1)) else 'the weekend')}"]
+        dynamic += "\nSchool (Christ's School): " + " ".join(school)
         return static, dynamic
 
     async def _llm(self, text: str, conv: Conversation, ctx: dict, tier: str = "fast",
@@ -1130,6 +1160,7 @@ class Brain:
 
     async def _run_tool(self, name: str, a: dict, conv: Conversation, ctx: dict) -> tuple[str, str, list]:
         """Returns (result for the model, spoken confirmation or '', device actions)."""
+        ctx.setdefault("tools", []).append(name)
         try:
             if name == "set_alarm":
                 al = self.alarms.add_alarm(a["time"], a.get("repeat") or None, a.get("label", ""), a.get("date") or None)
@@ -1232,9 +1263,7 @@ class Brain:
                 r = self.online.start(a.get("task", ""), who=ctx.get("speaker", ""), today=self.now().strftime("%A %d %B %Y"),
                                       home=self.settings["location_name"] or "")
                 if r == "started":
-                    line = random.choice(["On it. I'll have a look online and come back to you.",
-                                          "Okay, I'll sort that online and let you know.",
-                                          "Leave it with me, I'll come back to you."])
+                    line = random.choice(["On it.", "Doing that now.", "Okay, I'm on it."])
                     return "started in the background; say only the confirmation", line, []
                 return r, "", []
             if name == "timetable":
@@ -1249,15 +1278,19 @@ class Brain:
                 label = self.online.logins.save_account(a.get("label", ""), a.get("email", ""), a.get("password", ""))
                 return f'saved "{label}"', f"Got it, saved as your {label}.", []
             if name == "school":
+                at, ready = self.homework_ready
+                fresh = ready and time.strftime("%Y-%m-%d", time.localtime(at)) == self.now().strftime("%Y-%m-%d")
+                if a.get("what") == "homework" and fresh and not a.get("check_now"):
+                    return (f"You checked Bromcom yourself at {time.strftime('%H:%M', time.localtime(at))} this morning: "
+                            f"{ready} Tell them, briefly; no need to check again.", "", [])
                 if not self.online:
                     return "going online isn't available", "", []
                 r = self.online.start(self._school_task(a.get("what", "homework"), a.get("detail", "")),
                                       who=ctx.get("speaker", ""), today=self.now().strftime("%A %d %B %Y"),
                                       home=self.settings["location_name"] or "", kind=f"school_{a.get('what', 'other')}")
                 if r == "started":
-                    return "started in the background; say only the confirmation", random.choice([
-                        "On it, I'll have a look at Bromcom and come back to you.",
-                        "Okay, checking your school portal now. I'll tell you what I find."]), []
+                    return "started: you're checking it now; say only the confirmation", random.choice([
+                        "Checking your homework now.", "On it, looking at Bromcom now."]), []
                 return r, "", []
             if name == "online_job":
                 if not self.online:
