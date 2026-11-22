@@ -363,6 +363,9 @@ teachers, and the week letter exactly as given (never "week A or B"). Don't offe
 - Their school portal, Bromcom: homework coming up and what their day is (school). If they ask you to keep them \
 on top of homework, check it, then set reminders for each piece before it's due.
 - Recognise people by voice, carry on after being interrupted, think harder about tricky things (think_harder).
+Places: they live in Richmond, London (UK). Anything local ("Richmond", "near me", tennis courts, shops) means \
+there: never somewhere else with the same name. Their tennis is at the Pensford courts on ClubSpark: for tennis \
+use go_online straight away, never web_search.
 Names you hear are approximate (speech-to-text): use common sense ("Broncom" is Bromcom) and never ask them to \
 spell out a site, address or name: the online helper works it out.
 You do these things yourself, confidently: say "I'm checking" or "I've checked", never "I've asked the portal" \
@@ -404,9 +407,13 @@ What you remember about the user (numbers are ids for editing):
 
 # Where things are done, so the helper goes straight there instead of searching around.
 PLACES = {
-    r"\btennis\b": ("tennis", "How: tennis courts are booked on ClubSpark (https://clubspark.lta.org.uk), at the courts "
-                    "in Richmond. Go straight there, find the Richmond venue (use ClubSpark's own venue search for "
-                    "Richmond), sign in with their home account, and book. Don't search the web or other sites."),
+    r"\btennis\b|\bcourts?\b|club ?spark|pen[cs]e?ford": ("tennis",
+        "How: their tennis courts are the Pensford courts (Pensford, in Kew, Richmond, London; heard as 'Penceford' "
+        "or similar), booked on ClubSpark. Go straight to https://clubspark.lta.org.uk, search its venues for "
+        "'Pensford', and open that venue's booking page. To see which courts are free you DON'T need to sign in: "
+        "read the booking sheet for the day they asked about. Only to actually book: sign in with 'Sign in with Google' "
+        "using their personal Google account if it's offered, otherwise their home account; ask_user only if neither "
+        "works. Don't search the web or use other sites."),
 }
 CANCEL_JOB = re.compile(r"\b(cancel|stop|forget|never ?mind|abort|scrap|leave)\b.*\b(that|it|the (homework|search|job|"
                         r"task|check|booking|login)|checking|looking|searching)\b|^(cancel|stop it|forget it|never ?mind)"
@@ -1358,6 +1365,11 @@ class Brain:
             if name == "study_progress":
                 return await self._study_progress_any(a.get("person", "")), "", []
             if name == "web_search":
+                q = a.get("query", "")
+                home = self.settings["location_name"] or ""
+                if home and re.search(r"\b(near|nearby|local|richmond|kew|twickenham|my area|round here)\b", q, re.I) \
+                        and "london" not in q.lower() and "uk" not in q.lower():
+                    a["query"] = f"{q} ({home}, UK)"  # their Richmond, not the one in Virginia
                 await say_while(ctx, "search")
                 with timing.span("search"):
                     found = await self.llm.web_search(a.get("query", ""))
