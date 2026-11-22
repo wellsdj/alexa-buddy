@@ -29,7 +29,7 @@ from .tts import TTSUnavailable
 
 log = logging.getLogger("buddy.speech")
 ELEVEN_WS = "wss://api.elevenlabs.io/v1/text-to-speech/{voice}/stream-input"
-_SENTENCE_END = re.compile(r"(?<=[.!?…])[\"')\]]*\s+")
+_SENTENCE_END = re.compile(r"(?<=[.!?…])[\"')\]]*(?:\s+|(?=[A-Z][a-z]))")  # also ".Right" with no space
 
 
 class Sentences:
@@ -150,7 +150,10 @@ class SpeechStream:
 
     def add_text(self, text: str) -> None:
         """A whole piece of text at once (a greeting, or an answer that wasn't streamed)."""
-        self.feed(text if text.endswith(" ") else text + " ")
+        text = text if text.endswith(" ") else text + " "
+        if self.sentences.buf and not self.sentences.buf[-1].isspace():
+            text = " " + text  # never glued onto the end of the sentence before
+        self.feed(text)
 
     def end(self) -> None:
         if self.ended:

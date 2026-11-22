@@ -1152,11 +1152,15 @@ class Brain:
         model = ""
         intent = "llm_deep" if tier == "smart" else "llm"
         on_text = ctx.get("on_text")  # speak the answer as it's written (speech.SpeechStream.feed)
+        spoke: list[str] = []  # everything said so far, over all rounds
         for _ in range(6):  # room to try again when a tool comes back empty
             heard: list[str] = []
 
             def tap(delta: str) -> None:
+                if not heard and spoke and delta and not delta[0].isspace():
+                    delta = " " + delta  # a new round starts a new sentence ("I'm sure. Right...", not "sure.Right")
                 heard.append(delta)
+                spoke.append(delta)
                 on_text(delta)
 
             with timing.span("haiku"):

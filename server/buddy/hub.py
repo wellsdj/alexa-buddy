@@ -771,7 +771,8 @@ class Session:
             finally:
                 if hasattr(pcm_iter, "aclose"):
                     await pcm_iter.aclose()  # cut off: close the voice connection now, not later
-            await send(leveller.flush(), final=True)
+            # A quarter second of silence at the end, so the last word isn't clipped by the speaker.
+            await send(leveller.flush() + b"\0" * int(BYTES_PER_S * 0.25), final=True)
             t0 = started_at or t0
             if started_at is not None:
                 self.hub.record("voice", engine=engine(), to=self.role,

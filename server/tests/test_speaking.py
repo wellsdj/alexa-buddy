@@ -79,5 +79,5 @@ def test_slow_voice_start_never_overflows_the_board():
 def test_all_the_audio_arrives_in_order_and_whole():
     tts = SlowThenFastTTS(seconds=1.3, first_byte_s=0.1)
     board = speak(tts)
-    assert sum(n for _, n in board.arrivals) == len(tts.pcm)
+    assert sum(n for _, n in board.arrivals) == len(tts.pcm) + 8000  # plus a quarter second of silence at the end
     assert all(n % 2 == 0 for _, n in board.arrivals)  # whole samples only
