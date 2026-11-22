@@ -287,11 +287,14 @@ def create_app(store=None) -> FastAPI:
         return {"profile": public(p), "token": login_token(p)}
 
     async def check_pin(p: dict, pin: str) -> None:
-        recent = [x for x in await data.s.list(f"fails/{p['id']}/") if int(x.rsplit("/", 1)[-1]) > now_ms() - 60_000]
+        # Each wrong try is its own file, named "<milliseconds>-<random>". The random part matters:
+        # two tries in the same millisecond would otherwise share a name and count as one.
+        recent = [x for x in await data.s.list(f"fails/{p['id']}/")
+                  if int(x.rsplit("/", 1)[-1].split("-")[0]) > now_ms() - 60_000]
         if len(recent) >= 5:
             raise StudyError("Too many wrong tries. Wait a minute, then try again.")
         if _hash_pin(pin or "", p["salt"]) != p["pin"]:
-            await data.s.put(f"fails/{p['id']}/{now_ms()}")
+            await data.s.put(f"fails/{p['id']}/{now_ms()}-{secrets.token_hex(4)}")
             raise StudyError("Wrong PIN.")
 
     @app.post("/study/api/login")

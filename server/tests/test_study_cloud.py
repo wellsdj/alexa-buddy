@@ -88,3 +88,15 @@ def test_wrong_pins_lock_for_a_minute(cloud):
         assert c.post("/study/api/login", json={"profile": p["id"], "pin": "0000"}).status_code == 400
     r = c.post("/study/api/login", json={"profile": p["id"], "pin": "1234"})
     assert r.status_code == 400 and "Wait a minute" in r.json()["detail"]
+
+
+def test_wrong_pins_in_the_same_millisecond_all_count(cloud, monkeypatch):
+    # Bug: each wrong try was saved as fails/<id>/<milliseconds>, so tries in the same millisecond
+    # overwrote each other and the lock sometimes never came on.
+    monkeypatch.setattr(cloud, "now_ms", lambda: 1_794_000_000_000)
+    c = TestClient(cloud.create_app(cloud.MemoryStore()))
+    p = c.post("/study/api/profiles", json={"name": "Alex", "pin": "1234"}).json()["profile"]
+    for _ in range(5):
+        assert c.post("/study/api/login", json={"profile": p["id"], "pin": "0000"}).status_code == 400
+    r = c.post("/study/api/login", json={"profile": p["id"], "pin": "1234"})
+    assert r.status_code == 400 and "Wait a minute" in r.json()["detail"]
