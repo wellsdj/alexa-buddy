@@ -901,6 +901,7 @@ class Hub:
         self.greeted: dict[str, float] = {}  # name -> when Buddy last said hello to them
         self.heard: dict[str, float] = {}  # name -> when Buddy last heard their voice
         self.awake = True  # "off" sets this to False until the next "hey buddy"
+        self.startup_played: dict[str, float] = {}  # board name -> when it switched on (sound played once)
         self.device_gone_at: dict[str, float] = {}
         self.ring_started: dict = {}  # alarm id -> when it started ringing
         self.timed_out: set = set()  # alarms this server stopped because nobody answered  # desk unit name -> when it last disconnected
@@ -1038,7 +1039,12 @@ class Hub:
             await s.send_json({"type": "working", "on": self.online.busy})
             await self.push_schedule(s)
             if self.just_switched_on(s):
-                await s.play_startup_sound()
+                # Once per switch-on: reconnecting a few times while starting up stays quiet.
+                booted = time.time() - float(s.info.get("uptime") or 0)
+                last = self.startup_played.get(s.name)
+                if last is None or abs(booted - last) > 20:
+                    self.startup_played[s.name] = booted
+                    await s.play_startup_sound()
         self.record("connect", session=s.id, role=s.role, info=s.info)
 
     async def mic_test(self, viewer: Session, on: bool, target: str, enroll: str = "") -> None:

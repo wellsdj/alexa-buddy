@@ -24,7 +24,7 @@
 
 #include "config.h"
 
-#define FW_VERSION "1.7.2"
+#define FW_VERSION "1.7.3"
 #define SAMPLE_RATE 16000
 #define MIC_FRAMES 320               // 20 ms per I2S read
 #define SEND_BYTES 1280              // 40 ms of 16-bit audio per WebSocket frame
@@ -699,16 +699,19 @@ static void usbCommand(String line) {
     int sp = rest.indexOf(' ');
     String host = sp > 0 ? rest.substring(0, sp) : rest;
     uint16_t port = sp > 0 ? rest.substring(sp + 1).toInt() : 0;
-    if (host.length()) {
-      cfgHost = host;
-      prefs.putString("host", cfgHost);
+    bool changed = (host.length() && host != cfgHost) || (port && port != cfgPort);
+    if (changed) {  // the same address again changes nothing (and doesn't reconnect)
+      if (host.length()) {
+        cfgHost = host;
+        prefs.putString("host", cfgHost);
+      }
+      if (port) {
+        cfgPort = port;
+        prefs.putUShort("port", cfgPort);
+      }
+      resolvedHost = "";
+      lastConnectAttempt = 0;
     }
-    if (port) {
-      cfgPort = port;
-      prefs.putUShort("port", cfgPort);
-    }
-    resolvedHost = "";
-    lastConnectAttempt = 0;
     Serial.printf("[usb] server set to %s:%u\n", cfgHost.c_str(), cfgPort);
   } else if (line.startsWith("wifi ")) {
     String rest = line.substring(5);

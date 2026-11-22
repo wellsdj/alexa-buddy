@@ -50,25 +50,37 @@ def send_setup(ssid: str, password: str, server_port: int = 8000, wait_s: float 
             heard.append(f"{path}: {e}")
             continue
         try:
-            ser.rts = True  # a normal restart, so it's listening
-            time.sleep(0.1)
-            ser.rts = False
-            end = time.time() + wait_s
-            last_send = 0.0
+            # Send it once. If the board's running it answers straight away; if not (it's still starting,
+            # or busy), restart it through the cable once, and send again while it listens.
+            def send() -> None:
+                for line in lines:
+                    ser.write((line + "\n").encode())
+            send()
+            end, restarted = time.time() + wait_s, False
+            got_ok = False
             while time.time() < end:
-                if time.time() - last_send > 0.5:
-                    for line in lines:
-                        ser.write((line + "\n").encode())
-                    last_send = time.time()
                 out = ser.readline().decode(errors="ignore").strip()
                 if out:
                     heard.append(out)
-                    if "[usb] joined" in out or ("[usb] server set" in out and not ssid):
-                        return {"ok": True, "host": host, "message": f"Done: the board is on {ssid or 'your Wi-Fi'} "
-                                f"and knows this Mac is at {host}. Its light should stop flashing red in a moment."}
+                    if "[usb] joined" in out:
+                        return {"ok": True, "host": host, "message": f"Done: the board is on {ssid} and knows this "
+                                f"Mac is at {host}. Its light should stop flashing red in a moment."}
                     if "[usb] couldn't join" in out:
                         return {"ok": False, "message": f"The board couldn't join {ssid}. Check the password, "
                                 "and that it's a 2.4 GHz network (not one ending in 5G)."}
+                    if "[usb] ok" in out:
+                        got_ok = True
+                        if not ssid or "Wi-Fi set to" not in " ".join(heard):
+                            # Already on that Wi-Fi: only the address was needed.
+                            return {"ok": True, "host": host, "message": f"Done: the board knows this Mac is at "
+                                    f"{host}. Its light should stop flashing red in a moment."}
+                if not got_ok and not restarted and time.time() > end - wait_s + 3:
+                    restarted = True
+                    ser.rts = True  # a normal restart, so it's listening when it starts
+                    time.sleep(0.1)
+                    ser.rts = False
+                    time.sleep(1.0)
+                    send()
         finally:
             ser.close()
     if any("[usb] ok" in h for h in heard):
