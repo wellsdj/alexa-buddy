@@ -85,6 +85,18 @@ class LoginStore:
             return next(iter(accts.items()))
         return None
 
+    @staticmethod
+    def is_school(label: str, acct: dict) -> bool:
+        return bool(re.search(r"school|bromcom|\.sch\.|\.school\b|\.ac\.uk", f"{label} {acct.get('email', '')}", re.I))
+
+    def pick(self, school: bool) -> tuple[str, dict] | None:
+        """The account for this kind of job: the school one for school things, otherwise the home one
+        (never the school email for anything else)."""
+        accts = [(k, v) for k, v in self.accounts().items() if self.is_school(k, v) == school]
+        if not school:
+            accts.sort(key=lambda kv: 0 if re.search(r"home|personal|my email", kv[0], re.I) else 1)
+        return accts[0] if accts else None
+
     def account_on_page(self, page_text: str) -> tuple[str, dict] | None:
         """A sign-in page that shows which account it's for ("Hi Wells, wthompson24@..."): that one."""
         t = (page_text or "").lower()

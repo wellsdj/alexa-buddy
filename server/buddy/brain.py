@@ -402,6 +402,12 @@ What you remember about the user (numbers are ids for editing):
 {memories}"""
 
 
+# Where things are done, so the helper goes straight there instead of searching around.
+PLACES = {
+    r"\btennis\b": ("tennis", "How: tennis courts are booked on ClubSpark (https://clubspark.lta.org.uk), at the courts "
+                    "in Richmond. Go straight there, find the Richmond venue (use ClubSpark's own venue search for "
+                    "Richmond), sign in with their home account, and book. Don't search the web or other sites."),
+}
 CANCEL_JOB = re.compile(r"\b(cancel|stop|forget|never ?mind|abort|scrap|leave)\b.*\b(that|it|the (homework|search|job|"
                         r"task|check|booking|login)|checking|looking|searching)\b|^(cancel|stop it|forget it|never ?mind)"
                         r"( that| it)?( please)?\W*$")
@@ -1360,8 +1366,13 @@ class Brain:
             if name == "go_online":
                 if not self.online:
                     return "going online isn't available", "", []
-                r = self.online.start(a.get("task", ""), who=ctx.get("speaker", ""), today=self.now().strftime("%A %d %B %Y"),
-                                      home=self.settings["location_name"] or "")
+                task, kind = a.get("task", ""), ""
+                for word, (k, how) in PLACES.items():
+                    if re.search(word, task, re.I):
+                        task, kind = f"{task}\n\n{how}", k
+                        break
+                r = self.online.start(task, who=ctx.get("speaker", ""), today=self.now().strftime("%A %d %B %Y"),
+                                      home=self.settings["location_name"] or "", kind=kind)
                 if r == "started":
                     line = random.choice(["On it.", "Doing that now.", "Okay, I'm on it."])
                     return "started in the background; say only the confirmation", line, []

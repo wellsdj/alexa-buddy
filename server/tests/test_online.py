@@ -228,3 +228,32 @@ def test_google_sign_in_happens_in_one_go(tmp_path, monkeypatch):
         return text
     assert asyncio.run(go()) == "in as me@school.org"
     assert len(llm.seen) == 2  # just: open it, then finish
+
+
+def test_school_email_only_for_school_things(tmp_path):
+    from buddy.logins import LoginStore
+    store = LoginStore(tmp_path)
+    store.save_account("https://www.bromcomvle.com/", "w@christs.school", "x")
+    assert store.pick(school=True)[1]["email"] == "w@christs.school"
+    assert store.pick(school=False) is None  # tennis must not use the school email
+    store.save_account("home email", "me@gmail.com", "y")
+    assert store.pick(school=False)[1]["email"] == "me@gmail.com"
+    assert store.pick(school=True)[1]["email"] == "w@christs.school"
+
+
+def test_tennis_goes_straight_to_clubspark(settings, apis, claude):
+    from buddy.brain import Conversation
+    from tests.fakes import claude_message, claude_tool
+    from tests.test_llm_brain import make_brain
+    brain = make_brain(settings, apis, claude)
+    got = {}
+
+    class O:
+        busy = waiting = False
+        def start(self, task, **kw):
+            got.update(task=task, **kw)
+            return "started"
+    brain.online = O()
+    claude.script = [claude_message(claude_tool("go_online", {"task": "book a tennis court Saturday 10am"}))]
+    asyncio.run(brain.handle("book me a tennis court saturday at 10", Conversation()))
+    assert got["kind"] == "tennis" and "clubspark.lta.org.uk" in got["task"] and "Richmond" in got["task"]

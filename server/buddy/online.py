@@ -431,7 +431,12 @@ class OnlineAgent:
 
     async def _loop(self, job: Job, today: str, home: str) -> None:
         accts = self.logins.account_list() if self.logins else []
-        known = ", ".join(f"{a['label']} ({a['email']})" for a in accts) or "none yet"
+        known = ", ".join(f"{a['label']} ({a['email']}, " + ("ONLY for school sites" if self.logins.is_school(a['label'], a)
+                          else "for everything that isn't school") + ")" for a in accts) or "none yet"
+        if not job.kind.startswith("school"):
+            known += (". This job isn't school, so never use the school email: use their home account (or Sign in with "
+                      "Google choosing their personal account). If no home account is saved, ask_user for their home "
+                      "email and password and save_login with account=\"home email\".")
         system = SYSTEM.format(today=today or time.strftime("%A %d %B %Y"), home=home or "unknown",
                                who=job.who or "the user", accounts=known)
         start = f"The job: {job.task}"
@@ -519,11 +524,14 @@ class OnlineAgent:
                 text = (await page.inner_text("body", timeout=2000)).lower()
             except Exception:  # noqa: BLE001
                 break
+            school = job.kind.startswith("school")
             acct = self.logins.account_on_page(text)
-            if acct is None and len(accts) == 1:
-                acct = next(iter(accts.items()))
-            if acct is None and job.kind.startswith("school"):
-                acct = self.logins.account("school")
+            if acct is not None and self.logins.is_school(*acct) != school:
+                acct = None  # the school email only for school things; the home one for everything else
+            if acct is None:
+                acct = self.logins.pick(school)
+            if acct is None:
+                break  # no account of the right kind saved: the step-by-step way asks for it
             moved = False
             try:
                 pw = page.locator('input[type="password"]:visible').first
@@ -628,6 +636,12 @@ class OnlineAgent:
                     return "No saved logins."
                 if a.get("account"):
                     found = self.logins.account(a["account"])
+                    if found and self.logins.is_school(*found) and not job.kind.startswith("school"):
+                        home = self.logins.pick(False)
+                        if not home:
+                            return ("That's their school email: only for school things. Ask_user for their home email "
+                                    "and password, then save_login with account=\"home email\".")
+                        found = home
                     login = {"username": found[1].get("email", ""), "password": found[1].get("password", "")} if found else None
                     where = f'their "{found[0]}"' if found else ""
                 else:
