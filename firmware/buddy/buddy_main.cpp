@@ -993,11 +993,18 @@ static void startRecTasks() {
   xTaskCreatePinnedToCore(uploadTask, "upload", 8192, nullptr, 1, nullptr, 1);
 }
 
+static uint8_t sdRawCmd0(uint32_t hz);
+
 static void sdBegin() {
   sdSpi.begin(SD_SCK_PIN, SD_MISO_PIN, SD_MOSI_PIN, SD_CS_PIN);
   // Fast first; long jumper wires often only manage the slower speeds.
   const uint32_t speeds[] = {20000000, 8000000, 4000000, 1000000, 400000};
   sdOk = false;
+  pinMode(SD_CS_PIN, OUTPUT);
+  if (sdRawCmd0(400000) == 0xFF && sdRawCmd0(400000) == 0xFF) {  // nothing there: don't spend seconds trying
+    Serial.println("[sd] no card answering (check the reader's wires and that the card is in)");
+    return;
+  }
   for (uint32_t hz : speeds) {
     if (SD.begin(SD_CS_PIN, sdSpi, hz)) {
       sdOk = true;

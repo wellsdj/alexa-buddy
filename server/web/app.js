@@ -853,6 +853,17 @@ function init() {
     $("sd-test").disabled = false;
   };
 
+  $("usb-log").onclick = async () => {
+    const out = $("usb-log-out");
+    out.textContent = "Restarting the board and listening… (about 25 seconds)";
+    $("usb-log").disabled = true;
+    try {
+      const r = await api("/api/usb_log", { method: "POST" });
+      out.textContent = r.lines?.length ? r.lines.join("\n") : r.message;
+    } catch (e) { out.textContent = e.message; }
+    $("usb-log").disabled = false;
+  };
+
   // Timetable: Week A / Week B photos, read by Buddy.
   {
     const status = $("tt-status"), view = $("tt-view");

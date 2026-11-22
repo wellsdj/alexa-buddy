@@ -236,6 +236,9 @@
         <p class="note">Checks the SD card reader one step at a time (wires, card, format, writing) and says which part is wrong.</p>
         <span class="row"><button class="btn small" id="sd-test" type="button">Test SD card</button></span>
         <div class="note" id="sd-status"></div>
+        <p class="note"><b>Board log</b>: with the board plugged into this Mac by USB, this restarts it and shows what it says while starting up (about 25 seconds). Copy it to Claude if something's wrong.</p>
+        <span class="row"><button class="btn small" id="usb-log" type="button">Show board log</button></span>
+        <pre id="usb-log-out" style="white-space:pre-wrap;font-size:12px;max-height:320px;overflow:auto"></pre>
       </fieldset>
       <fieldset data-section="timetable" hidden>
         <legend>Timetable</legend>

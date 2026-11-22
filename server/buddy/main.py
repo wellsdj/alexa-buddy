@@ -594,6 +594,12 @@ def create_app(settings: Settings | None = None, http=None, claude_http=None, st
         return await asyncio.to_thread(send_setup, str(body.get("ssid", "")).strip(), str(body.get("password", "")),
                                        port)
 
+    @app.post("/api/usb_log")
+    async def usb_log():
+        """Restarts the desk unit through its USB cable and returns what it prints while starting."""
+        from .usb_setup import read_log
+        return await asyncio.to_thread(read_log)
+
     @app.post("/api/sd_test")
     async def sd_test():
         """Tests the desk unit's SD card reader, one wire and step at a time."""

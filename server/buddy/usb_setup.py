@@ -87,3 +87,49 @@ def send_setup(ssid: str, password: str, server_port: int = 8000, wait_s: float 
         return {"ok": True, "host": host, "message": f"Sent. The board now knows this Mac is at {host}."}
     return {"ok": False, "message": "The board didn't answer. Click 'Put Buddy on the board' first (it needs the "
             "newest board software), then try again.", "heard": heard[-6:]}
+
+
+def read_log(seconds: float = 25.0) -> dict:
+    """Restart the board through its USB cable and collect what it prints while starting up."""
+    import serial
+    ports = board_ports()
+    if not ports:
+        return {"ok": False, "lines": [], "message": "I can't find the board. Is it plugged into this Mac with a USB "
+                "cable (a data cable, not a charge-only one)?"}
+    lines: list[str] = []
+    for path in ports:
+        try:
+            ser = serial.Serial()
+            ser.port, ser.baudrate, ser.timeout = path, 115200, 0.2
+            ser.dtr = ser.rts = False
+            ser.open()
+        except Exception as e:  # noqa: BLE001
+            lines.append(f"({path}: {e})")
+            continue
+        try:
+            ser.rts = True  # a normal restart, so we see it start from the beginning
+            time.sleep(0.1)
+            ser.rts = False
+            end = time.time() + seconds
+            while time.time() < end:
+                try:
+                    out = ser.readline().decode(errors="ignore").rstrip()
+                except Exception:  # noqa: BLE001 - the port blinks off while it restarts
+                    time.sleep(0.5)
+                    try:
+                        ser.close()
+                        ser.open()
+                    except Exception:  # noqa: BLE001
+                        pass
+                    continue
+                if out:
+                    lines.append(out)
+        finally:
+            try:
+                ser.close()
+            except Exception:  # noqa: BLE001
+                pass
+        if any("[buddy]" in ln for ln in lines):
+            break
+    return {"ok": bool(lines), "lines": lines[-200:],
+            "message": "" if lines else "The board is plugged in but printed nothing. Try the other USB socket on it."}
