@@ -1060,13 +1060,8 @@ class Hub:
             await s.send_json({"type": "aec", "on": bool(self.settings.get("echo_cancel", True))})
             await s.send_json({"type": "working", "on": self.online.busy})
             await self.push_schedule(s)
-            if self.just_switched_on(s):
-                # Once per switch-on: reconnecting a few times while starting up stays quiet.
-                booted = time.time() - float(s.info.get("uptime") or 0)
-                last = self.startup_played.get(s.name)
-                if last is None or abs(booted - last) > 20:
-                    self.startup_played[s.name] = booted
-                    await s.play_startup_sound()
+            if self.should_play_startup(s):
+                await s.play_startup_sound()
         self.record("connect", session=s.id, role=s.role, info=s.info)
 
     async def mic_test(self, viewer: Session, on: bool, target: str, enroll: str = "") -> None:
@@ -1086,6 +1081,17 @@ class Hub:
         who.mic_test_until = time.time() + 300  # switches itself off after 5 minutes
         who.mt_buf, who.mt_silence, who.mt_peak, who.mt_clipped = [], 0, 0.0, 0
         self.record("mic_test", target=who.id)
+
+    def should_play_startup(self, s: Session) -> bool:
+        """Once per switch-on: reconnecting a few times while starting up stays quiet."""
+        if not self.just_switched_on(s):
+            return False
+        booted = time.time() - float(s.info.get("uptime") or 0)
+        last = self.startup_played.get(s.name)
+        if last is None or abs(booted - last) > 20:
+            self.startup_played[s.name] = booted
+            return True
+        return False
 
     def just_switched_on(self, s: Session) -> bool:
         """Plugged in, rather than a quick Wi-Fi reconnect. Newer board software says how long
