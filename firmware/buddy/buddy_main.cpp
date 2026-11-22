@@ -24,7 +24,7 @@
 
 #include "config.h"
 
-#define FW_VERSION "1.7.4"
+#define FW_VERSION "1.7.5"
 #define SAMPLE_RATE 16000
 #define MIC_FRAMES 320               // 20 ms per I2S read
 #define SEND_BYTES 1280              // 40 ms of 16-bit audio per WebSocket frame
@@ -153,13 +153,26 @@ static float speechGain() {
 #include "HWCDC.h"
 #if CONFIG_IDF_TARGET_ESP32S3 && !ARDUINO_USB_CDC_ON_BOOT
 static HWCDC usbJtag;  // the ESP32's own USB socket (Serial is the other one)
+// Messages go out of both USB sockets, so whichever one the Mac is on can read the board's log.
+class LogOut : public Print {
+ public:
+  size_t write(uint8_t c) override { return write(&c, 1); }
+  size_t write(const uint8_t *b, size_t n) override {
+    Serial.write(b, n);
+    if (HWCDC::isConnected()) usbJtag.write(b, n);
+    return n;
+  }
+};
+static LogOut logOut;
+#else
+#define logOut Serial
 #endif
 static AecPipeline aec;
 static volatile bool aecOn = true;  // the server can switch it off ("echo_cancel" setting)
 
 static void aecTask(void *) {
   for (;;) {
-    if (aec.delayTask()) Serial.printf("[aec] echo delay %d samples\n", (int)aec.lag);
+    if (aec.delayTask()) logOut.printf("[aec] echo delay %d samples\n", (int)aec.lag);
     vTaskDelay(pdMS_TO_TICKS(50));
   }
 }
@@ -183,7 +196,7 @@ static void micTask(void *) {
       }
       if (++blocks >= 50) {
         channel = sums[1] > sums[0] ? 1 : 0;
-        Serial.printf("[mic] using %s channel (L=%llu R=%llu)\n", channel ? "right" : "left", sums[0], sums[1]);
+        logOut.printf("[mic] using %s channel (L=%llu R=%llu)\n", channel ? "right" : "left", sums[0], sums[1]);
       }
     }
     int c = channel < 0 ? 0 : channel;
@@ -430,7 +443,7 @@ static bool stripReady = false;
 
 static void stripInit() {
   stripReady = rmtInit(STRIP_PIN, RMT_TX_MODE, RMT_MEM_NUM_BLOCKS_1, 10000000);  // 0.1 us ticks
-  Serial.printf("[strip] %s on GPIO %d, %u LEDs\n", stripReady ? "ready" : "FAILED", STRIP_PIN, stripCount);
+  logOut.printf("[strip] %s on GPIO %d, %u LEDs\n", stripReady ? "ready" : "FAILED", STRIP_PIN, stripCount);
 }
 
 static void stripShow() {
@@ -541,7 +554,7 @@ static void saveFires() {
 static void loadFires() {
   fireCount = constrain(prefs.getInt("fireN", 0), 0, MAX_FIRES);
   if (fireCount) prefs.getBytes("fires", fires, sizeof(Fire) * fireCount);
-  Serial.printf("[alarms] %d stored fire times\n", fireCount);
+  logOut.printf("[alarms] %d stored fire times\n", fireCount);
 }
 
 static bool alreadyFired(const Fire &f) {
@@ -561,7 +574,7 @@ static void stopRinging(const char *reason) {
   doc["id"] = ringId;
   doc["reason"] = reason;
   sendJson(doc);
-  Serial.printf("[alarms] stopped (%s)\n", reason);
+  logOut.printf("[alarms] stopped (%s)\n", reason);
 }
 
 static void checkAlarms() {
@@ -579,7 +592,7 @@ static void checkAlarms() {
     if (now < f.at || now - f.at > 90 || alreadyFired(f)) continue;
     firedRecently[firedIdx] = f;
     firedIdx = (firedIdx + 1) % 16;
-    Serial.printf("[alarms] firing %s kind=%d\n", f.id, f.kind);
+    logOut.printf("[alarms] firing %s kind=%d\n", f.id, f.kind);
     JsonDocument doc;
     doc["type"] = "alarm_fired";
     doc["id"] = f.id;
@@ -607,7 +620,7 @@ static void handleJson(uint8_t *payload, size_t len) {
   if (doc["server_time"].is<uint32_t>() && !timeValid()) {
     struct timeval tv = {(time_t)doc["server_time"].as<uint32_t>(), 0};
     settimeofday(&tv, nullptr);  // NTP may be blocked; the server's clock is good enough
-    Serial.println("[time] set from server");
+    logOut.println("[time] set from server");
   }
   if (!strcmp(type, "hello_ack")) {
     if (doc["volume"].is<int>()) volumeLevel = constrain(doc["volume"].as<int>(), 0, 10);
@@ -666,7 +679,7 @@ static void handleJson(uint8_t *payload, size_t len) {
     }
     fireCount = n;
     saveFires();
-    Serial.printf("[alarms] schedule updated: %d fire times\n", n);
+    logOut.printf("[alarms] schedule updated: %d fire times\n", n);
   } else if (!strcmp(type, "alarm_stop")) {
     stopRinging(doc["reason"] | (doc["quiet"] | false ? "snooze" : "voice"));
   } else if (!strcmp(type, "sd_test")) {
@@ -715,7 +728,7 @@ static void usbCommand(String line) {
       resolvedHost = "";
       lastConnectAttempt = 0;
     }
-    Serial.printf("[usb] server set to %s:%u\n", cfgHost.c_str(), cfgPort);
+    logOut.printf("[usb] server set to %s:%u\n", cfgHost.c_str(), cfgPort);
   } else if (line.startsWith("wifi ")) {
     String rest = line.substring(5);
     int tab = rest.indexOf('\t');
@@ -726,10 +739,10 @@ static void usbCommand(String line) {
       joinPass = pass;
       wantJoin = true;
       usbGotWifi = true;
-      Serial.printf("[usb] Wi-Fi set to %s\n", ssid.c_str());
+      logOut.printf("[usb] Wi-Fi set to %s\n", ssid.c_str());
     }
   }
-  Serial.println("[usb] ok");
+  logOut.println("[usb] ok");
 }
 
 static void readUsb() {
@@ -815,17 +828,17 @@ static void wifiTasks() {
     wantJoin = false;
     String prevS = WiFi.SSID(), prevP = WiFi.psk();
     rememberNet(prevS, prevP);  // so it can always come back to where it was
-    Serial.printf("[wifi] switching to %s\n", joinSsid.c_str());
+    logOut.printf("[wifi] switching to %s\n", joinSsid.c_str());
     WiFi.disconnect(false, false);
     delay(200);
     WiFi.begin(joinSsid.c_str(), joinPass.length() ? joinPass.c_str() : nullptr);
     if (waitForWifi(15000)) {
       rememberNet(joinSsid, joinPass);
       joinResult = "ok";
-      Serial.printf("[wifi] now on %s\n", joinSsid.c_str());
+      logOut.printf("[wifi] now on %s\n", joinSsid.c_str());
     } else {
       joinResult = "failed";  // wrong password or out of range: back to the old one
-      Serial.printf("[wifi] couldn't join %s; going back to %s\n", joinSsid.c_str(), prevS.c_str());
+      logOut.printf("[wifi] couldn't join %s; going back to %s\n", joinSsid.c_str(), prevS.c_str());
       WiFi.disconnect(false, false);
       delay(200);
       WiFi.begin(prevS.c_str(), prevP.length() ? prevP.c_str() : nullptr);
@@ -850,7 +863,7 @@ static void tryNextNetwork() {
     return;
   }
   String p = prefs.getString(("p" + String(turn - 1)).c_str(), "");
-  Serial.printf("[wifi] trying %s\n", s.c_str());
+  logOut.printf("[wifi] trying %s\n", s.c_str());
   WiFi.begin(s.c_str(), p.length() ? p.c_str() : nullptr);
 }
 
@@ -890,11 +903,11 @@ static void wsEvent(WStype_t type, uint8_t *payload, size_t len) {
       wsConnected = true;
       lastConnected = millis();
       serverState = "idle";
-      Serial.printf("[ws] connected to %s:%u\n", resolvedHost.c_str(), resolvedPort);
+      logOut.printf("[ws] connected to %s:%u\n", resolvedHost.c_str(), resolvedPort);
       sendHello();
       break;
     case WStype_DISCONNECTED:
-      if (wsConnected) Serial.println("[ws] disconnected");
+      if (wsConnected) logOut.println("[ws] disconnected");
       wsConnected = false;
       lastConnected = millis();
       serverState = "offline";
@@ -977,7 +990,7 @@ static void repairPartials() {
     f.close();
     String fixed = path.substring(0, path.length() - 5) + ".wav";
     SD.rename(path, fixed);
-    Serial.printf("[rec] repaired %s\n", fixed.c_str());
+    logOut.printf("[rec] repaired %s\n", fixed.c_str());
   }
 }
 
@@ -1002,13 +1015,13 @@ static void sdBegin() {
   sdOk = false;
   pinMode(SD_CS_PIN, OUTPUT);
   if (sdRawCmd0(400000) == 0xFF && sdRawCmd0(400000) == 0xFF) {  // nothing there: don't spend seconds trying
-    Serial.println("[sd] no card answering (check the reader's wires and that the card is in)");
+    logOut.println("[sd] no card answering (check the reader's wires and that the card is in)");
     return;
   }
   for (uint32_t hz : speeds) {
     if (SD.begin(SD_CS_PIN, sdSpi, hz)) {
       sdOk = true;
-      Serial.printf("[sd] mounted at %lu Hz\n", (unsigned long)hz);
+      logOut.printf("[sd] mounted at %lu Hz\n", (unsigned long)hz);
       break;
     }
     SD.end();
@@ -1016,9 +1029,9 @@ static void sdBegin() {
   if (sdOk) {
     SD.mkdir("/rec");
     repairPartials();
-    Serial.printf("[sd] card ready, %llu MB\n", SD.cardSize() / (1024ULL * 1024ULL));
+    logOut.printf("[sd] card ready, %llu MB\n", SD.cardSize() / (1024ULL * 1024ULL));
   } else {
-    Serial.println("[sd] no card found (is the reader wired up and the card in?)");
+    logOut.println("[sd] no card found (is the reader wired up and the card in?)");
   }
 }
 
@@ -1139,7 +1152,7 @@ static void sdTest() {
   doc["ok"] = rw;
   doc["hint"] = rw ? "The SD card works. Hold the button 2 seconds to record a lesson." : hint;
   sendJson(doc);
-  Serial.printf("[sd] test: %s\n", rw ? "ok" : hint.c_str());
+  logOut.printf("[sd] test: %s\n", rw ? "ok" : hint.c_str());
 }
 
 static void startRec() {
@@ -1152,7 +1165,7 @@ static void startRec() {
   String path = recName(recEpoch, recNum, "part");
   recFile = SD.open(path, "w+");
   if (!recFile) {
-    Serial.printf("[rec] couldn't create %s\n", path.c_str());
+    logOut.printf("[rec] couldn't create %s\n", path.c_str());
     recErrorUntil = millis() + 2500;
     return;
   }
@@ -1164,7 +1177,7 @@ static void startRec() {
   droppedRec = 0;
   recStartMs = millis();
   recording = true;
-  Serial.printf("[rec] recording to %s\n", path.c_str());
+  logOut.printf("[rec] recording to %s\n", path.c_str());
 }
 
 static void stopRec(bool failed) {
@@ -1185,12 +1198,12 @@ static void stopRec(bool failed) {
   String part = recName(recEpoch, recNum, "part"), wav = recName(recEpoch, recNum, "wav");
   if (recBytes < (uint32_t)REC_MIN_UPLOAD_S * SAMPLE_RATE * 2) {  // too short to keep
     SD.remove(part);
-    Serial.println("[rec] too short, discarded");
+    logOut.println("[rec] too short, discarded");
     recBadUntil = millis() + 3000;
     return;
   }
   SD.rename(part, wav);
-  Serial.printf("[rec] saved %s (%lu s, %lu dropped pieces)\n", wav.c_str(), (unsigned long)(recBytes / (SAMPLE_RATE * 2)),
+  logOut.printf("[rec] saved %s (%lu s, %lu dropped pieces)\n", wav.c_str(), (unsigned long)(recBytes / (SAMPLE_RATE * 2)),
                 (unsigned long)droppedRec);
   if (failed) recErrorUntil = millis() + 4000;
   else recOkUntil = millis() + 3000;
@@ -1215,7 +1228,7 @@ static void recTask(void *) {
     if (!got) continue;
     for (size_t i = 0; i < got / 2; i++) chunk[i] = (int16_t)constrain((int32_t)(chunk[i] * REC_GAIN), -32768, 32767);
     if (recFile.write((uint8_t *)chunk, got) != got) {  // card full, or taken out
-      Serial.println("[rec] write failed, stopping");
+      logOut.println("[rec] write failed, stopping");
       stopRec(true);
       continue;
     }
@@ -1234,7 +1247,7 @@ static void toggleRecording() {
   }
   if (!sdOk) {
     recErrorUntil = millis() + 2500;
-    Serial.println("[rec] no SD card");
+    logOut.println("[rec] no SD card");
     return;
   }
   if (recording) {
@@ -1299,7 +1312,7 @@ static bool uploadFile(const String &name, uint32_t size) {
   while (!c.available() && c.connected() && millis() < until) vTaskDelay(pdMS_TO_TICKS(100));
   String status = c.readStringUntil('\n');
   c.stop();
-  Serial.printf("[upload] %s -> %s", name.c_str(), status.c_str());
+  logOut.printf("[upload] %s -> %s", name.c_str(), status.c_str());
   return status.indexOf(" 200") > 0;
 }
 
@@ -1357,15 +1370,15 @@ static bool resolveServer() {
     resolvedPort = cfgPort;
     return true;
   }
-  Serial.println("[mdns] looking for the Buddy server...");
+  logOut.println("[mdns] looking for the Buddy server...");
   int n = MDNS.queryService("buddy", "tcp");
   if (n <= 0) {
-    Serial.println("[mdns] not found (is the server running on the same Wi-Fi?)");
+    logOut.println("[mdns] not found (is the server running on the same Wi-Fi?)");
     return false;
   }
   resolvedHost = MDNS.address(0).toString();
   resolvedPort = MDNS.port(0);
-  Serial.printf("[mdns] found server at %s:%u\n", resolvedHost.c_str(), resolvedPort);
+  logOut.printf("[mdns] found server at %s:%u\n", resolvedHost.c_str(), resolvedPort);
   return true;
 }
 
@@ -1391,7 +1404,7 @@ static void maintainConnection() {
     MDNS.begin(DEVICE_NAME);
     resolvedHost = "";
     lastConnectAttempt = 0;
-    Serial.printf("[wifi] online, IP %s\n", WiFi.localIP().toString().c_str());
+    logOut.printf("[wifi] online, IP %s\n", WiFi.localIP().toString().c_str());
   }
   wasUp = up;
   if (WiFi.status() != WL_CONNECTED) {
@@ -1433,7 +1446,7 @@ static void setMuted(bool muted) {
   doc["type"] = "audio_mode";
   doc["on"] = !muted;
   sendJson(doc);
-  Serial.printf("[mic] %s\n", muted ? "muted" : "unmuted");
+  logOut.printf("[mic] %s\n", muted ? "muted" : "unmuted");
 }
 
 static void handleButton() {
@@ -1445,7 +1458,7 @@ static void handleButton() {
     uint32_t held = now - downAt;
     holdStage = held >= 4000 ? 3 : held >= 2000 ? 2 : 0;  // the light shows what letting go will do
     if (held > 10000) {
-      Serial.println("[wifi] forgetting Wi-Fi, reopening setup hotspot");
+      logOut.println("[wifi] forgetting Wi-Fi, reopening setup hotspot");
       WiFiManager wm;
       wm.resetSettings();
       delay(300);
@@ -1501,10 +1514,11 @@ static void sendStats() {
 void setup() {
   Serial.begin(115200);
 #if CONFIG_IDF_TARGET_ESP32S3 && !ARDUINO_USB_CDC_ON_BOOT
+  usbJtag.setTxTimeoutMs(0);  // never wait on the log if nothing's listening
   usbJtag.begin(115200);
 #endif
   delay(200);
-  Serial.println("\n[buddy] firmware " FW_VERSION);
+  logOut.println("\n[buddy] firmware " FW_VERSION);
   pinMode(BUTTON_PIN, INPUT_PULLUP);
   led(40, 40, 40);
 
@@ -1527,7 +1541,7 @@ void setup() {
     spkStream = nullptr;
   }
   if (!spkStream) spkStream = xStreamBufferCreate(SPK_BUFFER_MIN, 1);
-  Serial.printf("[audio] speaker buffer %u KB, free heap %u KB\n",
+  logOut.printf("[audio] speaker buffer %u KB, free heap %u KB\n",
                 (unsigned)(xStreamBufferSpacesAvailable(spkStream) / 1024), (unsigned)(ESP.getFreeHeap() / 1024));
   setupI2S();
   sdBegin();
@@ -1551,7 +1565,7 @@ void setup() {
     WiFi.begin(joinSsid.c_str(), joinPass.length() ? joinPass.c_str() : nullptr);
     usbJoined = waitForWifi(20000);
     if (usbJoined) rememberNet(joinSsid, joinPass);
-    Serial.printf("[usb] %s %s\n", usbJoined ? "joined" : "couldn't join", joinSsid.c_str());
+    logOut.printf("[usb] %s %s\n", usbJoined ? "joined" : "couldn't join", joinSsid.c_str());
   }
   WiFiManager wm;
   char portStr[8];
@@ -1563,7 +1577,7 @@ void setup() {
   wm.addParameter(&pPort);
   wm.addParameter(&pToken);
   wm.setSaveConfigCallback([]() { shouldSaveConfig = true; });
-  wm.setAPCallback([](WiFiManager *) { led(0, 120, 120); Serial.println("[wifi] setup hotspot open: " SETUP_AP_NAME); });
+  wm.setAPCallback([](WiFiManager *) { led(0, 120, 120); logOut.println("[wifi] setup hotspot open: " SETUP_AP_NAME); });
   wm.setConfigPortalTimeout(300);
   wm.setConnectTimeout(25);
   wm.setTitle("Buddy setup");
@@ -1575,7 +1589,7 @@ void setup() {
     wm.setConnectTimeout(12);
   }
   if (!usbJoined && !wm.autoConnect(SETUP_AP_NAME, SETUP_AP_PASSWORD) && !hadWifi) {
-    Serial.println("[wifi] no network configured in time; restarting");
+    logOut.println("[wifi] no network configured in time; restarting");
     delay(1000);
     ESP.restart();
   }
@@ -1593,9 +1607,9 @@ void setup() {
   }
   WiFi.setAutoReconnect(true);
   if (WiFi.status() == WL_CONNECTED)
-    Serial.printf("[wifi] connected, IP %s, RSSI %d\n", WiFi.localIP().toString().c_str(), WiFi.RSSI());
+    logOut.printf("[wifi] connected, IP %s, RSSI %d\n", WiFi.localIP().toString().c_str(), WiFi.RSSI());
   else
-    Serial.println("[wifi] not in range: working offline (lessons can still be recorded)");
+    logOut.println("[wifi] not in range: working offline (lessons can still be recorded)");
 
   configTime(0, 0, "pool.ntp.org", "time.google.com", "time.cloudflare.com");
   MDNS.begin(DEVICE_NAME);
