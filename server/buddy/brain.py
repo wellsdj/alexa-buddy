@@ -862,8 +862,12 @@ class Brain:
         portal = self.settings["school_portal_url"] or "the Bromcom student portal (search for the Bromcom " \
             "student login" + (f" for {self.settings['school_name']}" if self.settings["school_name"] else "") + ")"
         jobs = {
-            "homework": "Find the homework that's due from tomorrow onwards: for each, the subject, what to do and "
-                        "the due date. Soonest first. Leave out anything due today or earlier, and anything "
+            "homework": "Open the Homework section from the menu. For each piece due from tomorrow onwards, open its "
+                        "details: click the pencil icon on that homework (it's the item marked '(icon: pencil)'), read "
+                        "what the teacher wrote, then go back. If a subject was asked about (e.g. Food Tech), pick that "
+                        "subject in the homework page's subject filter first. In the summary, say each one as the "
+                        "teacher set it: subject, due date, then what to do, in their words. Soonest first. Leave out "
+                        "anything due today or earlier, and anything "
                         f"already handed in: only due {(self.now() + __import__('datetime').timedelta(days=1)):%A %d %B} "
                         "or later.",
             "today": f"Find today's ({self.now():%A %d %B}) timetable: each lesson in order with the time, subject, "

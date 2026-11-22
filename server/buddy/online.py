@@ -38,7 +38,8 @@ SNAPSHOT_JS = r"""
 () => {
   document.querySelectorAll('[data-buddy-n]').forEach(e => e.removeAttribute('data-buddy-n'));
   const sel = 'a[href], button, input, select, textarea, [role=button], [role=link], [role=checkbox], ' +
-              '[role=radio], [role=tab], [role=option], [role=menuitem], [onclick], [contenteditable=true]';
+              '[role=radio], [role=tab], [role=option], [role=menuitem], [onclick], [contenteditable=true], ' +
+              '[class*="pencil"], [class*="fa-edit"], [class*="glyphicon"], [title]';
   const items = [];
   let n = 0;
   for (const el of document.querySelectorAll(sel)) {
@@ -59,6 +60,10 @@ SNAPSHOT_JS = r"""
     if (el.disabled || el.getAttribute('aria-disabled') === 'true') extra += ' (disabled)';
     if (el.checked) extra += ' (ticked)';
     const meta = [el.type, el.name, el.id, el.autocomplete, el.placeholder].filter(Boolean).join(' ');
+    // Icon-only buttons (a pencil to open homework, a bin, a cross): say what the icon is.
+    const icon = [el, ...el.querySelectorAll('i, svg, span, img')].map(x => ((x.getAttribute && (x.getAttribute('class') || '')) + ' ' + (x.alt || '')))
+      .join(' ').match(/(pencil|edit|eye|view|open|search|close|times|trash|bin|plus|download|upload|calendar|info)/i);
+    if (icon) extra += ` (icon: ${icon[1].toLowerCase()})`;
     items.push({n, kind, label, extra, meta});
   }
   const text = (document.body ? document.body.innerText : '').replace(/\n\s*\n+/g, '\n');

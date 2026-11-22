@@ -100,7 +100,7 @@ class Board:
 
 def streamed_hub(settings, claude):
     settings.set_secret("ANTHROPIC_API_KEY", "sk-ant-test")
-    settings.update({"play_hold_ms": 100, "fact_check": True})
+    settings.update({"play_hold_ms": 100, "fact_check": True, "speak_mode": "stream"})  # these test streaming
     apis = FakeAPIs()
     hub = Hub(settings, stt=FakeSTT(apis), claude_http=claude.client())
     hub.tts = FakeTTS()
@@ -195,7 +195,7 @@ def test_live_voice_talks_to_elevenlabs_the_documented_way(settings, monkeypatch
     assert headers["xi-api-key"] == "xi-test"
     assert init["text"] == " " and init["generation_config"]["chunk_length_schedule"][0] == 80
     assert init["voice_settings"]["speed"] == 0.9  # a calmer default
-    assert first == {"text": "Hello there. ", "flush": True} and second == {"text": "How are you? ", "flush": True}
+    assert first == {"text": "Hello there. ", "flush": True} and second == {"text": "How are you? "}
     assert close == {"text": ""}
 
 
@@ -329,3 +329,11 @@ def test_after_a_gap_the_backlog_isnt_dumped_on_the_board(settings):
     burst = [t for t in sent_at[4:]]
     # with a 0.8 s lead, 2 s of sound can't all be sent within the first 0.5 s after it arrives
     assert burst[-1] - burst[0] > 0.9
+
+
+def test_by_default_the_whole_answer_is_written_first(settings):
+    from buddy.hub import Session
+    claude = StreamingClaude()
+    hub, s, board, apis = streamed_hub(settings, claude)
+    settings.update({"speak_mode": "whole"})
+    assert not hub._can_stream(s, False, {})

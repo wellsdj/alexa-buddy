@@ -60,6 +60,8 @@ DEFAULTS: dict[str, Any] = {
     # which missed quiet voices: the light came on, then went off after 6 s.
     "listen_sensitivity": 0.3,
     "timing_log": True,
+    "speak_mode": "whole",  # whole: the full answer is written, then said in one go (smoothest) | stream: start
+    # with the first sentence while the rest is still being written (quicker, can sound stitched together)
     "stream_replies": True,  # speak Claude's answer while it's still being written (off: wait for all of it)
     "play_hold_ms": 350,  # sound collected before Buddy starts playing a streamed answer (raise if it stutters)
     "warm_connections": True,

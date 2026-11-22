@@ -1664,7 +1664,8 @@ class Hub:
     def _can_stream(self, s: Session, starting: bool, speaker: dict) -> bool:
         """Stream this answer? Not when it has to be held back: a new voice is asked "who's this?" first,
         an alarm is going, or a missed alarm has to be worked into the answer."""
-        if not self.settings["stream_replies"] or s.ringing or s.paused is not None or self.brain.missed:
+        if (not self.settings["stream_replies"] or self.settings.get("speak_mode", "whole") == "whole"
+                or s.ringing or s.paused is not None or self.brain.missed):
             return False
         unknown = (speaker and not speaker.get("name") and not speaker.get("learning")
                    and speaker.get("score", 0) > 0)

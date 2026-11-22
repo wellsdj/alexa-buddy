@@ -28,6 +28,8 @@ SETTABLE: dict[str, tuple[str, Any, str]] = {
     "barge_in": ("bool", None, "people you know can talk over you to stop you"),
     "fact_check": ("bool", None, "double-check factual answers"),
     "reword_replies": ("bool", None, "say quick replies (timers, weather) in your own words"),
+    "speak_mode": ("choice", ("whole", "stream"), "whole: write all of an answer, then say it in one smooth go; "
+                   "stream: start talking with the first sentence while the rest is written (quicker)"),
     "stream_replies": ("bool", None, "start talking while your answer is still being written (faster)"),
     "early_transcribe": ("bool", None, "start writing down their words at the first pause (faster)"),
     "warm_connections": ("bool", None, "connect to Claude and the voice as soon as 'hey buddy' is heard (faster)"),

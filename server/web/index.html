@@ -144,6 +144,8 @@
         <legend>How Buddy speaks</legend>
         <label>Engine
           <select data-setting="tts_engine"><option value="auto">Auto (ElevenLabs, then offline Piper)</option><option value="elevenlabs">ElevenLabs</option><option value="piper">Piper (offline, free)</option><option value="browser">Browser voice (this page only)</option></select></label>
+        <label>How Buddy speaks
+          <select data-setting="speak_mode"><option value="whole">Smooth: write the whole answer, then say it</option><option value="stream">Quick: start talking while the rest is written</option></select></label>
         <label>Speed <input data-setting="voice_speed" type="range" min="0.7" max="1.2" step="0.05"><output id="speed-out"></output></label>
       </fieldset>
     </div>
