@@ -112,7 +112,7 @@ class Browser:
             # Google account in it once and every site Buddy opens is signed in as you from then on.
             # Without the "being controlled" flags, Google lets you sign in.
             opts = dict(headless=not self.visible, viewport={"width": 1280, "height": 860},
-                        ignore_default_args=["--enable-automation"],
+                        ignore_default_args=["--enable-automation", "--no-sandbox"],
                         args=["--disable-blink-features=AutomationControlled"])
             exe = os.environ.get("BUDDY_CHROMIUM")
             try:

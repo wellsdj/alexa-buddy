@@ -35,12 +35,15 @@ class Timetable:
             except (OSError, json.JSONDecodeError):
                 continue
             weeks = {w: {d: _lessons(v) for d, v in days.items()} for w, days in data.get("weeks", {}).items()}
+            if path == self.path and data.get("version", 1) < 2:
+                # Saved by the old version, which got "this week" wrong at weekends: use the known week instead.
+                data["week_a_monday"] = json.loads(DEFAULT.read_text()).get("week_a_monday", "")
             if weeks:
                 return {**data, "weeks": weeks}
         return {"weeks": {}, "week_a_monday": ""}
 
     def save(self, data: dict) -> None:
-        self.path.write_text(json.dumps(data, indent=2))
+        self.path.write_text(json.dumps({**data, "version": 2}, indent=2))
 
     def set_week(self, week: str, days: dict) -> None:
         data = self.load()

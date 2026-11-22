@@ -62,3 +62,28 @@ def test_knows_the_week_without_asking(tmp_path):
     tt = Timetable(tmp_path)
     assert tt.week_of(date(2026, 11, 23)) == "B" and tt.week_of(date(2026, 11, 30)) == "A"
     assert "week B" in tt.spoken(date(2026, 11, 23))
+
+
+def test_do_i_have_pe_and_say_it_slowly(settings, apis, claude):
+    import asyncio
+    from buddy.brain import Conversation
+    from tests.test_llm_brain import make_brain
+    brain = make_brain(settings, apis, claude)
+    brain.now = lambda: datetime(2026, 11, 22, 10)  # Sunday; tomorrow is Monday of week B
+    conv = Conversation()
+    r = asyncio.run(brain.handle("what have I got tomorrow", conv))
+    assert r.text.startswith("Monday, week B. Form first. Period 1, English.")
+    r2 = asyncio.run(brain.handle("can you tell me that really slowly", conv))
+    assert r2.text == r.text
+    r = asyncio.run(brain.handle("do I have PE tomorrow", conv))
+    assert r.text == "No, no PE tomorrow."
+    r = asyncio.run(brain.handle("do I have drama tomorrow", conv))
+    assert r.text == "Yes, you've got Drama tomorrow, period 2."
+    assert not claude.requests  # none of it needed Claude, let alone the web
+
+
+def test_an_old_saved_week_is_replaced(tmp_path):
+    import json
+    (tmp_path / "timetable.json").write_text(json.dumps({"weeks": {"A": {"Monday": ["RE"]}, "B": {"Monday": ["English"]}},
+                                                         "week_a_monday": "2026-11-09"}))
+    assert Timetable(tmp_path).week_of(date(2026, 11, 23)) == "B"

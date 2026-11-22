@@ -112,6 +112,7 @@ class Conversation:
     pending: dict | None = None
     clear_requested: float = 0.0
     dropped: list[str] = field(default_factory=list)
+    last_intent: str = ""  # what the last reply was (e.g. timetable, so "say that slowly" repeats it)
     strays: list[float] = field(default_factory=list)  # when stray words were heard (for "I'll leave you to it")
     interrupted: str = ""  # the rest of an answer that got cut off, for "carry on"  # topics the user asked Buddy to leave alone
 
@@ -337,7 +338,8 @@ It runs in the background and asks before anything final.
 - Study Buddy: how their revising is going (study_progress).
 - Remember their accounts for signing in to sites ("my school email is ...", with the password if they say it): \
 save_account. Then going online signs in with them by itself.
-- Their school timetable, Week A and Week B (timetable): instant, use it for "what's my day" and "what have I \
+- Their school timetable, Week A and Week B (timetable): instant and always right (never say you made it up \
+or doubt it). Never search the web about their lessons, use it for "what's my day" and "what have I \
 got tomorrow". Say it just as it comes back (form, then period one to five, subjects only): no times, rooms or \
 teachers. Use the school portal only for homework.
 - Their school portal, Bromcom: homework coming up and what their day is (school). If they ask you to keep them \
@@ -447,7 +449,7 @@ class Brain:
         if reply is None:
             reply = self._stray(text, conv)
         if reply is None:
-            reply = self._timetable_quick(text)
+            reply = self._timetable_quick(text, conv)
         if reply is None and self.online and self.online.busy and CANCEL_JOB.search(text.lower()):
             self.online.stop()
             reply = Reply(random.choice(["Okay, stopped.", "Done, I've stopped that.", "Stopped."]), intent="online")
@@ -464,7 +466,10 @@ class Brain:
         # the checker can't see them, and second-guessing them out loud sounds unsure.
         own = {"timetable", "school", "go_online", "online_job", "save_account", "get_settings", "change_setting",
                "study_progress", "wifi"} & set(ctx.get("tools", []))
-        if reply.intent in ("llm", "llm_deep") and reply.text and self.settings["fact_check"] and not own:
+        # Questions about the user's own life (their lessons, homework, plans) can't be checked on the web.
+        personal = re.search(r"\b(i|i'm|i've|i'll|my|me|mine|we|our|us)\b", text.lower())
+        if (reply.intent in ("llm", "llm_deep") and reply.text and self.settings["fact_check"] and not own
+                and not personal):
             if reply.streamed:
                 ctx["check_later"] = True  # already being said: check it straight after (check_after)
             else:
@@ -483,6 +488,10 @@ class Brain:
         conv.add("user", text, speaker=ctx.get("speaker", ""))
         if reply.text:
             notes = [f'I searched the web for "{q}" and found: {r[:350]}' for q, r in ctx.get("searched", [])]
+            if reply.intent == "timetable" or "timetable" in ctx.get("tools", []):
+                notes.append("I read this straight from their saved timetable, so it's right: stand by it.")
+            if "school" in ctx.get("tools", []) or reply.intent == "online":
+                notes.append("This came from my own check of their school portal.")
             if ctx.get("thought"):
                 notes.append("I thought this one through carefully.")
             if ctx.get("checked") == "correct":
@@ -505,9 +514,43 @@ class Brain:
         if LEAVING.search(reply.text or ""):
             reply.follow_up = False  # "I'll leave you to it": then it really does
         reply.ms = int((time.monotonic() - t0) * 1000)
+        conv.last_intent = reply.intent
         return reply
 
-    def _timetable_quick(self, text: str) -> Reply | None:
+    def _timetable_quick(self, text: str, conv: Conversation | None = None) -> Reply | None:
+        t0 = text.lower()
+        if (conv and conv.last_intent == "timetable" and
+                re.search(r"\b(slow(er|ly)?|again|repeat|one more time|what was that)\b", t0)):
+            return Reply(conv.last_reply, intent="timetable")  # already slow and clear: say it again
+        m = None if re.match(r"\W*(what|which|when)\b", t0) else re.search(
+            r"\b(?:do|have) i (?:have|got) (?:any |a )?([a-z][a-z. ]*?)(?: lessons?)? (today|tomorrow|on \w+day|\w+day)\b", t0)
+        if m and "homework" not in m.group(1) and m.group(1).strip() not in ("", "to", "on", "for"):
+            return self._have_lesson(m.group(1).strip(), m.group(2))
+        return self._timetable_day(text)
+
+    def _have_lesson(self, subject: str, when: str) -> Reply | None:
+        from .timetable import Timetable, which_day
+        from .school_calendar import SchoolCalendar
+        tt = Timetable(self.settings.data_dir)
+        day = which_day(when, self.now())
+        why = SchoolCalendar(self.settings.data_dir).why_off(day)
+        if why:
+            return Reply(f"No, {day:%A} is {why}, so no lessons.", intent="timetable")
+        _, lessons = tt.day(day)
+        names = [l.get("subject", "") for l in lessons]
+        aliases = {"pe": "PE", "p.e.": "PE", "maths": "Maths", "math": "Maths", "dt": "Design Technology",
+                   "re": "RE", "r.e.": "RE", "computing": "Computer Studies", "food": "Food Tech", "cs": "Computer Studies"}
+        want = aliases.get(subject, subject).lower()
+        if not names or not want or want in ("lessons", "school", "class", "classes"):
+            return None
+        hits = [i for i, n in enumerate(names, 1) if want in n.lower() or n.lower() in want]
+        label = "tomorrow" if "tomorrow" in when else ("today" if "today" in when else f"on {day:%A}")
+        if hits:
+            when_s = " and ".join(f"period {i}" for i in hits)
+            return Reply(f"Yes, you've got {names[hits[0] - 1]} {label}, {when_s}.", intent="timetable")
+        return Reply(f"No, no {subject.upper() if len(subject) <= 3 else subject.title()} {label}.", intent="timetable")
+
+    def _timetable_day(self, text: str) -> Reply | None:
         """"What have I got today?", "what's my day tomorrow?", "what lessons on Friday?": straight from the
         timetable, instantly. Never online."""
         t = text.lower()
