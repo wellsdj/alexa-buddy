@@ -254,6 +254,8 @@ TOOLS = [
         "what lessons they have on a day. day: today, tomorrow, a weekday name, or YYYY-MM-DD. this_week: set only "
         "when they tell you whether this week is week A or week B.",
         "parameters": {"type": "object", "properties": {"day": {"type": "string"},
+                                                        "subject": {"type": "string", "description": "a subject they "
+                                                                    "asked about (\"do I have PE?\"), if any"},
                                                         "this_week": {"type": "string", "enum": ["A", "B"]}}}}},
     {"type": "function", "function": {
         "name": "school", "description": "Check the user's school portal (Bromcom) online: homework coming up, "
@@ -341,7 +343,7 @@ save_account. Then going online signs in with them by itself.
 - Their school timetable, Week A and Week B (timetable): instant and always right (never say you made it up \
 or doubt it). Never search the web about their lessons, use it for "what's my day" and "what have I \
 got tomorrow". Say it just as it comes back (form, then period one to five, subjects only): no times, rooms or \
-teachers. Use the school portal only for homework.
+teachers, and the week letter exactly as given (never "week A or B"). Don't offer to read more. Use the school portal only for homework.
 - Their school portal, Bromcom: homework coming up and what their day is (school). If they ask you to keep them \
 on top of homework, check it, then set reminders for each piece before it's due.
 - Recognise people by voice, carry on after being interrupted, think harder about tricky things (think_harder).
@@ -526,7 +528,24 @@ class Brain:
             r"\b(?:do|have) i (?:have|got) (?:any |a )?([a-z][a-z. ]*?)(?: lessons?)? (today|tomorrow|on \w+day|\w+day)\b", t0)
         if m and "homework" not in m.group(1) and m.group(1).strip() not in ("", "to", "on", "for"):
             return self._have_lesson(m.group(1).strip(), m.group(2))
+        # Any other way of asking about one subject on a day: "is there PE tomorrow", "got maths on Friday?"
+        day = re.search(r"\b(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b", t0)
+        if day and "homework" not in t0 and not re.match(r"\W*(what|which)\b", t0):
+            subj = self._subject_in(t0)
+            if subj:
+                return self._have_lesson(subj, day.group(1))
         return self._timetable_day(text)
+
+    def _subject_in(self, t: str) -> str:
+        """A school subject named in what they said ("pe", "maths", "food tech"...), or ''."""
+        from .timetable import Timetable
+        names = {l.get("subject", "").lower() for w in Timetable(self.settings.data_dir).load().get("weeks", {}).values()
+                 for day in w.values() for l in day}
+        extra = ["pe", "p.e.", "pee", "p e", "maths", "math", "dt", "re", "r.e.", "computing", "food", "cs"]
+        for n in sorted(names | set(extra), key=len, reverse=True):
+            if n and re.search(rf"(?<![a-z]){re.escape(n)}(?![a-z])", t):
+                return n
+        return ""
 
     def _have_lesson(self, subject: str, when: str) -> Reply | None:
         from .timetable import Timetable, which_day
@@ -1319,7 +1338,11 @@ class Brain:
                 tt = Timetable(self.settings.data_dir)
                 if a.get("this_week"):
                     tt.set_this_week(a["this_week"], self.now().date())
-                return tt.spoken(which_day(a.get("day", "today"), self.now())), "", []
+                if a.get("subject"):
+                    r = self._have_lesson(a["subject"].lower().strip(), a.get("day", "today") or "today")
+                    if r:
+                        return r.text + " (Say exactly this.)", "", []
+                return tt.spoken(which_day(a.get("day", "today"), self.now())) + " (Say exactly this, week letter included.)", "", []
             if name == "save_account":
                 if not self.online or not self.online.logins:
                     return "not available", "", []

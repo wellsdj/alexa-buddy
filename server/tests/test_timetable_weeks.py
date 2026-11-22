@@ -87,3 +87,16 @@ def test_an_old_saved_week_is_replaced(tmp_path):
     (tmp_path / "timetable.json").write_text(json.dumps({"weeks": {"A": {"Monday": ["RE"]}, "B": {"Monday": ["English"]}},
                                                          "week_a_monday": "2026-11-09"}))
     assert Timetable(tmp_path).week_of(date(2026, 11, 23)) == "B"
+
+
+def test_other_ways_of_asking_about_a_subject(settings, apis, claude):
+    import asyncio
+    from buddy.brain import Conversation
+    from tests.test_llm_brain import make_brain
+    brain = make_brain(settings, apis, claude)
+    brain.now = lambda: datetime(2026, 11, 22, 10)  # Sunday
+    for q in ("is there PE tomorrow", "um have I got P.E. tomorrow?", "any maths on Wednesday"):
+        r = asyncio.run(brain.handle(q, Conversation()))
+        assert r.intent == "timetable", q
+    assert "Maths" in asyncio.run(brain.handle("any maths on Wednesday", Conversation())).text
+    assert not claude.requests
