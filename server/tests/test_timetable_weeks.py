@@ -15,11 +15,6 @@ def test_weeks_alternate_from_what_you_said(tmp_path):
     assert "weekend" in tt.spoken(date(2026, 11, 21))
 
 
-def test_asks_which_week_if_it_doesnt_know(tmp_path):
-    tt = Timetable(tmp_path)
-    assert "week A or week B" in tt.spoken(date(2026, 11, 16))
-
-
 def test_the_built_in_timetable(tmp_path):
     tt = Timetable(tmp_path)
     tt.set_this_week("A", date(2026, 11, 16))
@@ -56,10 +51,14 @@ def test_asking_about_the_day_never_goes_online(settings, apis, claude):
     brain.now = lambda: datetime(2026, 11, 18, 9)  # a Wednesday
     conv = Conversation()
     r = asyncio.run(brain.handle("what do I have today", conv))
-    assert r.text == "Is this week A or week B?" and not claude.requests
-    r = asyncio.run(brain.handle("it's week A", conv))
     assert r.text.startswith("Wednesday, week A. Form first. Period 1, Maths.") and not claude.requests
     r = asyncio.run(brain.handle("what have I got tomorrow", conv))
     assert not claude.requests
     r = asyncio.run(brain.handle("what's my homework", conv))
     assert r.intent != "timetable"
+
+
+def test_knows_the_week_without_asking(tmp_path):
+    tt = Timetable(tmp_path)
+    assert tt.week_of(date(2026, 11, 23)) == "B" and tt.week_of(date(2026, 11, 30)) == "A"
+    assert "week B" in tt.spoken(date(2026, 11, 23))

@@ -1,19 +1,79 @@
 {
   "weeks": {
     "A": {
-      "Monday":    ["RE", "Music", "Textiles", "Computer Studies", "Science"],
-      "Tuesday":   ["Graphics", "Maths", "History", "PE", "English"],
-      "Wednesday": ["Maths", "Art", "English", "Drama", "French"],
-      "Thursday":  ["RE", "Geography", "History", "Maths", "Citizenship"],
-      "Friday":    ["Science", "PE", "Maths", "English", "French"]
+      "Monday": [
+        "RE",
+        "Music",
+        "Textiles",
+        "Computer Studies",
+        "Science"
+      ],
+      "Tuesday": [
+        "Graphics",
+        "Maths",
+        "History",
+        "PE",
+        "English"
+      ],
+      "Wednesday": [
+        "Maths",
+        "Art",
+        "English",
+        "Drama",
+        "French"
+      ],
+      "Thursday": [
+        "RE",
+        "Geography",
+        "History",
+        "Maths",
+        "Citizenship"
+      ],
+      "Friday": [
+        "Science",
+        "PE",
+        "Maths",
+        "English",
+        "French"
+      ]
     },
     "B": {
-      "Monday":    ["English", "Drama", "Food Tech", "Computer Studies", "Science"],
-      "Tuesday":   ["Design Technology", "Maths", "Music", "PE", "English"],
-      "Wednesday": ["Maths", "Science", "English", "PE", "Geography"],
-      "Thursday":  ["RE", "French", "History", "Maths", "Citizenship"],
-      "Friday":    ["Science", "French", "Art", "English", "Geography"]
+      "Monday": [
+        "English",
+        "Drama",
+        "Food Tech",
+        "Computer Studies",
+        "Science"
+      ],
+      "Tuesday": [
+        "Design Technology",
+        "Maths",
+        "Music",
+        "PE",
+        "English"
+      ],
+      "Wednesday": [
+        "Maths",
+        "Science",
+        "English",
+        "PE",
+        "Geography"
+      ],
+      "Thursday": [
+        "RE",
+        "French",
+        "History",
+        "Maths",
+        "Citizenship"
+      ],
+      "Friday": [
+        "Science",
+        "French",
+        "Art",
+        "English",
+        "Geography"
+      ]
     }
   },
-  "week_a_monday": ""
+  "week_a_monday": "2026-11-16"
 }

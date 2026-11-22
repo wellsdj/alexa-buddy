@@ -79,6 +79,13 @@ def _sound(name: str) -> bytes:
 STARTUP_SOUND = _sound("startup")  # the desk unit has just been switched on
 WAKE_SOUND = _sound("wake")  # it's sure it heard "hey buddy" (not when it listens again for an answer)
 NOTHING_SOUND = _sound("nothing_heard")  # it was listening, but you didn't say anything
+# Once a week Buddy checks on Bromcom whether it's week A or week B, so it never has to ask.
+WEEK_TASK = (
+    "On the user's Bromcom student portal (https://www.bromcomvle.com/, sign in with the school account using "
+    "'Sign in with Google' if asked), open My Timetable and find whether the current or coming school week is "
+    "Week A or Week B (look for a 'Week A' / 'Week B' label, or the week name shown above the timetable). Then "
+    "call finish with summary set to ONLY this JSON: {\"week\": \"A\", \"monday\": \"YYYY-MM-DD\"} where monday is "
+    "the Monday of the week you read it for.")
 # Once a week Buddy reads the school's own term dates, so it knows half terms, INSET days and the end of term.
 CALENDAR_TASK = (
     "Find Christ's School Richmond's term dates for this school year and next (the school's website, "
@@ -1362,6 +1369,11 @@ class Hub:
                     self.online.start(self.brain._school_task("homework", ""), today=now.strftime("%A %d %B %Y"),
                                       home=self.settings["location_name"] or "", kind="school_homework", quiet=True)
                 elif (now.hour >= 5 and not busy and state.get("homework_day") == today
+                      and time.time() - float(state.get("week_at", 0)) > 6 * 86400):
+                    state["week_at"] = time.time()
+                    self._save_morning(state)
+                    self.online.start(WEEK_TASK, today=now.strftime("%A %d %B %Y"), kind="school_week", quiet=True)
+                elif (now.hour >= 5 and not busy and state.get("homework_day") == today
                       and time.time() - float(state.get("calendar_at", 0)) > 7 * 86400):
                     state["calendar_at"] = time.time()
                     self._save_morning(state)
@@ -1389,6 +1401,19 @@ class Hub:
             self.memory.add(f"Homework from Bromcom, checked {time.strftime('%a %d %b')} at "
                             f"{time.strftime('%H:%M')}: {job.result}", "plans", source="learned")
             self.record("homework_checked", result=job.result[:300])
+        elif job.kind == "school_week" and job.status == "done":
+            from datetime import date as _date
+            from .llm import parse_json_loose
+            from .timetable import Timetable
+            data = parse_json_loose(job.result or "")
+            week = str(data.get("week", "")).upper()[:1] if isinstance(data, dict) else ""
+            if week in ("A", "B"):
+                try:
+                    monday = _date.fromisoformat(str(data.get("monday", "")))
+                except ValueError:
+                    monday = self.brain.now().date()
+                Timetable(self.settings.data_dir).set_this_week(week, monday)
+                self.record("timetable_week", week=week, monday=monday.isoformat())
         elif job.kind == "school_calendar" and job.status == "done":
             from .llm import parse_json_loose
             from .school_calendar import SchoolCalendar
