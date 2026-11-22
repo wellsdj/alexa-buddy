@@ -184,3 +184,47 @@ def test_google_password_page_uses_the_account_shown(tmp_path):
         return text
     assert asyncio.run(go()) == "signed in"
     assert not any("s3cret" in str(x) for x in llm.seen)
+
+
+GOOGLE_FLOW = """<html><body><div id=s1><p>Sign in</p><input type=email id=e
+ onkeydown="if(event.key=='Enter'){s1.hidden=true;s2.hidden=false}"></div>
+<div id=s2 hidden><p>Hi Wells</p><p>me@school.org</p><input type=password id=p
+ onkeydown="if(event.key=='Enter'){s2.hidden=true;s3.hidden=false}"></div>
+<div id=s3 hidden><button onclick="m.innerText='in as '+e.value">Continue as Wells</button></div><p id=m></p></body></html>"""
+
+
+def test_google_sign_in_happens_in_one_go(tmp_path, monkeypatch):
+    """No thinking between Google's steps: email, password, Continue, done straight after opening."""
+    from buddy.logins import LoginStore
+    page = tmp_path / "accounts.google.com.html"
+    page.write_text(GOOGLE_FLOW)
+    store = LoginStore(tmp_path)
+    store.save_account("school email", "me@school.org", "s3cret!")
+    calls = [("open_url", {"url": page.as_uri()}), ("finish", {"summary": "In."})]
+    llm = Script(calls)
+    agent = OnlineAgent({"online_on": True}, llm, Browser(tmp_path / "profile", visible=False))
+    agent.logins = store
+    agent.say = lambda t, l: asyncio.sleep(0)
+
+    async def go():
+        try:
+            await agent.browser.start()
+        except Exception as e:  # noqa: BLE001
+            pytest.skip(f"no browser here: {str(e)[:80]}")
+        orig = agent._autopilot
+
+        async def pilot(job):  # the test page is a file, so pretend it's Google's address
+            real_url = type(agent.browser.page).url
+            monkeypatch.setattr(type(agent.browser.page), "url", property(lambda self: "https://accounts.google.com/x"))
+            try:
+                return await orig(job)
+            finally:
+                monkeypatch.setattr(type(agent.browser.page), "url", real_url)
+        agent._autopilot = pilot
+        agent.start("sign in", kind="school_homework")
+        await agent.job.task_handle
+        text = await agent.browser.page.inner_text("#m", timeout=2000)
+        await agent.browser.close()
+        return text
+    assert asyncio.run(go()) == "in as me@school.org"
+    assert len(llm.seen) == 2  # just: open it, then finish

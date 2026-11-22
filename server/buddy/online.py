@@ -490,6 +490,73 @@ class OnlineAgent:
                     m["content"] = m["content"][:300] + "\n... (old page, trimmed)"
 
     async def _tool(self, job: Job, name: str, a: dict) -> str:
+        result = await self._tool_inner(job, name, a)
+        if self.browser.page is not None and result.startswith("Page:"):
+            steps = await self._autopilot(job)
+            if steps:
+                result = f"(Signed in by myself: {', '.join(steps)}.)\n" + await self.browser.look()
+        return result
+
+    async def _autopilot(self, job: Job) -> list[str]:
+        """Google's sign-in steps, done straight away in code (no thinking needed): pick the saved account,
+        type its email or password, press Continue / Allow. Much quicker than a step at a time."""
+        b, done = self.browser, []
+        if not self.logins:
+            return done
+        accts = self.logins.accounts()
+        for _ in range(6):
+            page = b.page
+            if "accounts.google.com" not in (page.url or ""):
+                break
+            try:
+                text = (await page.inner_text("body", timeout=2000)).lower()
+            except Exception:  # noqa: BLE001
+                break
+            acct = self.logins.account_on_page(text)
+            if acct is None and len(accts) == 1:
+                acct = next(iter(accts.items()))
+            if acct is None and job.kind.startswith("school"):
+                acct = self.logins.account("school")
+            moved = False
+            try:
+                pw = page.locator('input[type="password"]:visible').first
+                email = page.locator('input[type="email"]:visible').first
+                if acct and await pw.count() and acct[1].get("password"):
+                    await pw.fill(acct[1]["password"], timeout=4000)
+                    await pw.press("Enter")
+                    done.append("password")
+                    moved = True
+                elif acct and await email.count():
+                    await email.fill(acct[1].get("email", ""), timeout=4000)
+                    await email.press("Enter")
+                    done.append("email")
+                    moved = True
+                elif (acct and acct[1].get("email") and "choose an account" in text
+                      and await page.get_by_text(acct[1]["email"], exact=False).filter(visible=True).count()):
+                    await page.get_by_text(acct[1]["email"], exact=False).filter(visible=True).first.click(timeout=4000)
+                    done.append("picked the account")
+                    moved = True
+                else:
+                    btn = page.get_by_role("button", name=re.compile(r"^(continue|continue as .*|allow|next)$", re.I)
+                                           ).filter(visible=True).first
+                    if await btn.count():
+                        await btn.click(timeout=4000)
+                        done.append("continue")
+                        moved = True
+            except Exception:  # noqa: BLE001 - leave it to the step-by-step way
+                break
+            if not moved:
+                break
+            try:
+                await page.wait_for_load_state("domcontentloaded", timeout=5000)
+            except Exception:  # noqa: BLE001
+                pass
+            await asyncio.sleep(0.8)  # Google's pages animate between steps
+        if done:
+            job.steps.append("signed in: " + ", ".join(done))
+        return done
+
+    async def _tool_inner(self, job: Job, name: str, a: dict) -> str:
         b = self.browser
         try:
             if name == "open_url":

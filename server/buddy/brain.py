@@ -344,6 +344,7 @@ save_account. Then going online signs in with them by itself.
 or doubt it). Never search the web about their lessons, use it for "what's my day" and "what have I \
 got tomorrow". Say it just as it comes back (form, then period one to five, subjects only): no times, rooms or \
 teachers, and the week letter exactly as given (never "week A or B"). Don't offer to read more. Use the school portal only for homework.
+- Homework: only ever talk about homework due tomorrow or later, never anything due today or in the past.
 - Their school portal, Bromcom: homework coming up and what their day is (school). If they ask you to keep them \
 on top of homework, check it, then set reminders for each piece before it's due.
 - Recognise people by voice, carry on after being interrupted, think harder about tricky things (think_harder).
@@ -861,8 +862,10 @@ class Brain:
         portal = self.settings["school_portal_url"] or "the Bromcom student portal (search for the Bromcom " \
             "student login" + (f" for {self.settings['school_name']}" if self.settings["school_name"] else "") + ")"
         jobs = {
-            "homework": "Find all homework that's set and not handed in yet: for each, the subject, what to do, "
-                        "the due date and whether it's been submitted. Soonest first.",
+            "homework": "Find the homework that's due from tomorrow onwards: for each, the subject, what to do and "
+                        "the due date. Soonest first. Leave out anything due today or earlier, and anything "
+                        f"already handed in: only due {(self.now() + __import__('datetime').timedelta(days=1)):%A %d %B} "
+                        "or later.",
             "today": f"Find today's ({self.now():%A %d %B}) timetable: each lesson in order with the time, subject, "
                      "teacher and room, plus any homework due today.",
             "timetable": "Find the timetable (the day they asked about, or this week): lessons with times and rooms.",
@@ -1353,7 +1356,8 @@ class Brain:
                 fresh = ready and time.strftime("%Y-%m-%d", time.localtime(at)) == self.now().strftime("%Y-%m-%d")
                 if a.get("what") == "homework" and fresh and not a.get("check_now"):
                     return (f"You checked Bromcom yourself at {time.strftime('%H:%M', time.localtime(at))} this morning: "
-                            f"{ready} Tell them, briefly; no need to check again.", "", [])
+                            f"{ready} Tell them, briefly, only what's due tomorrow ({self.now() + __import__('datetime').timedelta(days=1):%A}) "
+                            "or later: never anything due today or before. No need to check again.", "", [])
                 if not self.online:
                     return "going online isn't available", "", []
                 r = self.online.start(self._school_task(a.get("what", "homework"), a.get("detail", "")),

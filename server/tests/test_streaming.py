@@ -195,7 +195,7 @@ def test_live_voice_talks_to_elevenlabs_the_documented_way(settings, monkeypatch
     assert headers["xi-api-key"] == "xi-test"
     assert init["text"] == " " and init["generation_config"]["chunk_length_schedule"][0] == 80
     assert init["voice_settings"]["speed"] == 0.9  # a calmer default
-    assert first == {"text": "Hello there. ", "flush": True} and second == {"text": "How are you? "}
+    assert first == {"text": "Hello there. ", "flush": True} and second == {"text": "How are you? ", "flush": True}
     assert close == {"text": ""}
 
 

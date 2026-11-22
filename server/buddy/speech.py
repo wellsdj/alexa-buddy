@@ -231,7 +231,10 @@ class SpeechStream:
                 if first and timer:
                     timer.mark("tts_sent")
                 self.sent.append(s)
-                await live.send(s, flush=first)  # the first sentence goes straight away
+                # Every sentence is made whole, on its own: the first straight away (so Buddy starts talking
+                # quickly), the rest while that one plays, each waiting its turn. Made in pieces, a long
+                # sentence came out stitched together and rushed.
+                await live.send(s, flush=True)
                 first = False
 
         w = asyncio.create_task(writer())
