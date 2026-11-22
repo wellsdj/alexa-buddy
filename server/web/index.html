@@ -154,6 +154,7 @@
       <a class="set-row study-link" href="/study" target="_blank" rel="noopener"><span><b>Study Buddy ↗</b><small>Lessons, notes and practice questions (opens a new tab)</small></span></a>
       <nav class="set-menu" id="set-menu" aria-label="Settings sections">
         <button type="button" class="set-row" data-open="you"><span><b>You &amp; home</b><small>Your name, Buddy's name, where you live</small></span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></button>
+        <button type="button" class="set-row" data-open="usbsetup"><span><b>Set up the desk unit by USB</b><small>Wi-Fi and this Mac's address, through the cable (no hotspot)</small></span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></button>
         <button type="button" class="set-row" data-open="listening"><span><b>Listening &amp; mic</b><small>How easily Buddy wakes, mic boost, follow-ups, morning briefing</small></span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></button>
         <button type="button" class="set-row" data-open="light"><span><b>Light</b><small>How many lights and how bright</small></span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></button>
         <button type="button" class="set-row" data-open="music"><span><b>Music</b><small>Connect Spotify and choose where music plays</small></span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></button>
@@ -221,6 +222,14 @@
         <label>Code <span class="row"><input id="study-code" type="text" placeholder="e.g. K7Q2MX" autocomplete="off" spellcheck="false" style="text-transform:uppercase"><button class="btn primary small" id="study-connect" type="button">Connect</button></span></label>
         <p class="note" id="study-status">Not connected.</p>
         <span class="row"><button class="btn small" id="study-disconnect" type="button" hidden>Disconnect</button></span>
+      </fieldset>
+      <fieldset data-section="usbsetup" hidden>
+        <legend>Set up the desk unit by USB</legend>
+        <p class="note">Plug the board into this Mac with a USB cable. Buddy tells it your Wi-Fi and where this Mac is, so the Buddy-Setup hotspot isn't needed. It must be a 2.4 GHz network (not one ending in 5G).</p>
+        <label>Wi-Fi name <input id="usb-ssid" type="text" autocomplete="off" autocapitalize="off"></label>
+        <label>Wi-Fi password <input id="usb-pass" type="password" autocomplete="off"></label>
+        <span class="row"><button class="btn primary small" id="usb-go" type="button">Set up over USB</button></span>
+        <p class="note" id="usb-status"></p>
       </fieldset>
       <fieldset data-section="timetable" hidden>
         <legend>Timetable</legend>

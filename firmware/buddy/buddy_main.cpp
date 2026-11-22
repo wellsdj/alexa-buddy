@@ -24,7 +24,7 @@
 
 #include "config.h"
 
-#define FW_VERSION "1.7.1"
+#define FW_VERSION "1.7.2"
 #define SAMPLE_RATE 16000
 #define MIC_FRAMES 320               // 20 ms per I2S read
 #define SEND_BYTES 1280              // 40 ms of 16-bit audio per WebSocket frame
@@ -149,6 +149,10 @@ static float speechGain() {
 // ------------------------------------------------------------------ echo cancelling
 // Takes Buddy's own voice out of the mic, so it doesn't hear itself (and you can cut in).
 #include "aec.h"
+#include "HWCDC.h"
+#if CONFIG_IDF_TARGET_ESP32S3 && !ARDUINO_USB_CDC_ON_BOOT
+static HWCDC usbJtag;  // the ESP32's own USB socket (Serial is the other one)
+#endif
 static AecPipeline aec;
 static volatile bool aecOn = true;  // the server can switch it off ("echo_cancel" setting)
 
@@ -676,6 +680,68 @@ static void handleJson(uint8_t *payload, size_t len) {
     joinSsid = String((const char *)(doc["ssid"] | ""));
     joinPass = String((const char *)(doc["pass"] | ""));
     if (joinSsid.length()) wantJoin = true;
+  }
+}
+
+// ---------------------------------------------------------------- setup over USB (no hotspot needed)
+// The Mac sends lines like "BUDDY host 192.168.1.23 8000" and "BUDDY wifi <name>\t<password>" down the USB
+// cable. Read on both of the board's USB sockets.
+static String usbLine[2];
+static bool usbGotWifi = false;
+
+static void usbCommand(String line) {
+  line.trim();
+  if (!line.startsWith("BUDDY ")) return;
+  line = line.substring(6);
+  if (line.startsWith("host ")) {
+    String rest = line.substring(5);
+    rest.trim();
+    int sp = rest.indexOf(' ');
+    String host = sp > 0 ? rest.substring(0, sp) : rest;
+    uint16_t port = sp > 0 ? rest.substring(sp + 1).toInt() : 0;
+    if (host.length()) {
+      cfgHost = host;
+      prefs.putString("host", cfgHost);
+    }
+    if (port) {
+      cfgPort = port;
+      prefs.putUShort("port", cfgPort);
+    }
+    resolvedHost = "";
+    lastConnectAttempt = 0;
+    Serial.printf("[usb] server set to %s:%u\n", cfgHost.c_str(), cfgPort);
+  } else if (line.startsWith("wifi ")) {
+    String rest = line.substring(5);
+    int tab = rest.indexOf('\t');
+    String ssid = tab >= 0 ? rest.substring(0, tab) : rest;
+    String pass = tab >= 0 ? rest.substring(tab + 1) : "";
+    if (ssid.length() && ssid != WiFi.SSID()) {
+      joinSsid = ssid;
+      joinPass = pass;
+      wantJoin = true;
+      usbGotWifi = true;
+      Serial.printf("[usb] Wi-Fi set to %s\n", ssid.c_str());
+    }
+  }
+  Serial.println("[usb] ok");
+}
+
+static void readUsb() {
+  Stream *ports[2] = {&Serial, nullptr};
+#if CONFIG_IDF_TARGET_ESP32S3 && !ARDUINO_USB_CDC_ON_BOOT
+  ports[1] = &usbJtag;  // the board's other USB socket (the ESP32's own)
+#endif
+  for (int k = 0; k < 2; k++) {
+    if (!ports[k]) continue;
+    while (ports[k]->available()) {
+      char c = ports[k]->read();
+      if (c == '\n' || c == '\r') {
+        if (usbLine[k].length()) usbCommand(usbLine[k]);
+        usbLine[k] = "";
+      } else if (usbLine[k].length() < 200) {
+        usbLine[k] += c;
+      }
+    }
   }
 }
 
@@ -1275,6 +1341,9 @@ static void sendStats() {
 // ------------------------------------------------------------------ setup / loop
 void setup() {
   Serial.begin(115200);
+#if CONFIG_IDF_TARGET_ESP32S3 && !ARDUINO_USB_CDC_ON_BOOT
+  usbJtag.begin(115200);
+#endif
   delay(200);
   Serial.println("\n[buddy] firmware " FW_VERSION);
   pinMode(BUTTON_PIN, INPUT_PULLUP);
@@ -1318,6 +1387,20 @@ void setup() {
   // Wi-Fi: first boot (or after a 10 s button hold) opens the "Buddy-Setup" hotspot.
   WiFi.mode(WIFI_STA);
   WiFi.setSleep(false);  // modem sleep adds audio latency and dropouts
+  // A moment to be set up over USB by the Mac (Wi-Fi name, password and its address), so the setup
+  // hotspot isn't needed. Opening the USB port restarts the board, which lands it right here.
+  for (uint32_t t0 = millis(); millis() - t0 < 4000 && !usbGotWifi;) {
+    readUsb();
+    delay(20);
+  }
+  bool usbJoined = false;
+  if (usbGotWifi) {
+    wantJoin = false;
+    WiFi.begin(joinSsid.c_str(), joinPass.length() ? joinPass.c_str() : nullptr);
+    usbJoined = waitForWifi(20000);
+    if (usbJoined) rememberNet(joinSsid, joinPass);
+    Serial.printf("[usb] %s %s\n", usbJoined ? "joined" : "couldn't join", joinSsid.c_str());
+  }
   WiFiManager wm;
   char portStr[8];
   snprintf(portStr, sizeof(portStr), "%u", cfgPort);
@@ -1339,7 +1422,7 @@ void setup() {
     wm.setEnableConfigPortal(false);
     wm.setConnectTimeout(12);
   }
-  if (!wm.autoConnect(SETUP_AP_NAME, SETUP_AP_PASSWORD) && !hadWifi) {
+  if (!usbJoined && !wm.autoConnect(SETUP_AP_NAME, SETUP_AP_PASSWORD) && !hadWifi) {
     Serial.println("[wifi] no network configured in time; restarting");
     delay(1000);
     ESP.restart();
@@ -1368,6 +1451,7 @@ void setup() {
 }
 
 void loop() {
+  readUsb();
   ws.loop();
   pumpMic();
   if (playbackDone) {

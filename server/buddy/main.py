@@ -57,8 +57,26 @@ class Advertiser:
             self.zc = Zeroconf()
             self.zc.register_service(self.info, allow_name_change=True)
             log.info("advertising _buddy._tcp on %s:%d", ip, port)
+            import threading
+            threading.Thread(target=self._follow_address, args=(ip,), daemon=True).start()
         except Exception as e:  # noqa: BLE001
             log.warning("mDNS advertising failed: %s", e)
+
+    def _follow_address(self, ip: str) -> None:
+        """The Mac's address can change (a new Wi-Fi, the router restarting): keep telling the board the
+        current one, or it goes looking in the wrong place."""
+        import time as _t
+        while self.zc:
+            _t.sleep(30)
+            now = local_ip()
+            if now != ip and now != "127.0.0.1" and self.zc and self.info:
+                try:
+                    self.info.addresses = [socket.inet_aton(now)]
+                    self.zc.update_service(self.info)
+                    log.info("address changed to %s: told the desk unit", now)
+                    ip = now
+                except Exception as e:  # noqa: BLE001
+                    log.warning("couldn't update the address: %s", e)
 
     def stop(self) -> None:
         if self.zc:
@@ -567,6 +585,14 @@ def create_app(settings: Settings | None = None, http=None, claude_http=None, st
     async def delete_account(label: str):
         hub.logins.remove_account(label)
         return {"accounts": hub.logins.account_list(passwords=True)}
+
+    @app.post("/api/usb_setup")
+    async def usb_setup(body: dict):
+        """Set up the desk unit through its USB cable: Wi-Fi and this Mac's address, no hotspot."""
+        from .usb_setup import send_setup
+        port = PORT
+        return await asyncio.to_thread(send_setup, str(body.get("ssid", "")).strip(), str(body.get("password", "")),
+                                       port)
 
     @app.post("/api/browser/open")
     async def open_browser():

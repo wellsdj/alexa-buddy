@@ -819,6 +819,19 @@ function init() {
     document.querySelector('[data-open="studyweb"]').addEventListener("click", refresh);
   }
 
+  // Set up the desk unit over USB (no hotspot).
+  $("usb-go").onclick = async () => {
+    const status = $("usb-status");
+    status.textContent = "Talking to the board through the cable… (up to 30 seconds)";
+    $("usb-go").disabled = true;
+    try {
+      const r = await api("/api/usb_setup", { method: "POST", body: { ssid: $("usb-ssid").value, password: $("usb-pass").value } });
+      status.textContent = r.message;
+      if (r.ok) $("usb-pass").value = "";
+    } catch (e) { status.textContent = e.message; }
+    $("usb-go").disabled = false;
+  };
+
   // Timetable: Week A / Week B photos, read by Buddy.
   {
     const status = $("tt-status"), view = $("tt-view");
