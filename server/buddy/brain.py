@@ -538,7 +538,7 @@ class Brain:
             return Reply(f"No, {day:%A} is {why}, so no lessons.", intent="timetable")
         _, lessons = tt.day(day)
         names = [l.get("subject", "") for l in lessons]
-        aliases = {"pe": "PE", "p.e.": "PE", "maths": "Maths", "math": "Maths", "dt": "Design Technology",
+        aliases = {"pe": "PE", "p.e.": "PE", "pee": "PE", "p e": "PE", "pea": "PE", "maths": "Maths", "math": "Maths", "dt": "Design Technology",
                    "re": "RE", "r.e.": "RE", "computing": "Computer Studies", "food": "Food Tech", "cs": "Computer Studies"}
         want = aliases.get(subject, subject).lower()
         if not names or not want or want in ("lessons", "school", "class", "classes"):
@@ -548,7 +548,8 @@ class Brain:
         if hits:
             when_s = " and ".join(f"period {i}" for i in hits)
             return Reply(f"Yes, you've got {names[hits[0] - 1]} {label}, {when_s}.", intent="timetable")
-        return Reply(f"No, no {subject.upper() if len(subject) <= 3 else subject.title()} {label}.", intent="timetable")
+        shown = aliases.get(subject) or (subject.upper() if len(subject) <= 2 else subject.title())
+        return Reply(f"No, no {shown} {label}.", intent="timetable")
 
     def _timetable_day(self, text: str) -> Reply | None:
         """"What have I got today?", "what's my day tomorrow?", "what lessons on Friday?": straight from the

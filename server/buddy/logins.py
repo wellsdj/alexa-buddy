@@ -70,9 +70,26 @@ class LoginStore:
             self._write(data, self.accounts_path)
 
     def account(self, label_or_email: str) -> tuple[str, dict] | None:
+        """By name ("school email"), by email, by a word in either ("school"), or the only one there is."""
         q = (label_or_email or "").strip().lower()
-        for k, v in self.accounts().items():
+        accts = self.accounts()
+        for k, v in accts.items():
             if q in (k, v.get("email", "").lower()) or (q and q in k):
+                return k, v
+        words = [w for w in re.findall(r"[a-z0-9]+", q) if w not in ("email", "account", "my", "the", "login")]
+        for k, v in accts.items():
+            hay = f"{k} {v.get('email', '')}".lower()
+            if words and all(w in hay for w in words):
+                return k, v
+        if len(accts) == 1:
+            return next(iter(accts.items()))
+        return None
+
+    def account_on_page(self, page_text: str) -> tuple[str, dict] | None:
+        """A sign-in page that shows which account it's for ("Hi Wells, wthompson24@..."): that one."""
+        t = (page_text or "").lower()
+        for k, v in self.accounts().items():
+            if v.get("email") and v["email"].lower() in t:
                 return k, v
         return None
 

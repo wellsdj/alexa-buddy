@@ -153,3 +153,34 @@ def test_saved_logins_match_the_site():
     assert store.find("https://login.clubspark.lta.org.uk/auth")[0] == "clubspark.lta.org.uk"
     assert store.find("https://example.com") is None
     assert store.list() == [{"site": "clubspark.lta.org.uk", "username": "me"}]
+
+
+GOOGLE_PW = """<html><title>Hi Wells</title><body><h1>Hi Wells</h1><p>me@school.org</p>
+<input type=password name=Passwd onkeydown="if(event.key=='Enter'){document.getElementById('m').innerText=
+(this.value=='s3cret!'?'signed in':'wrong')}"><p id=m></p></body></html>"""
+
+
+def test_google_password_page_uses_the_account_shown(tmp_path):
+    from buddy.logins import LoginStore
+    page = tmp_path / "pw.html"
+    page.write_text(GOOGLE_PW)
+    store = LoginStore(tmp_path)
+    store.save_account("https://www.bromcomvle.com/", "me@school.org", "s3cret!")  # named after the site
+    calls = [("open_url", {"url": page.as_uri()}), ("fill_login", {"password_n": 1}), ("finish", {"summary": "In."})]
+    llm = Script(calls)
+    agent = OnlineAgent({"online_on": True}, llm, Browser(tmp_path / "profile", visible=False))
+    agent.logins = store
+    agent.say = lambda t, l: asyncio.sleep(0)
+
+    async def go():
+        try:
+            await agent.browser.start()
+        except Exception as e:  # noqa: BLE001
+            pytest.skip(f"no browser here: {str(e)[:80]}")
+        agent.start("sign in")
+        await agent.job.task_handle
+        text = await agent.browser.page.inner_text("#m", timeout=2000)
+        await agent.browser.close()
+        return text
+    assert asyncio.run(go()) == "signed in"
+    assert not any("s3cret" in str(x) for x in llm.seen)

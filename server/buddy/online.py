@@ -17,6 +17,7 @@ import json
 import logging
 import os
 import re
+import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -112,8 +113,8 @@ class Browser:
             # Google account in it once and every site Buddy opens is signed in as you from then on.
             # Without the "being controlled" flags, Google lets you sign in.
             opts = dict(headless=not self.visible, viewport={"width": 1280, "height": 860},
-                        ignore_default_args=["--enable-automation", "--no-sandbox"],
-                        args=["--disable-blink-features=AutomationControlled"])
+                        # On the Mac, drop --no-sandbox (it only puts up a warning bar); Linux needs it.
+                        ignore_default_args=["--enable-automation"] + (["--no-sandbox"] if sys.platform == "darwin" else []))
             exe = os.environ.get("BUDDY_CHROMIUM")
             try:
                 if exe:
@@ -125,6 +126,11 @@ class Browser:
                 self._ctx = await self._pw.chromium.launch_persistent_context(str(self.profile),
                                                                              executable_path=exe or None, **opts)
                 self.chrome = False
+        if not getattr(self, "_hid", False):
+            # Sites like Google refuse sign-in in a browser that says it's automated; this hides that
+            # without the warning bar a command-line flag puts up.
+            await self._ctx.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+            self._hid = True
         self.page = self._ctx.pages[0] if self._ctx.pages else await self._ctx.new_page()
 
     async def open_for_you(self, url: str = "https://accounts.google.com/") -> None:
@@ -291,6 +297,10 @@ different attempts, and then say exactly what you tried and what stopped you.
 final=true first, saying exactly what will happen and the price. Only after a yes, click it.
 - The browser is signed in to the user's Google account (if they've signed in to it once): use "Sign in with \
 Google" where a site offers it, and Google services (Gmail, Calendar, Drive) are already signed in.
+- If they have any saved account, NEVER ask them for a password out loud: always fill_login (it finds the \
+right account from the page). Only ask_user when fill_login says nothing is saved.
+- Google's sign-in pages: on the email page fill_login with the account and user_n; on the password page \
+fill_login with password_n (it presses Enter for you). Don't type the password yourself.
 - Logging in (the user is happy for you to handle their logins and passwords; it all stays on their own Mac):
   1. A login saved for this site: fill_login.
   2. Otherwise, their saved accounts: {accounts}. If it's obvious which (a school site: the school one), use it \
@@ -549,6 +559,14 @@ class OnlineAgent:
                 else:
                     f = self.logins.find(b.page.url)
                     login, where = (f[1], f"the saved login for {f[0]}") if f else (None, "")
+                    if not login:  # e.g. Google's password page: the account it shows on the page
+                        try:
+                            shown = self.logins.account_on_page(await b.page.inner_text("body", timeout=3000))
+                        except Exception:  # noqa: BLE001
+                            shown = None
+                        if shown:
+                            login = {"username": shown[1].get("email", ""), "password": shown[1].get("password", "")}
+                            where = f'their "{shown[0]}"'
                 if not login:
                     return ("Nothing saved for that. Check their saved accounts, or ask_user for the email and "
                             "password, type them in, and save_login once signed in.")
@@ -565,7 +583,7 @@ class OnlineAgent:
                         return "password_n isn't a password box: look again."
                     if not login.get("password"):
                         return "There's no password saved for that: ask_user for it."
-                    await b.type(pw["n"], login["password"])
+                    await b.type(pw["n"], login["password"], enter=True)  # and press Enter: Next on most sign-ins
                     job.typed_password = login["password"]
                     done.append("the password")
                 if not done:
