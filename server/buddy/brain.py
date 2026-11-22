@@ -112,6 +112,7 @@ class Conversation:
     pending: dict | None = None
     clear_requested: float = 0.0
     dropped: list[str] = field(default_factory=list)
+    cooking: str = ""  # the dish, while cooking mode is on
     last_intent: str = ""  # what the last reply was (e.g. timetable, so "say that slowly" repeats it)
     strays: list[float] = field(default_factory=list)  # when stray words were heard (for "I'll leave you to it")
     interrupted: str = ""  # the rest of an answer that got cut off, for "carry on"  # topics the user asked Buddy to leave alone
@@ -258,6 +259,18 @@ TOOLS = [
                                                                     "asked about (\"do I have PE?\"), if any"},
                                                         "this_week": {"type": "string", "enum": ["A", "B"]}}}}},
     {"type": "function", "function": {
+        "name": "notes", "description": "Save something for the user to come back to (an ingredients list, a number, "
+        "an idea, a list), or find, read or delete their saved notes. action: save (title + text), find (query, "
+        "empty for all), delete (query).",
+        "parameters": {"type": "object", "properties": {
+            "action": {"type": "string", "enum": ["save", "find", "delete"]}, "title": {"type": "string"},
+            "text": {"type": "string"}, "query": {"type": "string"}}, "required": ["action"]}}},
+    {"type": "function", "function": {
+        "name": "cooking", "description": "Start (or stop) cooking mode when they're about to cook something: you "
+        "then guide them through it step by step, ask what you need to know, and set timers for every timed step.",
+        "parameters": {"type": "object", "properties": {"action": {"type": "string", "enum": ["start", "stop"]},
+                                                        "dish": {"type": "string"}}, "required": ["action"]}}},
+    {"type": "function", "function": {
         "name": "school", "description": "Check the user's school portal (Bromcom) online: homework coming up, "
         "what their day/timetable is today or another day, or anything else on it. Runs in the background and "
         "reports back. what: homework | today | timetable | other. detail: anything specific they asked.",
@@ -279,7 +292,7 @@ TOOLS = [
         "parameters": {"type": "object", "properties": {"reason": {"type": "string"}}}}},
 ]
 ACTION_TOOLS = {"set_alarm", "set_timer", "set_reminder", "cancel_alarm", "remember", "forget",
-                "update_memory", "clear_memory", "set_volume", "switch_voice", "music", "go_online", "save_account"}
+                "update_memory", "clear_memory", "set_volume", "switch_voice", "music", "go_online", "save_account", "notes"}
 
 SYSTEM = """You are {name}, {user_ref} voice assistant. You live in {user_ref} bedroom and you've known \
 {user_obj} for a while: you're a friend, not a gadget or a servant. Everything you say is spoken aloud.
@@ -338,6 +351,8 @@ It runs in the background and asks before anything final.
 - Change the Wi-Fi of your desk unit, with the password spelt out (wifi).
 - Look at and change your own settings, and say how fast you're answering (get_settings, change_setting).
 - Study Buddy: how their revising is going (study_progress).
+- Save things for them (an ingredients list, a number, an idea) and read them back later (notes).
+- Cooking mode: guide them through cooking a dish step by step, with timers (cooking).
 - Remember their accounts for signing in to sites ("my school email is ...", with the password if they say it): \
 save_account. Then going online signs in with them by itself.
 - Their school timetable, Week A and Week B (timetable): instant and always right (never say you made it up \
@@ -514,6 +529,8 @@ class Brain:
             reply.follow_up = False
         if reply.intent == "off":
             reply.follow_up = False  # it's going to sleep: don't keep listening
+        if conv.cooking and reply.text and reply.intent not in ("off", "stop"):
+            reply.follow_up = True  # hands busy: no "hey buddy" needed between steps
         if LEAVING.search(reply.text or ""):
             reply.follow_up = False  # "I'll leave you to it": then it really does
         reply.ms = int((time.monotonic() - t0) * 1000)
@@ -862,12 +879,14 @@ class Brain:
         portal = self.settings["school_portal_url"] or "the Bromcom student portal (search for the Bromcom " \
             "student login" + (f" for {self.settings['school_name']}" if self.settings["school_name"] else "") + ")"
         jobs = {
-            "homework": "Open the Homework section from the menu. For each piece due from tomorrow onwards, open its "
-                        "details: click the pencil icon on that homework (it's the item marked '(icon: pencil)'), read "
-                        "what the teacher wrote, then go back. If a subject was asked about (e.g. Food Tech), pick that "
-                        "subject in the homework page's subject filter first. In the summary, say each one as the "
-                        "teacher set it: subject, due date, then what to do, in their words. Soonest first. Leave out "
-                        "anything due today or earlier, and anything "
+            "homework": "Open the Homework section from the menu. If a subject was asked about (e.g. Food Tech), pick "
+                        "that subject in the homework page's subject filter first, and only open that subject's homework. "
+                        "To see what a piece involves, click its pencil icon (the item marked '(icon: pencil)'), read it, "
+                        "then go back. Don't ask the user anything: decide yourself (skip subjects they said they don't "
+                        "care about). In the summary keep it SHORT and spoken: for each piece one sentence: subject, due "
+                        "day, and what to do in a few words (a summary, not the teacher's whole text; mention attached "
+                        "lists like ingredients only if they asked). Soonest first. Leave out anything due today or "
+                        "earlier, and anything "
                         f"already handed in: only due {(self.now() + __import__('datetime').timedelta(days=1)):%A %d %B} "
                         "or later.",
             "today": f"Find today's ({self.now():%A %d %B}) timetable: each lesson in order with the time, subject, "
@@ -1124,6 +1143,13 @@ class Brain:
             static, system = await self.system_parts()
         else:
             static, system = "", await self.system_prompt()
+        if conv.cooking:
+            system += (f"\nCooking mode is on: they're cooking {conv.cooking}. Be their kitchen helper: first ask what "
+                       "you need (how many people, what ingredients and kit they have), one question at a time. Then "
+                       "give ONE step at a time, short and exact (amounts, heat, how long), and wait for them to say "
+                       "next or done. For every step that takes time, call set_timer with a clear label (e.g. 'pasta', "
+                       "'onions') and say how long. Tell them what it should look like when it's ready. When it's all "
+                       "done, call cooking with action stop.")
         if note:
             system += (f"\nYour quick first try at this just failed: \"{note}\". Be persistent: try another wording "
                        "or spelling, use web_search to pin down the right name if that would help, then use the tool "
@@ -1340,6 +1366,27 @@ class Brain:
                     line = random.choice(["On it.", "Doing that now.", "Okay, I'm on it."])
                     return "started in the background; say only the confirmation", line, []
                 return r, "", []
+            if name == "notes":
+                from .notes import Notes
+                nb = Notes(self.settings.data_dir)
+                act = a.get("action")
+                if act == "save":
+                    n = nb.add(a.get("title", ""), a.get("text", ""))
+                    return f'saved "{n["title"]}"', f"Saved: {n['title']}.", []
+                if act == "delete":
+                    k = nb.delete(a.get("query", ""))
+                    return f"deleted {k}", (f"Deleted {k} note{'s' if k != 1 else ''}." if k else "I couldn't find that one."), []
+                found = nb.find(a.get("query", ""))
+                if not found:
+                    return "no saved notes match", "", []
+                return "\n".join(f"- {n['title']} (saved {n['saved']}): {n['text']}" for n in found[-10:]), "", []
+            if name == "cooking":
+                if a.get("action") == "stop":
+                    conv.cooking = ""
+                    return "cooking mode off", "", []
+                conv.cooking = a.get("dish", "") or "something"
+                return ("cooking mode on: now guide them (see Cooking mode). Start by asking what you need: how many "
+                        "people, what they've got, oven or hob.", "", [])
             if name == "timetable":
                 from .timetable import Timetable, which_day
                 tt = Timetable(self.settings.data_dir)

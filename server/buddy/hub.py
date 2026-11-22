@@ -917,6 +917,8 @@ class Hub:
         self.heard: dict[str, float] = {}  # name -> when Buddy last heard their voice
         self.awake = True  # "off" sets this to False until the next "hey buddy"
         self.startup_played: dict[str, float] = {}
+        self.reported: list[str] = []  # online results already told (never twice)
+        self.last_user_at = 0.0  # when someone last said something to Buddy
         self.weather_ready: tuple[float, str] = (0.0, "")  # (when, the spoken report), ready before you ask  # board name -> when it switched on (sound played once)
         self.device_gone_at: dict[str, float] = {}
         self.ring_started: dict = {}  # alarm id -> when it started ringing
@@ -1447,7 +1449,21 @@ class Hub:
             if s.state == "idle" and not s.turn_running and not self.conv.pending and quiet_for > 4:
                 break
             await asyncio.sleep(0.3)
-        what = job.topic or "that job"
+        key = re.sub(r"\W+", " ", (job.result or "").lower())[:120]
+        if key and key in self.reported:
+            return  # already told them this (a second job that found the same thing)
+        self.reported.append(key)
+        self.reported = self.reported[-20:]
+        what = job.topic or "that"
+        moved_on = self.last_user_at > job.started + 5  # they've talked about other things since asking
+        if job.status == "done" and not moved_on:
+            # They asked, and nothing else has come up since: just tell them.
+            line = job.result
+            self.conv.add("assistant", line, "(the online job I was doing finished; I told them the result)")
+            await self.broadcast_ui({"type": "event", "kind": "transcript", "session": s.id, "role": "assistant",
+                                     "text": line})
+            await s.speak(line, then_listen=True)
+            return
         line = (f"By the way, I've got {what}. Want to hear it?" if job.status == "done"
                 else f"By the way, I couldn't quite manage {what}. Want to hear what happened?")
         self.conv.pending = {"intent": "online_report", "text": job.result}
@@ -1461,6 +1477,8 @@ class Hub:
         await s.speak(text)
 
     async def respond(self, s: Session, text: str, stt_ms: int = 0) -> None:
+        if len(text.split()) > 4:  # "okay thanks" isn't moving on to something else
+            self.last_user_at = time.time()
         s.turn_running += 1
         timer = timing.current.get()
         if timer:

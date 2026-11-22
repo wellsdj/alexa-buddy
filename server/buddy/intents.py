@@ -191,7 +191,9 @@ def match(text: str, now: datetime, context: dict | None = None) -> Intent | Non
     if re.search(r"\b(what('?s| is) (the|today'?s) date|what day is it|what('?s| is) today|what date is it)\b", t):
         return Intent("date")
 
-    if re.search(r"\b(what can you do|help|what are your commands|how do i use you)\b", t) and len(t) < 40:
+    # Only asking about Buddy itself ("what can you do", "help" on its own): "help me cook pasta" is a request.
+    if re.fullmatch(r"\W*(what can you do|what else can you do|help|help me|what are your commands|how do i use you"
+                    r"|what are you able to do)\W*( please)?\W*", t):
         return Intent("help")
 
     if re.search(r"\b(what('?s| is) in your memory|what do you (know|remember) about me|"

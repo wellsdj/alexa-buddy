@@ -291,6 +291,8 @@ their area to the search when it's about somewhere local.
 search engine, or a different page on the site.
 
 How to work:
+- Don't ask the user whether to do more or how much to read: decide sensibly yourself and get on with it. Only \
+ask_user for something you truly can't do without (a missing password, a real choice like which time to book).
 - Be quick: when you know the next few steps, do them in one go (e.g. type the email, type the password and click \
 next as three tool calls in the same turn).
 - Prefer the site's own buttons and forms. If something doesn't work, look again, scroll, or try another way.
