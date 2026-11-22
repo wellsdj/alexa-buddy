@@ -5,7 +5,7 @@ Notes for a Claude session running on the Mac, picking up from the cloud session
 ## Where things are
 - Installed copy (what actually runs): `~/buddy` or wherever `install.sh` put it. Check with `ls ~/Desktop/*.command` and read "Start Buddy.command".
 - Server: `server/` (FastAPI). Start: `cd server && ./run.sh`. Web page: http://localhost:8000
-- Board program: `firmware/buddy/` (ESP32-S3, Arduino). Ready-built: `firmware/prebuilt/buddy.bin`.
+- Board program: `firmware/buddy/` (ESP32-S3, Arduino). Ready-built: `firmware/prebuilt/`. Limits and memory rules: `firmware/LIMITS.md`.
 - Tests: `cd server && python3 -m pytest -q` (all should pass; `tests/test_firmware_rules.py` checks the board code).
 
 ## Everyday commands (instead of the Desktop buttons)
@@ -24,13 +24,16 @@ Notes for a Claude session running on the Mac, picking up from the cloud session
 - Lights: fast red flicker = can't record (no SD); solid red = muted (hold button 5 s); slow red blink = no server
 
 ## Current status (22 Nov 2026)
-- Firmware 1.7.7. The SD card now mounts (30 GB, 20 MHz). It used to take Wi-Fi's memory and the board
-  restarted in a loop ("wifi:Expected to init 4 rx buffer, actual is 0"): fixed by starting Wi-Fi first.
-- Next step: flash 1.7.7, check "Desk unit" goes green, run the SD test, then try recording a lesson
-  (hold the button 2 s). If anything's off, read the board log first.
+- Firmware 1.8.1. Big buffers moved to PSRAM (the board has 8 MB that was never used): internal RAM free after
+  connecting went from 2-17 KB to about 150 KB, and the SD test passes with the card in. 16 MB flash layout
+  (Wi-Fi settings kept). The board reports memory, CPU and storage headroom; see `firmware/LIMITS.md`.
+- Build on the Mac with `firmware/build.sh` (arduino-cli and the esp32 core are installed).
+- Not yet checked on the board: recording a full lesson, and echo cancelling under load (its delay wasn't measured
+  in the test).
 
 ## House rules
+- Read `CLAUDE.md` and `firmware/LIMITS.md` before changing the board program.
 - When a bug is fixed, add a test for it (server: `tests/`; board: `tests/test_firmware_rules.py`).
-- Bump `FW_VERSION` in `firmware/buddy/buddy_main.cpp` and rebuild `firmware/prebuilt/buddy.bin` together
+- Bump `FW_VERSION` in `firmware/buddy/buddy_main.cpp` and rebuild with `firmware/build.sh` together
   (a test checks they match).
 - Explain things to the user in plain, short steps.
