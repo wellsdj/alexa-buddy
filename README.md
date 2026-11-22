@@ -147,21 +147,33 @@ If it can't find the laptop:
 
 **Button, lights and sounds**
 
-The **BOOT button** does three things:
+The **BOOT button**:
 - Tap it to talk, or to stop an alarm.
-- Hold it 3 s to mute or unmute the mic.
+- Hold it 2 s and let go to start or stop recording a lesson (the light turns magenta when you can let go).
+- Hold it 4 s and let go to mute or unmute the mic (the light turns red).
 - Hold it 10 s to reset Wi-Fi.
 
-The on-board light shows what Buddy is doing:
+**What the lights mean.** The small light on the board and the strip behind the grille show the same thing.
+Pattern key: ▬ steady · ∿ breathing or pulsing · ● one short blip every 3 s · ●● two blips every 3 s · ⚡ fast flashing.
 
-| Light | Meaning |
-|---|---|
-| Blue | Listening |
-| Purple | Thinking |
-| Green | Speaking |
-| Flashing amber | An alarm is ringing |
-| Red | Mic is muted |
-| Dim red blink | Can't reach the laptop |
+| Light | Pattern | Meaning |
+|---|---|---|
+| 🟢 green | ● | Idle and healthy (the heartbeat) |
+| 🟡 amber | ●● | Idle, but near a memory, CPU or storage limit: `curl -s localhost:8000/api/board_health` |
+| ⚫ nothing | | Idle and stuck (it restarts itself within 5 s if an audio task is stuck), or the heartbeat is off |
+| 🔴 red | ● slow, dim | Can't reach Buddy on the Mac |
+| 🔴 red | ▬ | Mic muted |
+| 🔴 red | ⚡ | Can't record (no SD card, or it's full) |
+| 🔵 blue | ▬ | Listening |
+| 🟣 purple | ∿ | Thinking |
+| 🟢 green-cyan | ∿ with the voice | Speaking |
+| 🟠 orange | ⚡ | An alarm or timer is ringing |
+| 🟣 purple | ∿ slow | Recording a lesson |
+| 🩵 teal | ∿ | Sending a lesson to the Mac |
+| 🩷 pink | ∿ slow | Doing a job in the background |
+
+Every light, with what to do about it, is in [firmware/LIGHTS.md](firmware/LIGHTS.md). In Claude Code you can
+just describe what you see and ask what it means.
 
 **Memory.** Buddy learns from your chats in the background and tidies its memory once a day. It merges duplicates and drops trivia, but never anything you asked it to remember. You can see and edit everything on the web page's **Memory** tab.
 

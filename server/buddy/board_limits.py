@@ -30,6 +30,9 @@ def _w(level: str, what: str, fix: str) -> dict:
 def check(info: dict, prev: dict | None = None) -> list[dict]:
     """Warnings for one desk unit. `info` is its latest hello/stats; `prev` the stats before (for drop counts)."""
     out: list[dict] = []
+    if info.get("heartbeat") == 0:
+        out.append(_w("high", "an audio task (mic or speaker) has stopped checking in: the heartbeat light is off",
+                      "the hardware watchdog restarts the board if it stays stuck; check the board log"))
     heap = info.get("heap")
     if heap is not None and heap < MIN_FREE_INTERNAL_KB * KB:
         out.append(_w("high" if heap < 16 * KB else "medium",

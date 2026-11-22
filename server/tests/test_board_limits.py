@@ -76,3 +76,39 @@ def test_board_health_without_a_board():
     hub = Hub.__new__(Hub)
     hub.devices = lambda: []
     assert hub.board_health()["ok"] is False
+
+
+def test_stuck_audio_task_is_a_warning():
+    w = board_limits.check({**HEALTHY, "heartbeat": 0})
+    assert w[0]["level"] == "high" and "stopped checking in" in w[0]["what"]
+    assert board_limits.check({**HEALTHY, "heartbeat": 1}) == []
+
+
+def test_heartbeat_setting_goes_to_the_board():
+    import asyncio
+
+    sent = []
+
+    class Dev:
+        role, id, info = "device", "d1", {}
+
+        async def send_json(self, msg):
+            sent.append(msg)
+
+    hub = Hub.__new__(Hub)
+    hub.settings = {"heartbeat_light": False}
+    hub.broadcast = lambda msg, role=None, exclude=None: _collect(sent, msg)
+    hub._soon = lambda coro: asyncio.run(coro)
+    hub._settings_changed({"heartbeat_light": False})
+    assert {"type": "heartbeat", "on": False} in sent
+
+
+async def _collect(sent, msg):
+    sent.append(msg)
+
+
+def test_heartbeat_is_on_by_default_and_tunable():
+    from buddy.config import DEFAULTS
+    from buddy.tuning import SETTABLE
+
+    assert DEFAULTS["heartbeat_light"] is True and "heartbeat_light" in SETTABLE

@@ -210,3 +210,57 @@ def test_messages_that_cant_be_read_are_logged_not_dropped():
     assert "deserializeJson" in body and "logOut.printf" in body, (
         "handleJson must say when it can't read a message: a silent drop hid the memory shortage")
     assert "[sd] test requested" in SRC
+
+
+# ---- heartbeat light (1.8.2): a dim blink while idle shows the board is working; it must never "lie".
+def _body(signature: str) -> str:
+    start = SRC.index(signature)
+    return SRC[start:SRC.index("\n}\n", start)]
+
+
+def test_heartbeat_is_driven_by_the_program_not_a_timer():
+    # A timer or PWM blink keeps going after the program hangs, so it would say "fine" when it isn't.
+    for timer in ("esp_timer_create", "timerBegin", "timerAttachInterrupt", "ledcAttach", "ledcWrite", "xTimerCreate"):
+        assert timer not in SRC, f"{timer}: the heartbeat must come from loop(), not a timer"
+    loop = _body("void loop()")
+    assert "updateHeartbeat();" in loop and "updateLed();" in loop
+    assert "heartbeatAt(" in _body("static void updateLed()") and "heartbeatAt(" in _body("static void stripUpdate()")
+
+
+def test_audio_tasks_check_in_and_are_watched():
+    for task, beat in (("static void micTask", "beatMic = millis();"), ("static void playTask", "beatPlay = millis();")):
+        body = _body(task)
+        assert "esp_task_wdt_add(nullptr);" in body, f"{task}: register with the hardware watchdog"
+        loop_part = body[body.index("for (;;)"):]
+        assert "esp_task_wdt_reset();" in loop_part and beat in loop_part, f"{task}: check in on every pass"
+    hb = _body("static void updateHeartbeat()")
+    assert "beatMic" in hb and "beatPlay" in hb and "hbLevel = 0" in hb
+
+
+def test_heartbeat_limits_match_the_server():
+    limits = (Path(__file__).resolve().parents[1] / "buddy" / "board_limits.py").read_text()
+    server = {k: int(v.replace("_", "")) for k, v in re.findall(r"^(\w+) = ([\d_]+)", limits, re.M)}
+    board = {k: int(v) for k, v in re.findall(r"#define (\w+) (\d+)", SRC + PLAN)}
+    pairs = {"MIN_FREE_INTERNAL_KB": "MIN_FREE_INTERNAL_KB", "HEALTH_MIN_LOWEST_KB": "MIN_LOWEST_INTERNAL_KB",
+             "HEALTH_MIN_STACK": "MIN_STACK_BYTES", "HEALTH_MAX_CPU": "MAX_CORE_PERCENT",
+             "HEALTH_MAX_LOOP_MS": "MAX_LOOP_MS", "MIC_BLOCK_BUDGET_US": "MIC_BLOCK_BUDGET_US"}
+    for fw, py in pairs.items():
+        assert board[fw] == server[py], f"{fw} ({board[fw]}) on the board but {py} ({server[py]}) on the server"
+
+
+def test_heartbeat_setting_reaches_the_board_and_is_saved_only_on_change():
+    assert '!strcmp(type, "heartbeat")' in SRC and 'doc["heartbeat"]' in _body("static void handleJson")
+    sethb = _body("static void setHeartbeat")
+    assert sethb.index("if (on == heartbeatOn) return;") < sethb.index("prefs.putBool"), "don't rewrite flash each time"
+
+
+def test_every_light_colour_is_explained_in_lights_md():
+    # LIGHTS.md is where people look up what a light means: every colour the code shows must be in it.
+    lights = (FW / "LIGHTS.md").read_text().lower()
+    words = {"green", "amber", "red", "magenta", "purple", "teal", "blue", "pink", "orange", "white", "heartbeat"}
+    led_code = _body("static void updateLed()") + _body("static void stripUpdate()")
+    comments = " ".join(re.findall(r"//([^\n]*)", led_code)).lower()
+    for w in words:
+        if w in comments:
+            assert w in lights, f"the lights code mentions {w!r} but firmware/LIGHTS.md doesn't explain it"
+    assert "LIGHTS.md" in (FW.parent / "CLAUDE.md").read_text(), "CLAUDE.md must point at firmware/LIGHTS.md"

@@ -198,6 +198,7 @@
         <p class="note">The light behind the radio's grille (its data wire goes to GPIO 2). Count the little lights on your piece. Changes show straight away.</p>
         <label>Number of lights <input data-setting="strip_leds" type="number" min="1" max="60" step="1"></label>
         <label>Brightness <input data-setting="strip_brightness" type="range" min="5" max="255" step="5"><output id="strip-out"></output></label>
+        <label class="check"><input data-setting="heartbeat_light" type="checkbox"> Heartbeat: a dim blink every 3 seconds while Buddy is idle (green = all fine, amber double blink = near a limit, none = something's stuck)</label>
       </fieldset>
       <fieldset data-section="music" hidden>
         <legend>Music</legend>

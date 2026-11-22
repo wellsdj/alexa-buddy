@@ -37,6 +37,7 @@ SETTABLE: dict[str, tuple[str, Any, str]] = {
     "play_hold_ms": ("int", (100, 1000), "sound collected before you start talking, in ms (raise if you stutter)"),
     "strip_brightness": ("int", (0, 255), "light strip brightness"),
     "strip_leds": ("int", (1, 60), "how many lights are on the strip"),
+    "heartbeat_light": ("bool", None, "a dim blink on the lights while idle, to show the desk unit is working"),
     "room_listening_on": ("bool", None, "also answer room talk that's clearly meant for you, without 'hey buddy'"),
     "morning_briefing": ("bool", None, "weather and the day's reminders after a morning alarm"),
     "snooze_minutes": ("int", (1, 30), "snooze length in minutes"),

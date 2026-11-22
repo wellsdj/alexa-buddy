@@ -995,6 +995,8 @@ class Hub:
                                        "brightness": int(self.settings["strip_brightness"])}, role="device"))
         if "echo_cancel" in changes:
             self._soon(self.broadcast({"type": "aec", "on": bool(changes["echo_cancel"])}, role="device"))
+        if "heartbeat_light" in changes:
+            self._soon(self.broadcast({"type": "heartbeat", "on": bool(changes["heartbeat_light"])}, role="device"))
         if "device_mic_shift" in changes:
             self._soon(self.broadcast({"type": "mic_gain", "shift": int(changes["device_mic_shift"])}, role="device"))
         self._soon(self.broadcast_ui({"type": "event", "kind": "settings"}))
@@ -1077,7 +1079,8 @@ class Hub:
                            "name": self.settings["assistant_name"], "session": s.id,
                            "mic_shift": int(self.settings["device_mic_shift"]),
                            "strip_leds": int(self.settings["strip_leds"]),
-                           "strip_brightness": int(self.settings["strip_brightness"])})
+                           "strip_brightness": int(self.settings["strip_brightness"]),
+                           "heartbeat": bool(self.settings.get("heartbeat_light", True))})
         if s.role == "device":
             await s.send_json({"type": "aec", "on": bool(self.settings.get("echo_cancel", True))})
             await s.send_json({"type": "working", "on": self.online.busy})

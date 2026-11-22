@@ -44,6 +44,7 @@ DEFAULTS: dict[str, Any] = {
     "default_alarm_sound": 1,  # used when you don't pick one (0 = the desk unit's beeps)
     "strip_leds": 15,  # LEDs on the strip behind the grille (count them after cutting)
     "strip_brightness": 70,  # 0-255
+    "heartbeat_light": True,  # a dim blink every 3 s while Buddy is idle: green = fine, amber = near a limit
     "study_cloud_url": "https://studdy-buddy-uk.vercel.app",  # Study Buddy online
     "fact_check": True,  # check factual answers before saying them; retry with search / thinking if they fail
     "reword_replies": True,  # quick replies (timers, weather...) said in Claude's own words, not word-for-word

@@ -5,7 +5,9 @@ The person building it is experienced with laptop and cloud code (Claude Code, V
 Explain board constraints in plain words, and warn them early when a change gets close to a limit.
 
 ## Before changing anything in `firmware/`
-Read `firmware/LIMITS.md`. Then, for every change:
+Read `firmware/LIMITS.md`. When the user describes a light on the desk unit, look it up in `firmware/LIGHTS.md`
+(and check `/api/board_health` for the reason). If a change alters the lights, update `LIGHTS.md` too.
+Then, for every change:
 - **Memory:** any buffer of 4 KB or more gets a row in `firmware/buddy/memory_plan.h` and is allocated through
   `firmware/buddy/mem.h` (`memBig` for big things, in PSRAM). No `malloc`, `new[]`, `xStreamBufferCreate` or big
   arrays in `buddy_main.cpp`. New tasks get a `FAST` stack row.
