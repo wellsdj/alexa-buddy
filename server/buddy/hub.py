@@ -868,6 +868,8 @@ class Session:
                 self.hub._soon(self.hub.wifi_join_result(self, msg))
         elif t == "wifi_list":
             self.hub.wifi_list_arrived(msg)
+        elif t == "sd_test":
+            self.hub.sd_test_arrived(msg)
         elif t == "stats":
             self.info.update({k: v for k, v in msg.items() if k != "type"})
             await self.hub.broadcast_ui({"type": "event", "kind": "device", "session": self.id, "info": self.info})
@@ -957,6 +959,7 @@ class Hub:
         self.last_scan: list[dict] = []
         self.wifi_current = ""
         self._wifi_wait: asyncio.Future | None = None
+        self._sd_wait: asyncio.Future | None = None
         self.trouble: collections.deque = collections.deque(maxlen=50)  # (when, "not_heard" | "repeat")
         self.offered: dict[str, float] = {}  # kind of help -> when Buddy last offered it
         self.brain.sounds = self.sounds
@@ -1613,6 +1616,28 @@ class Hub:
         self.last_scan = [n for n in msg.get("networks", []) if n.get("ssid")]
         self.wifi_current = msg.get("current", "")
         return self.last_scan
+
+    async def sd_test(self) -> dict:
+        """Ask the desk unit to test its SD card reader step by step."""
+        devs = self.devices()
+        if not devs:
+            return {"ok": False, "steps": [], "hint": "Buddy isn't connected, so it can't test the card. Plug it in first."}
+        self._sd_wait = asyncio.get_running_loop().create_future()
+        await devs[0].send_json({"type": "sd_test"})
+        try:
+            msg = await asyncio.wait_for(self._sd_wait, timeout=20)
+        except asyncio.TimeoutError:
+            ver = str(devs[0].info.get("fw", "") or devs[0].info.get("version", ""))
+            return {"ok": False, "steps": [],
+                    "hint": f"Buddy didn't answer the test. It needs firmware 1.7.4 or newer (it has {ver or 'an older one'}): "
+                            "press Update Buddy first."}
+        result = {"ok": bool(msg.get("ok")), "steps": list(msg.get("steps", [])), "hint": str(msg.get("hint", ""))}
+        self.record("sd_test", **result)
+        return result
+
+    def sd_test_arrived(self, msg: dict) -> None:
+        if self._sd_wait is not None and not self._sd_wait.done():
+            self._sd_wait.set_result(msg)
 
     def wifi_list_arrived(self, msg: dict) -> None:
         if self._wifi_wait is not None and not self._wifi_wait.done():

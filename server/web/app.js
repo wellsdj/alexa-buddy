@@ -832,6 +832,27 @@ function init() {
     $("usb-go").disabled = false;
   };
 
+  // SD card test: the board checks the reader step by step.
+  $("sd-test").onclick = async () => {
+    const status = $("sd-status");
+    status.textContent = "Testing the SD card… (about 10 seconds)";
+    $("sd-test").disabled = true;
+    try {
+      const r = await api("/api/sd_test", { method: "POST" });
+      const list = document.createElement("ol");
+      for (const step of r.steps || []) {
+        const li = document.createElement("li");
+        li.textContent = step;
+        list.append(li);
+      }
+      const verdict = document.createElement("p");
+      verdict.innerHTML = r.ok ? "<b>✅ Working.</b> " : "<b>❌ Not working yet.</b> ";
+      verdict.append(r.hint || "");
+      status.replaceChildren(list, verdict);
+    } catch (e) { status.textContent = e.message; }
+    $("sd-test").disabled = false;
+  };
+
   // Timetable: Week A / Week B photos, read by Buddy.
   {
     const status = $("tt-status"), view = $("tt-view");

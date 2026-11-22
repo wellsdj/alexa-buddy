@@ -24,7 +24,7 @@
 
 #include "config.h"
 
-#define FW_VERSION "1.7.3"
+#define FW_VERSION "1.7.4"
 #define SAMPLE_RATE 16000
 #define MIC_FRAMES 320               // 20 ms per I2S read
 #define SEND_BYTES 1280              // 40 ms of 16-bit audio per WebSocket frame
@@ -72,6 +72,7 @@ static uint32_t ringStartMs = 0;
 
 // ---- lesson recorder state
 static SPIClass sdSpi(FSPI);
+static volatile bool wantSdTest = false;  // set by the server, run in loop()
 static bool sdOk = false;
 static StreamBufferHandle_t recStream = nullptr;
 static File recFile;
@@ -668,6 +669,8 @@ static void handleJson(uint8_t *payload, size_t len) {
     Serial.printf("[alarms] schedule updated: %d fire times\n", n);
   } else if (!strcmp(type, "alarm_stop")) {
     stopRinging(doc["reason"] | (doc["quiet"] | false ? "snooze" : "voice"));
+  } else if (!strcmp(type, "sd_test")) {
+    wantSdTest = true;  // done in loop(): it takes a moment
   } else if (!strcmp(type, "working")) {
     working = doc["on"] | false;
   } else if (!strcmp(type, "aec")) {
@@ -978,9 +981,31 @@ static void repairPartials() {
   }
 }
 
+static bool recTasksStarted = false;
+static void recTask(void *);
+static void uploadTask(void *);
+
+static void startRecTasks() {
+  if (recTasksStarted || !sdOk) return;
+  recTasksStarted = true;
+  if (!recStream) recStream = xStreamBufferCreate(ESP.getFreeHeap() > 220000 ? 24 * 1024 : 12 * 1024, 1);
+  xTaskCreatePinnedToCore(recTask, "rec", 6144, nullptr, 3, nullptr, 1);
+  xTaskCreatePinnedToCore(uploadTask, "upload", 8192, nullptr, 1, nullptr, 1);
+}
+
 static void sdBegin() {
   sdSpi.begin(SD_SCK_PIN, SD_MISO_PIN, SD_MOSI_PIN, SD_CS_PIN);
-  sdOk = SD.begin(SD_CS_PIN, sdSpi, 20000000) || SD.begin(SD_CS_PIN, sdSpi, 8000000);
+  // Fast first; long jumper wires often only manage the slower speeds.
+  const uint32_t speeds[] = {20000000, 8000000, 4000000, 1000000, 400000};
+  sdOk = false;
+  for (uint32_t hz : speeds) {
+    if (SD.begin(SD_CS_PIN, sdSpi, hz)) {
+      sdOk = true;
+      Serial.printf("[sd] mounted at %lu Hz\n", (unsigned long)hz);
+      break;
+    }
+    SD.end();
+  }
   if (sdOk) {
     SD.mkdir("/rec");
     repairPartials();
@@ -988,6 +1013,129 @@ static void sdBegin() {
   } else {
     Serial.println("[sd] no card found (is the reader wired up and the card in?)");
   }
+}
+
+// ---- a thorough SD card test, step by step, so a problem can be pinned down to one thing
+
+static uint8_t sdRawCmd0(uint32_t hz) {
+  // Talk to the card directly: 80 clocks to wake it, then "reset" (CMD0). A working card answers 0x01.
+  sdSpi.beginTransaction(SPISettings(hz, MSBFIRST, SPI_MODE0));
+  digitalWrite(SD_CS_PIN, HIGH);
+  for (int i = 0; i < 10; i++) sdSpi.transfer(0xFF);
+  digitalWrite(SD_CS_PIN, LOW);
+  const uint8_t cmd[] = {0x40, 0, 0, 0, 0, 0x95};
+  for (uint8_t b : cmd) sdSpi.transfer(b);
+  uint8_t r = 0xFF;
+  for (int i = 0; i < 16 && r == 0xFF; i++) r = sdSpi.transfer(0xFF);
+  digitalWrite(SD_CS_PIN, HIGH);
+  sdSpi.transfer(0xFF);
+  sdSpi.endTransaction();
+  return r;
+}
+
+static void sdTest() {
+  JsonDocument doc;
+  doc["type"] = "sd_test";
+  JsonArray steps = doc["steps"].to<JsonArray>();
+  String hint;
+  if (recording) {
+    steps.add("Recording a lesson right now: stop it first, then test again.");
+    doc["ok"] = false;
+    sendJson(doc);
+    return;
+  }
+  sdOk = false;  // stop the upload task touching the card while we test it
+  for (int i = 0; i < 100 && uploadSdBusy; i++) delay(50);
+  SD.end();
+  sdSpi.end();
+  // 1. Is the card's data-out line (SO) shorted? With the card not selected it should float.
+  pinMode(SD_CS_PIN, OUTPUT);
+  digitalWrite(SD_CS_PIN, HIGH);
+  pinMode(SD_MISO_PIN, INPUT_PULLUP);
+  delay(2);
+  bool upHigh = digitalRead(SD_MISO_PIN);
+  pinMode(SD_MISO_PIN, INPUT_PULLDOWN);
+  delay(2);
+  bool downLow = !digitalRead(SD_MISO_PIN);
+  if (!upHigh) {
+    steps.add("SO (pin 13) is stuck at GND: the SO wire is touching GND, or SO and GND are swapped.");
+    hint = "Check the SO wire goes to pin 13 and isn't touching anything else.";
+  } else if (!downLow) {
+    steps.add("SO (pin 13) is stuck at 3V: the SO wire is touching 3V, or SO and 3V are swapped.");
+    hint = "Check the SO wire goes to pin 13 and isn't touching the 3V line.";
+  } else {
+    steps.add("SO (pin 13) is not shorted: good.");
+  }
+  // 2. Does the card answer at all? Slow first.
+  sdSpi.begin(SD_SCK_PIN, SD_MISO_PIN, SD_MOSI_PIN, SD_CS_PIN);
+  pinMode(SD_CS_PIN, OUTPUT);
+  uint8_t r = sdRawCmd0(250000);
+  if (r == 0x01) {
+    steps.add("The card answers (wires CLK 12, SI 11, SO 13, CS 10, 3V and GND all work).");
+  } else if (r == 0xFF) {
+    steps.add("No answer from the card at all.");
+    if (!hint.length()) hint = "Most likely: the card isn't pushed fully in, the 3V or GND wire to the reader is loose, "
+                               "or one of CLK (12), SI (11), SO (13), CS (10) is on the wrong pin.";
+  } else if (r == 0x00) {
+    steps.add("The card answers with zeros: SO looks stuck low or noisy.");
+    if (!hint.length()) hint = "Check the SO wire (pin 13) and the GND wire.";
+  } else {
+    char b[80];
+    snprintf(b, sizeof(b), "The card answers, but garbled (0x%02X): a loose or long wire.", r);
+    steps.add(b);
+    if (!hint.length()) hint = "Push every reader wire in firmly; shorter wires help.";
+  }
+  // 3. Can it be opened, and at what speed?
+  const uint32_t speeds[] = {400000, 1000000, 4000000, 8000000, 20000000};
+  uint32_t best = 0;
+  for (uint32_t hz : speeds) {
+    if (SD.begin(SD_CS_PIN, sdSpi, hz)) {
+      best = hz;
+      SD.end();
+    } else {
+      SD.end();
+      break;
+    }
+  }
+  if (best) {
+    char b[96];
+    snprintf(b, sizeof(b), "The card opens, up to %lu kHz.", (unsigned long)(best / 1000));
+    steps.add(b);
+  } else if (r == 0x01) {
+    steps.add("The card answers but can't be opened: it isn't formatted as FAT32.");
+    hint = "Format the card as FAT32 on the Mac (Disk Utility: MS-DOS (FAT), Master Boot Record). Cards bigger "
+           "than 32 GB come as exFAT, which doesn't work.";
+  }
+  // 4. Write a file and read it back.
+  bool rw = false;
+  if (best && SD.begin(SD_CS_PIN, sdSpi, best)) {
+    uint8_t type = SD.cardType();
+    char b[96];
+    snprintf(b, sizeof(b), "Card: %s, %llu MB.", type == CARD_SDHC ? "SDHC" : type == CARD_SD ? "SD" : type == CARD_MMC ? "MMC" : "unknown",
+             SD.cardSize() / (1024ULL * 1024ULL));
+    steps.add(b);
+    File f = SD.open("/buddy_test.txt", FILE_WRITE);
+    if (f) {
+      f.print("buddy sd test");
+      f.close();
+      File g = SD.open("/buddy_test.txt");
+      String got = g ? g.readString() : "";
+      if (g) g.close();
+      SD.remove("/buddy_test.txt");
+      rw = got == "buddy sd test";
+    }
+    steps.add(rw ? "Wrote a test file and read it back: all good." : "Couldn't write to the card (is its lock switch on?).");
+    if (!rw && !hint.length()) hint = "Check the little lock switch on the card's adapter, or try another card.";
+  }
+  sdOk = rw;
+  if (sdOk) {
+    SD.mkdir("/rec");
+    startRecTasks();  // lessons can be recorded now, no restart needed
+  }
+  doc["ok"] = rw;
+  doc["hint"] = rw ? "The SD card works. Hold the button 2 seconds to record a lesson." : hint;
+  sendJson(doc);
+  Serial.printf("[sd] test: %s\n", rw ? "ok" : hint.c_str());
 }
 
 static void startRec() {
@@ -1076,6 +1224,10 @@ static void recTask(void *) {
 }
 
 static void toggleRecording() {
+  if (!sdOk && !recording) {
+    sdBegin();  // maybe it's been plugged in since switch-on: look again
+    startRecTasks();
+  }
   if (!sdOk) {
     recErrorUntil = millis() + 2500;
     Serial.println("[rec] no SD card");
@@ -1375,17 +1527,10 @@ void setup() {
                 (unsigned)(xStreamBufferSpacesAvailable(spkStream) / 1024), (unsigned)(ESP.getFreeHeap() / 1024));
   setupI2S();
   sdBegin();
-  if (sdOk) {
-    size_t recBuf = ESP.getFreeHeap() > 220000 ? 24 * 1024 : 12 * 1024;  // about 0.7 s of microphone
-    recStream = xStreamBufferCreate(recBuf, 1);
-  }
+  startRecTasks();  // (only if the card was found)
   xTaskCreatePinnedToCore(micTask, "mic", 6144, nullptr, 6, nullptr, 0);
   xTaskCreatePinnedToCore(playTask, "play", 6144, nullptr, 6, nullptr, 1);
   xTaskCreatePinnedToCore(aecTask, "aec", 4096, nullptr, 1, nullptr, 0);
-  if (sdOk) {
-    xTaskCreatePinnedToCore(recTask, "rec", 6144, nullptr, 3, nullptr, 1);
-    xTaskCreatePinnedToCore(uploadTask, "upload", 8192, nullptr, 1, nullptr, 1);
-  }
 
   // Wi-Fi: first boot (or after a 10 s button hold) opens the "Buddy-Setup" hotspot.
   WiFi.mode(WIFI_STA);
@@ -1469,6 +1614,10 @@ void loop() {
   checkAlarms();
   maintainConnection();
   wifiTasks();
+  if (wantSdTest) {
+    wantSdTest = false;
+    sdTest();
+  }
   sendStats();
   updateLed();
   stripUpdate();

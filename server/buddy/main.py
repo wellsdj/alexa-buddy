@@ -594,6 +594,11 @@ def create_app(settings: Settings | None = None, http=None, claude_http=None, st
         return await asyncio.to_thread(send_setup, str(body.get("ssid", "")).strip(), str(body.get("password", "")),
                                        port)
 
+    @app.post("/api/sd_test")
+    async def sd_test():
+        """Tests the desk unit's SD card reader, one wire and step at a time."""
+        return await hub.sd_test()
+
     @app.post("/api/browser/open")
     async def open_browser(body: dict | None = None):
         """Opens Buddy's home or school browser on the Mac at Google's sign-in page, to sign in once."""
