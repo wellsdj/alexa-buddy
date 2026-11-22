@@ -1,6 +1,6 @@
 {
-  "version": "1.8.2",
-  "app_bytes": 1356915,
+  "version": "1.8.3",
+  "app_bytes": 1356927,
   "static_ram_bytes": 85332,
   "fqbn": "esp32:esp32:esp32s3:PSRAM=opi,FlashSize=16M,FlashMode=qio,PartitionScheme=custom"
 }

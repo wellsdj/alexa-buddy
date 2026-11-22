@@ -264,3 +264,13 @@ def test_every_light_colour_is_explained_in_lights_md():
         if w in comments:
             assert w in lights, f"the lights code mentions {w!r} but firmware/LIGHTS.md doesn't explain it"
     assert "LIGHTS.md" in (FW.parent / "CLAUDE.md").read_text(), "CLAUDE.md must point at firmware/LIGHTS.md"
+
+
+def test_audio_is_never_half_written_to_a_stream():
+    # 1.8.0-1.8.2: the mic buffer had room for an odd number of bytes; when it filled, half a sample went in and
+    # every later sample was shifted by a byte, so the server heard loud static and "hey buddy" never woke it.
+    mem = (FW / "buddy" / "mem.h").read_text()
+    assert "xStreamBufferCreateStatic(got, trigger, store, ctl)" in mem, "pass the full storage size (bytes + 1)"
+    mic = _body("static void micTask")
+    for stream in ("recStream", "micStream"):
+        assert f"xStreamBufferSpacesAvailable({stream}) >= bytes" in mic, f"{stream}: write a whole block or none"

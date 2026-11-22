@@ -28,7 +28,7 @@
 #include "mem.h"
 #include <nvs.h>
 
-#define FW_VERSION "1.8.2"
+#define FW_VERSION "1.8.3"
 #define SAMPLE_RATE 16000
 #define MIC_FRAMES 320               // 20 ms per I2S read
 #define SEND_BYTES 1280              // 40 ms of 16-bit audio per WebSocket frame
@@ -376,10 +376,14 @@ static void micTask(void *) {
       if ((int32_t)(millis() - aecSkipUntil) >= 0) aec.processMic(out, frames);
       else aecSkipped++;
     }
+    // All or nothing, as for the speaker: half a block would shift every later sample by a byte (loud static).
+    size_t bytes = frames * 2;
     if (recording) {  // a lesson: straight to the SD card, not to the server
-      if (xStreamBufferSend(recStream, out, frames * 2, 0) < (size_t)frames * 2) droppedRec++;
-    } else if (!micMuted && xStreamBufferSend(micStream, out, frames * 2, 0) < (size_t)frames * 2) {
-      droppedMic++;
+      if (xStreamBufferSpacesAvailable(recStream) >= bytes) xStreamBufferSend(recStream, out, bytes, 0);
+      else droppedRec++;
+    } else if (!micMuted) {
+      if (xStreamBufferSpacesAvailable(micStream) >= bytes) xStreamBufferSend(micStream, out, bytes, 0);
+      else droppedMic++;
     }
     uint32_t took = (uint32_t)(esp_timer_get_time() - blockStart);
     if (took > micMaxUs) micMaxUs = took;
