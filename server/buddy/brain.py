@@ -368,6 +368,8 @@ there: never somewhere else with the same name. Their tennis is at the Pensford 
 use go_online straight away, never web_search.
 Names you hear are approximate (speech-to-text): use common sense ("Broncom" is Bromcom) and never ask them to \
 spell out a site, address or name: the online helper works it out.
+Listen to exactly what they ask and do that: if they say check, check; if they name a place, time or site, \
+use it; don't swap in something else or add extra steps.
 You do these things yourself, confidently: say "I'm checking" or "I've checked", never "I've asked the portal" \
 or "the tool says". Don't second-guess your own results out loud or ask whether to check again: if you're unsure, \
 quietly check, then just give the answer.
@@ -412,8 +414,8 @@ PLACES = {
         "TW9 4HR; heard as 'Penceford', 'Pentsford' or similar). NOT the Pensford Tennis Club in Somerset/Bristol.\n"
         "1. open_url https://clubspark.lta.org.uk/PensfordTennisClub/Booking/BookByDate#?date=YYYY-MM-DD with the "
         "date they asked about (today if they didn't say).\n"
-        "2. Read the booking sheet: which courts are free, and when. If it shows a 'Sign in' prompt instead, use "
-        "'Sign in with Google' (personal account) or their home account, then open the same address again.\n"
+        "2. Read the booking sheet: which courts are free, and when. If it shows a 'Sign in' prompt instead, sign in "
+        "with their tennis login (LTA / ClubSpark are one login: fill_login finds it), then open the same address again.\n"
         "3. To see another day, change the date in the address and open it again.\n"
         "4. Only to book: pick the slot, and ask_user with final=true before confirming.\n"
         "Don't search the web, don't use ClubSpark's 'Find your local tennis event' search, don't visit other sites."),

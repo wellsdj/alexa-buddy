@@ -150,9 +150,9 @@ def test_saved_logins_match_the_site():
     import tempfile
     store = LoginStore(tempfile.mkdtemp())
     store.save("https://www.clubspark.lta.org.uk/somewhere", "me", "pw")
-    assert store.find("https://login.clubspark.lta.org.uk/auth")[0] == "clubspark.lta.org.uk"
+    assert store.find("https://login.clubspark.lta.org.uk/auth")[0] == "tennis"
     assert store.find("https://example.com") is None
-    assert store.list() == [{"site": "clubspark.lta.org.uk", "username": "me"}]
+    assert store.list() == [{"site": "tennis", "username": "me"}]
 
 
 GOOGLE_PW = """<html><title>Hi Wells</title><body><h1>Hi Wells</h1><p>me@school.org</p>
@@ -257,3 +257,15 @@ def test_tennis_goes_straight_to_clubspark(settings, apis, claude):
     claude.script = [claude_message(claude_tool("go_online", {"task": "book a tennis court Saturday 10am"}))]
     asyncio.run(brain.handle("book me a tennis court saturday at 10", Conversation()))
     assert got["kind"] == "tennis" and "clubspark.lta.org.uk" in got["task"] and "Richmond" in got["task"]
+
+
+def test_one_tennis_login_for_lta_clubspark_and_pensford(tmp_path):
+    from buddy.logins import LoginStore
+    store = LoginStore(tmp_path)
+    store.save("https://clubspark.lta.org.uk/PensfordTennisClub", "me@gmail.com", "pw")
+    assert store.find("https://auth.lta.org.uk/login")[1]["username"] == "me@gmail.com"
+    assert store.list() == [{"site": "tennis", "username": "me@gmail.com"}]
+    store2 = LoginStore(tmp_path / "x")
+    (tmp_path / "x").mkdir()
+    store2.save_account("tennis", "me@gmail.com", "pw2")
+    assert store2.find("https://clubspark.lta.org.uk/Booking")[1]["password"] == "pw2"

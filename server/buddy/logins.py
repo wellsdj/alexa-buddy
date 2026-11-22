@@ -20,6 +20,19 @@ def site_of(text: str) -> str:
     return re.sub(r"^www\.", "", host)
 
 
+# Sites that share one login: the same account works on all of them, saved once under the group's name.
+GROUPS = {
+    "tennis": re.compile(r"lta\.org\.uk|clubspark|pensford|tennis", re.I),
+}
+
+
+def group_of(text: str) -> str:
+    for name, rx in GROUPS.items():
+        if rx.search(text or ""):
+            return name
+    return ""
+
+
 class LoginStore:
     def __init__(self, data_dir: Path):
         self.path = Path(data_dir) / "web_logins.json"
@@ -111,6 +124,9 @@ class LoginStore:
 
     def save(self, site: str, username: str, password: str) -> str:
         s = site_of(site)
+        g = group_of(s)
+        if g:
+            s = g  # one login for the whole group (e.g. "tennis")
         if not s or not password:
             raise ValueError("Give the website and the password.")
         with self._lock:
@@ -126,6 +142,22 @@ class LoginStore:
             self._write(data)
 
     def find(self, url: str) -> tuple[str, dict] | None:
+        """The saved login for this page: by its site, or by its group ("tennis": LTA, ClubSpark, Pensford all
+        one login)."""
+        found = self._find_site(url)
+        if found:
+            return found
+        group = group_of(site_of(url))
+        if group:
+            for s, v in self._read().items():  # a login saved for another site in the same group
+                if group_of(s) == group:
+                    return s, v
+            for label, v in self.accounts().items():  # an account named after the group ("tennis", "LTA")
+                if group_of(label) == group:
+                    return label, {"username": v.get("email", ""), "password": v.get("password", "")}
+        return None
+
+    def _find_site(self, url: str) -> tuple[str, dict] | None:
         """The saved login for this page: the same site, or one it's part of (login.example.com -> example.com)."""
         host = site_of(url)
         data = self._read()

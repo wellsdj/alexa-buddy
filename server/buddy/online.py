@@ -293,6 +293,10 @@ their area to the search when it's about somewhere local.
 search engine, or a different page on the site.
 
 How to work:
+- Do exactly what they asked, no more and no less: if they asked to check, check (don't book); if they named a \
+place, a time or a site, use that.
+- LTA, ClubSpark and Pensford are one tennis login ("tennis"): on any of their sign-in pages use fill_login, which \
+finds it; save a new one with save_login account="tennis".
 - If signing in fails once, don't keep retrying or reopening the sign-in page: finish and say what went wrong.
 - Don't ask the user whether to do more or how much to read: decide sensibly yourself and get on with it. Only \
 ask_user for something you truly can't do without (a missing password, a real choice like which time to book).
@@ -553,6 +557,12 @@ class OnlineAgent:
             acct = self.logins.account_on_page(text)
             if acct is not None and self.logins.is_school(*acct) != school:
                 acct = None  # the school email only for school things; the home one for everything else
+            if acct is None and not school:
+                from .logins import group_of
+                g = group_of(page.url) or group_of(job.task)
+                for k, v in accts.items():
+                    if g and group_of(k) == g:
+                        acct = (k, v)
             if acct is None:
                 acct = self.logins.pick(school)
             if acct is None:
