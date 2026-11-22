@@ -24,7 +24,7 @@
 
 #include "config.h"
 
-#define FW_VERSION "1.7.5"
+#define FW_VERSION "1.7.6"
 #define SAMPLE_RATE 16000
 #define MIC_FRAMES 320               // 20 ms per I2S read
 #define SEND_BYTES 1280              // 40 ms of 16-bit audio per WebSocket frame
@@ -73,6 +73,7 @@ static uint32_t ringStartMs = 0;
 // ---- lesson recorder state
 static SPIClass sdSpi(FSPI);
 static volatile bool wantSdTest = false;  // set by the server, run in loop()
+static bool sdTestRunning = false;
 static bool sdOk = false;
 static StreamBufferHandle_t recStream = nullptr;
 static File recFile;
@@ -683,7 +684,7 @@ static void handleJson(uint8_t *payload, size_t len) {
   } else if (!strcmp(type, "alarm_stop")) {
     stopRinging(doc["reason"] | (doc["quiet"] | false ? "snooze" : "voice"));
   } else if (!strcmp(type, "sd_test")) {
-    wantSdTest = true;  // done in loop(): it takes a moment
+    if (!sdTestRunning) wantSdTest = true;  // done in loop(): it takes a moment
   } else if (!strcmp(type, "working")) {
     working = doc["on"] | false;
   } else if (!strcmp(type, "aec")) {
@@ -1083,6 +1084,7 @@ static void sdTest() {
   } else {
     steps.add("SO (pin 13) is not stuck at GND: good.");
   }
+  ws.loop();
   // 2. Does the card answer at all? Slow first.
   sdSpi.begin(SD_SCK_PIN, SD_MISO_PIN, SD_MOSI_PIN, SD_CS_PIN);
   pinMode(SD_CS_PIN, OUTPUT);
@@ -1102,13 +1104,17 @@ static void sdTest() {
     steps.add(b);
     if (!hint.length()) hint = "Push every reader wire in firmly; shorter wires help.";
   }
+  ws.loop();
   // 3. Can it be opened, and at what speed?
   const uint32_t speeds[] = {400000, 1000000, 4000000, 8000000, 20000000};
   uint32_t best = 0;
   for (uint32_t hz : speeds) {
+    ws.loop();
+    uint32_t t0 = millis();
     if (SD.begin(SD_CS_PIN, sdSpi, hz)) {
       best = hz;
       SD.end();
+      logOut.printf("[sd] test: opens at %lu Hz (%lu ms)\n", (unsigned long)hz, (unsigned long)(millis() - t0));
     } else {
       SD.end();
       break;
@@ -1123,6 +1129,7 @@ static void sdTest() {
     hint = "Format the card as FAT32 on the Mac (Disk Utility: MS-DOS (FAT), Master Boot Record). Cards bigger "
            "than 32 GB come as exFAT, which doesn't work.";
   }
+  ws.loop();
   // 4. Write a file and read it back.
   bool rw = false;
   if (best && SD.begin(SD_CS_PIN, sdSpi, best)) {
@@ -1151,6 +1158,7 @@ static void sdTest() {
   }
   doc["ok"] = rw;
   doc["hint"] = rw ? "The SD card works. Hold the button 2 seconds to record a lesson." : hint;
+  ws.loop();
   sendJson(doc);
   logOut.printf("[sd] test: %s\n", rw ? "ok" : hint.c_str());
 }
@@ -1634,7 +1642,10 @@ void loop() {
   wifiTasks();
   if (wantSdTest) {
     wantSdTest = false;
+    sdTestRunning = true;
+    logOut.println("[sd] test starting");
     sdTest();
+    sdTestRunning = false;
   }
   sendStats();
   updateLed();

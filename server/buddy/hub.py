@@ -1625,12 +1625,14 @@ class Hub:
         self._sd_wait = asyncio.get_running_loop().create_future()
         await devs[0].send_json({"type": "sd_test"})
         try:
-            msg = await asyncio.wait_for(self._sd_wait, timeout=20)
+            msg = await asyncio.wait_for(self._sd_wait, timeout=45)
         except asyncio.TimeoutError:
-            ver = str(devs[0].info.get("fw", "") or devs[0].info.get("version", ""))
-            return {"ok": False, "steps": [],
-                    "hint": f"Buddy didn't answer the test. The board needs firmware 1.7.4 or newer (it has {ver or 'an older one'}). "
-                            "Plug the board into the Mac by USB and double-click \"Put Buddy on the board\" on the Desktop."}
+            ver = str(devs[0].info.get("fw", "") or "")
+            if ver and tuple(int(x) for x in re.findall(r"\d+", ver)[:3]) < (1, 7, 4):
+                return {"ok": False, "steps": [], "hint": f"The board has firmware {ver}, which can't run this test. "
+                        "Plug the board into the Mac by USB and double-click \"Put Buddy on the board\" on the Desktop."}
+            return {"ok": False, "steps": [], "hint": "The board started the test but didn't send the answer back in time "
+                    "(it can get stuck when a card half-answers). Press Show board log below and send Claude what it says."}
         result = {"ok": bool(msg.get("ok")), "steps": list(msg.get("steps", [])), "hint": str(msg.get("hint", ""))}
         self.record("sd_test", **result)
         return result
