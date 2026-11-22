@@ -595,13 +595,14 @@ def create_app(settings: Settings | None = None, http=None, claude_http=None, st
                                        port)
 
     @app.post("/api/browser/open")
-    async def open_browser():
-        """Opens Buddy's browser on the Mac at Google's sign-in page, so you can sign in once."""
+    async def open_browser(body: dict | None = None):
+        """Opens Buddy's home or school browser on the Mac at Google's sign-in page, to sign in once."""
+        which = "school" if (body or {}).get("which") == "school" else "home"
         try:
-            await hub.online.browser.open_for_you()
+            await hub.online.browsers[which].open_for_you()
         except Exception as e:  # noqa: BLE001
             raise HTTPException(500, f"Couldn't open the browser: {e}") from e
-        return {"ok": True, "chrome": hub.online.browser.chrome}
+        return {"ok": True, "chrome": hub.online.browsers[which].chrome, "which": which}
 
     @app.delete("/api/logins/{site}")
     async def delete_login(site: str):

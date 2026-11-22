@@ -332,8 +332,15 @@ class OnlineAgent:
     def __init__(self, settings, llm, browser: Browser | None = None):
         self.settings = settings
         self.llm = llm
-        self.browser = browser or Browser(Path(settings.data_dir) / "browser",
-                                          visible=bool(settings.get("online_show_browser", True)))
+        # Two browsers, each with its own sign-ins: school (the school Google account, Bromcom) and home
+        # (your personal Google account: tennis, shopping, everything else).
+        visible = bool(settings.get("online_show_browser", True))
+        if browser is not None:
+            self.browsers = {"school": browser, "home": browser}
+        else:
+            self.browsers = {"school": Browser(Path(settings.data_dir) / "browser", visible=visible),
+                             "home": Browser(Path(settings.data_dir) / "browser-home", visible=visible)}
+        self.browser = self.browsers["home"]
         self.job: Job | None = None
         self.say = None  # async (text, wait_for_answer: bool): the hub speaks it out loud
         self.logins = None  # LoginStore: saved website logins (passwords never go to Claude)
@@ -358,6 +365,7 @@ class OnlineAgent:
         if self.busy:
             return f"Already busy with: {self.job.task}. Say stop first if you want something else."
         self.job = Job(task=task, who=who, kind=kind, quiet=quiet)
+        self.browser = self.browsers["school" if kind.startswith("school") else "home"]
         self.job.task_handle = asyncio.create_task(self._run(self.job, today, home))
         if self.on_busy and not quiet:
             self.on_busy(True)

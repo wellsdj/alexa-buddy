@@ -1456,7 +1456,7 @@ class Hub:
         self.reported = self.reported[-20:]
         what = job.topic or "that"
         moved_on = self.last_user_at > job.started + 5  # they've talked about other things since asking
-        if job.status == "done" and not moved_on:
+        if not moved_on and job.result:
             # They asked, and nothing else has come up since: just tell them.
             line = job.result
             self.conv.add("assistant", line, "(the online job I was doing finished; I told them the result)")

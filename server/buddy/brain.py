@@ -407,13 +407,16 @@ What you remember about the user (numbers are ids for editing):
 
 # Where things are done, so the helper goes straight there instead of searching around.
 PLACES = {
-    r"\btennis\b|\bcourts?\b|club ?spark|pen[cs]e?ford": ("tennis",
-        "How: their tennis courts are the Pensford courts (Pensford, in Kew, Richmond, London; heard as 'Penceford' "
-        "or similar), booked on ClubSpark. Go straight to https://clubspark.lta.org.uk, search its venues for "
-        "'Pensford', and open that venue's booking page. To see which courts are free you DON'T need to sign in: "
-        "read the booking sheet for the day they asked about. Only to actually book: sign in with 'Sign in with Google' "
-        "using their personal Google account if it's offered, otherwise their home account; ask_user only if neither "
-        "works. Don't search the web or use other sites."),
+    r"\btennis\b|\bcourts?\b|club ?spark|pen[cs]e?t?s?ford": ("tennis",
+        "How (do exactly this, it works): their courts are Pensford Tennis Club in Kew, Richmond (Pensford Avenue, "
+        "TW9 4HR; heard as 'Penceford', 'Pentsford' or similar). NOT the Pensford Tennis Club in Somerset/Bristol.\n"
+        "1. open_url https://clubspark.lta.org.uk/PensfordTennisClub/Booking/BookByDate#?date=YYYY-MM-DD with the "
+        "date they asked about (today if they didn't say).\n"
+        "2. Read the booking sheet: which courts are free, and when. If it shows a 'Sign in' prompt instead, use "
+        "'Sign in with Google' (personal account) or their home account, then open the same address again.\n"
+        "3. To see another day, change the date in the address and open it again.\n"
+        "4. Only to book: pick the slot, and ask_user with final=true before confirming.\n"
+        "Don't search the web, don't use ClubSpark's 'Find your local tennis event' search, don't visit other sites."),
 }
 CANCEL_JOB = re.compile(r"\b(cancel|stop|forget|never ?mind|abort|scrap|leave)\b.*\b(that|it|the (homework|search|job|"
                         r"task|check|booking|login)|checking|looking|searching)\b|^(cancel|stop it|forget it|never ?mind)"
