@@ -24,7 +24,7 @@
 
 #include "config.h"
 
-#define FW_VERSION "1.7.6"
+#define FW_VERSION "1.7.7"
 #define SAMPLE_RATE 16000
 #define MIC_FRAMES 320               // 20 ms per I2S read
 #define SEND_BYTES 1280              // 40 ms of 16-bit audio per WebSocket frame
@@ -1552,8 +1552,6 @@ void setup() {
   logOut.printf("[audio] speaker buffer %u KB, free heap %u KB\n",
                 (unsigned)(xStreamBufferSpacesAvailable(spkStream) / 1024), (unsigned)(ESP.getFreeHeap() / 1024));
   setupI2S();
-  sdBegin();
-  startRecTasks();  // (only if the card was found)
   xTaskCreatePinnedToCore(micTask, "mic", 6144, nullptr, 6, nullptr, 0);
   xTaskCreatePinnedToCore(playTask, "play", 6144, nullptr, 6, nullptr, 1);
   xTaskCreatePinnedToCore(aecTask, "aec", 4096, nullptr, 1, nullptr, 0);
@@ -1561,6 +1559,11 @@ void setup() {
   // Wi-Fi: first boot (or after a 10 s button hold) opens the "Buddy-Setup" hotspot.
   WiFi.mode(WIFI_STA);
   WiFi.setSleep(false);  // modem sleep adds audio latency and dropouts
+  // The SD card only after Wi-Fi has its memory: with a card in, mounting it first left Wi-Fi none
+  // ("Expected to init 4 rx buffer, actual is 0") and the board restarted over and over.
+  sdBegin();
+  startRecTasks();  // (only if the card was found)
+  logOut.printf("[mem] free heap after Wi-Fi and SD: %u KB\n", (unsigned)(ESP.getFreeHeap() / 1024));
   // A moment to be set up over USB by the Mac (Wi-Fi name, password and its address), so the setup
   // hotspot isn't needed. Opening the USB port restarts the board, which lands it right here.
   for (uint32_t t0 = millis(); millis() - t0 < 4000 && !usbGotWifi;) {
