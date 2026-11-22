@@ -510,6 +510,11 @@ def create_app(settings: Settings | None = None, http=None, claude_http=None, st
     async def status():
         return hub.status()
 
+    @app.get("/api/board_health")
+    async def board_health():
+        """The desk unit's memory, CPU and storage headroom, with plain-English warnings (firmware/LIMITS.md)."""
+        return hub.board_health()
+
     @app.get("/api/settings")
     async def get_settings():
         return {"settings": settings.all(), "keys": settings.secret_status()}

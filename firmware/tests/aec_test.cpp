@@ -7,6 +7,7 @@
 #include <vector>
 #include "aec.h"
 static AecPipeline P;
+static int16_t refMem[AEC_REF_LEN], histMem[AEC_HIST];
 
 double rnd() { return rand() / (double)RAND_MAX * 2 - 1; }
 int main(int argc, char **argv) {
@@ -34,6 +35,7 @@ int main(int argc, char **argv) {
     mic[i] = s;
   }
   // run: the speaker side is 768 samples ahead (its queue), blocks of 256
+  P.attach(refMem, histMem);
   std::vector<int16_t> out(total);
   int16_t blk[256];
   for (int i = 0; i < 768; i += 256) { int16_t z[256] = {0}; P.pushRef(z, 256); }

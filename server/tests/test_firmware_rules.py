@@ -4,8 +4,11 @@ Each one is here because the board once broke this way:
 - the SD card was mounted before Wi-Fi started, and with a card in Wi-Fi ran out of memory
   ("Expected to init 4 rx buffer, actual is 0"), so the board restarted over and over;
 - the prebuilt program on GitHub didn't match the source, so "Put Buddy on the board" put an old version on;
-- board messages went out of only one USB socket, so Show board log saw nothing.
+- board messages went out of only one USB socket, so Show board log saw nothing;
+- internal RAM ran out with the SD card in (1.7.7-1.7.10), so the board went silent after connecting. Since 1.8.0
+  big buffers live in PSRAM and every one is listed in firmware/buddy/memory_plan.h (see firmware/LIMITS.md).
 """
+import json
 import re
 from pathlib import Path
 
@@ -54,33 +57,143 @@ def test_every_server_command_has_a_handler():
     assert not missing, f"the server sends {missing} but the board doesn't handle it"
 
 
-# ---- memory budget (firmware 1.7.7/1.7.8 bug: with the SD card in only 15 KB was free after start-up and 4 KB after
-# connecting, so the board sat silent: it never sent its hello and gave up ~39 s later)
-BUDGET_KB = 75  # buffers + task stacks together (1.7.8 had 106 and ran dry with the SD card in; 1.7.9 has 72)
+# ---- the memory plan (firmware/LIMITS.md). Firmware 1.7.7-1.7.10: with the SD card in, internal RAM ran out
+# (15 KB free after start-up, 1-4 KB after connecting), so the board couldn't send its hello or answer the SD test.
+# Since 1.8.0 every buffer of 4 KB or more is listed in memory_plan.h, and these tests add the table up.
+BUDDY = FW / "buddy"
+PLAN = (BUDDY / "memory_plan.h").read_text()
+HEADERS = "\n".join((BUDDY / n).read_text() for n in ("config.h", "aec.h", "memory_plan.h")) + SRC
+ROW = re.compile(r'X\((\w+),\s*(BIG|FAST|STATIC),\s*([^,]+?),\s*([^,]+?),\s*"([^"]*)"\)')
+TYPE_BYTES = {"int8_t": 1, "uint8_t": 1, "char": 1, "int16_t": 2, "uint16_t": 2, "int32_t": 4, "uint32_t": 4,
+              "float": 4, "rmt_data_t": 4, "double": 8, "int64_t": 8, "uint64_t": 8}
 
 
-def _kb(name: str) -> float:
-    """Size in KB of a `#define NAME (16 * 1024)` or `#define NAME 6144` line."""
-    m = re.search(rf"#define {name}\s+\(?\s*(\d+)(?:\s*\*\s*(\d+))?", SRC)
-    assert m, f"{name} isn't defined in buddy_main.cpp"
-    return int(m.group(1)) * int(m.group(2) or 1) / 1024
+def _defines() -> dict:
+    return dict(re.findall(r"#define (\w+)\s+\(?([\d\s*+()]+?)\)?\s*(?://.*)?$", HEADERS, re.M))
 
 
-def test_buffers_and_stacks_fit_the_memory_budget():
-    buffers = sum(_kb(n) for n in ("MIC_BUFFER_BYTES", "SPK_BUFFER_BYTES", "REC_BUFFER_BYTES"))
-    stacks = sum(_kb(n) for n in ("STACK_MIC", "STACK_PLAY", "STACK_AEC", "STACK_REC", "STACK_UPLOAD"))
-    total = buffers + stacks
-    assert total <= BUDGET_KB, (
-        f"buffers {buffers:.0f} KB + task stacks {stacks:.0f} KB = {total:.0f} KB, over the {BUDGET_KB} KB budget: "
-        "the board runs out of memory after connecting to the server")
-    assert _kb("SPK_BUFFER_MIN") <= _kb("SPK_BUFFER_BYTES")
+def _eval(expr: str) -> int:
+    """Work out a size like `AEC_REF_LEN * 2` from the #defines in the firmware."""
+    defs = _defines()
+    for _ in range(5):
+        expr = re.sub(r"[A-Z_][A-Z0-9_]*", lambda m: f"({defs[m.group(0)]})" if m.group(0) in defs else m.group(0), expr)
+    assert re.fullmatch(r"[\d\s*+()/-]+", expr), f"can't work out the size {expr!r}"
+    return int(eval(expr))  # digits and + - * / only (checked above)
 
 
-def test_task_stacks_and_buffers_use_the_budgeted_sizes():
-    # a number typed straight into these calls would get around the budget above
-    assert not re.search(r"xTaskCreatePinnedToCore\(\w+, \"\w+\", \d+", SRC), "use the STACK_* sizes"
-    assert not re.search(r"xStreamBufferCreate\(\s*\d", SRC), "use the *_BUFFER_BYTES sizes"
-    assert not re.search(r"xStreamBufferCreate\([^;]*\d+ \* 1024", SRC), "use the *_BUFFER_BYTES sizes"
+def _plan() -> list[dict]:
+    rows = [{"name": n, "tier": t, "bytes": _eval(b), "fallback": _eval(f), "why": w} for n, t, b, f, w in ROW.findall(PLAN)]
+    assert len(rows) >= 10, "couldn't read the table in memory_plan.h"
+    return rows
+
+
+def _budget(name: str) -> int:
+    return int(re.search(rf"#define {name} (\d+)", PLAN).group(1))
+
+
+def test_memory_plan_fits_its_budgets():
+    rows = _plan()
+    fast = sum(r["bytes"] for r in rows if r["tier"] in ("FAST", "STATIC")) / 1024
+    big = sum(r["bytes"] for r in rows if r["tier"] == "BIG") / 1024
+    assert fast <= _budget("BUDGET_FAST_KB"), (
+        f"internal RAM in the plan is {fast:.0f} KB, over BUDGET_FAST_KB ({_budget('BUDGET_FAST_KB')}): move something "
+        "to PSRAM (tier BIG) or shrink it. See firmware/LIMITS.md")
+    assert big <= _budget("BUDGET_BIG_KB"), f"PSRAM in the plan is {big:.0f} KB, over BUDGET_BIG_KB"
+    for r in rows:
+        assert r["why"].strip(), f"{r['name']}: say what it's for"
+        if r["tier"] != "BIG":
+            assert r["fallback"] == 0, f"{r['name']}: only BIG things have a fallback size"
+
+
+def test_every_big_fixed_array_is_in_the_plan():
+    names = {r["name"] for r in _plan() if r["tier"] == "STATIC"}
+    for src_name in ("buddy_main.cpp", "aec.h"):
+        text = (BUDDY / src_name).read_text()
+        for line in text.splitlines():
+            m = re.match(r"\s*static (\w+) (\w+)\[([^\]]+)\]", line)
+            if not m or m.group(1) not in TYPE_BYTES:
+                continue
+            size = TYPE_BYTES[m.group(1)] * _eval(m.group(3))
+            if size >= 4096:
+                tag = re.search(r"// plan: (\w+)", line)
+                assert tag and tag.group(1) in names, (
+                    f"{src_name}: '{m.group(2)}' is {size} bytes of internal RAM. Arrays of 4 KB or more must be a "
+                    "STATIC row in memory_plan.h with '// plan: NAME' on the line, or (better) come from memBig()")
+
+
+def test_no_big_memory_except_through_mem_h():
+    code = re.sub(r"//.*", "", SRC)
+    for bad in ("malloc(", "ps_malloc(", "heap_caps_malloc(", "xStreamBufferCreate(", "new uint8_t[", "new int16_t[",
+                "new float["):
+        assert bad not in code, f"buddy_main.cpp uses {bad}: get memory through mem.h (memBig/memFast/memStream)"
+    aec = re.sub(r"//.*", "", (BUDDY / "aec.h").read_text())
+    assert aec.count("malloc(") == 1 and "#define AEC_MALLOC(bytes) malloc(bytes)" in aec, (
+        "aec.h must allocate only through AEC_MALLOC (PSRAM on the board)")
+
+
+def test_task_stacks_come_from_the_plan():
+    calls = re.findall(r'xTaskCreatePinnedToCore\(\w+, "\w+", (\w+)', SRC)
+    assert calls, "no tasks found"
+    rows = {f"MEM_{r['name']}" for r in _plan() if r["tier"] == "FAST"}
+    for size in calls:
+        assert size in rows, f"task stack {size} isn't a FAST row in memory_plan.h"
+
+
+def test_big_buffers_ask_for_psram():
+    for name in ("SPEAKER", "MIC", "REC", "AEC_REF", "AEC_HIST"):
+        assert f"MEM_{name}" in SRC, f"{name} is in the plan but buddy_main.cpp doesn't use MEM_{name}"
+    assert 'memStream("speaker", MEM_SPEAKER' in SRC and 'memStream("mic", MEM_MIC' in SRC
+
+
+def test_build_uses_psram_and_the_16mb_layout():
+    build = (FW / "build.sh").read_text()
+    for opt in ("PSRAM=opi", "FlashSize=16M", "PartitionScheme=custom"):
+        assert opt in build, f"firmware/build.sh must build with {opt}"
+    info = json.loads((FW / "prebuilt" / "build_info.json").read_text())
+    assert all(opt in info["fqbn"] for opt in ("PSRAM=opi", "FlashSize=16M")), "prebuilt wasn't made by build.sh"
+
+
+def _partitions() -> dict:
+    rows = {}
+    for line in (BUDDY / "partitions.csv").read_text().splitlines():
+        if line.strip() and not line.startswith("#"):
+            name, _t, _s, off, size = [c.strip() for c in line.split(",")[:5]]
+            rows[name] = (int(off, 16), int(size, 16))
+    return rows
+
+
+def test_partitions_keep_settings_and_fit_the_chip():
+    p = _partitions()
+    # Wi-Fi details, settings and alarms live in nvs: moving it would wipe them on the next update.
+    assert p["nvs"] == (0x9000, 0x5000) and p["otadata"] == (0xE000, 0x2000)
+    assert p["app0"][1] == p["app1"][1], "both program slots must be the same size (for updates over Wi-Fi)"
+    spans = sorted(p.values())
+    for (a, sa), (b, _sb) in zip(spans, spans[1:]):
+        assert a + sa <= b, "partitions overlap"
+    assert spans[-1][0] + spans[-1][1] <= 16 * 1024 * 1024, "past the end of the 16 MB flash"
+
+
+def test_program_and_fixed_ram_have_room_to_grow():
+    info = json.loads((FW / "prebuilt" / "build_info.json").read_text())
+    version = re.search(r'#define FW_VERSION "([\d.]+)"', SRC).group(1)
+    assert info["version"] == version, "prebuilt/build_info.json is stale: run firmware/build.sh"
+    slot = _partitions()["app0"][1]
+    assert info["app_bytes"] <= slot * 0.8, (
+        f"the program is {info['app_bytes'] // 1024} KB, over 80% of its {slot // 1024} KB slot. See firmware/LIMITS.md")
+    assert info["static_ram_bytes"] <= _budget("BUDGET_STATIC_RAM_KB") * 1024, (
+        f"fixed internal RAM is {info['static_ram_bytes'] // 1024} KB, over BUDGET_STATIC_RAM_KB: big arrays belong "
+        "in PSRAM (memBig)")
+
+
+def test_board_reports_every_number_the_server_checks():
+    start = SRC.index("static void addHealth")
+    sent = set(re.findall(r'doc\["(\w+)"\]', SRC[start:SRC.index("\n}", start)]))
+    limits = (Path(__file__).resolve().parents[1] / "buddy" / "board_limits.py").read_text()
+    used = set(re.findall(r'info\.get\("(\w+)"\)', limits)) | set(re.findall(r'info\["(\w+)"\]', limits))
+    elsewhere = {"sd", "dropped_mic", "dropped_spk", "dropped_rec", "stack_task"}  # sent outside addHealth
+    missing = used - sent - elsewhere
+    assert not missing, f"board_limits.py checks {missing} but the board never sends them (addHealth)"
+    assert "stack_task" in sent and "dropped_rec" in SRC
 
 
 def test_memory_is_logged_after_connecting_to_the_server():

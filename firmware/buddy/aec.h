@@ -97,10 +97,16 @@ static inline int aecFindDelay(const float *mic, const float *ref, int n, int ma
 #define AEC_WIN 4096        // samples compared when measuring the delay
 #define AEC_MAX_LAG 3200    // up to 200 ms between playing and hearing
 
+// The two big histories (ref, hist: 48 KB) live wherever attach() is given: PSRAM on the board, plain arrays in
+// the host test. The small working arrays below (taps, X, tmp) stay in the struct, in fast internal RAM.
+#ifndef AEC_MALLOC
+#define AEC_MALLOC(bytes) malloc(bytes)
+#endif
+
 struct AecPipeline {
-  int16_t ref[AEC_REF_LEN];
+  int16_t *ref = nullptr;           // AEC_REF_LEN samples
   volatile uint32_t refCount = 0;   // samples played so far
-  int16_t hist[AEC_HIST];
+  int16_t *hist = nullptr;          // AEC_HIST samples
   volatile uint32_t micCount = 0;   // samples heard so far
   int32_t snap = 0;                 // refCount - micCount, measured once both are running
   bool snapSet = false;
@@ -115,6 +121,15 @@ struct AecPipeline {
   float X[512 + AEC_TAPS];
   bool talkingOver = false;         // someone talking over Buddy right now
   float inE = 0, outE = 0;          // energy in and out this block, for ERLE and the safety check
+
+  // Must be called (with zeroed memory) before any audio runs.
+  void attach(int16_t *refMem, int16_t *histMem) {
+    ref = refMem;
+    hist = histMem;
+    memset(ref, 0, AEC_REF_LEN * sizeof(int16_t));
+    memset(hist, 0, AEC_HIST * sizeof(int16_t));
+  }
+  bool ready() const { return ref && hist; }
 
   void pushRef(const int16_t *s, int n) {
     uint32_t c = refCount;
@@ -205,8 +220,8 @@ struct AecPipeline {
   bool delayTask() {
     if (!wantDelay) return false;
     wantDelay = false;
-    float *micBuf = (float *)malloc(AEC_WIN * sizeof(float));
-    float *refBuf = (float *)malloc((AEC_WIN + AEC_MAX_LAG) * sizeof(float));
+    float *micBuf = (float *)AEC_MALLOC(AEC_WIN * sizeof(float));
+    float *refBuf = (float *)AEC_MALLOC((AEC_WIN + AEC_MAX_LAG) * sizeof(float));
     if (!micBuf || !refBuf) {
       free(micBuf);
       free(refBuf);

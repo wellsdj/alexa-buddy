@@ -19,29 +19,20 @@
 #include <WiFiManager.h>
 #include <driver/i2s_std.h>
 #include <freertos/stream_buffer.h>
+#include <esp_timer.h>
 #include <math.h>
 #include <sys/time.h>
 
 #include "config.h"
+#include "mem.h"
+#include <nvs.h>
 
-#define FW_VERSION "1.7.10"
+#define FW_VERSION "1.8.1"
 #define SAMPLE_RATE 16000
 #define MIC_FRAMES 320               // 20 ms per I2S read
 #define SEND_BYTES 1280              // 40 ms of 16-bit audio per WebSocket frame
-// Memory budget. The board has no spare RAM. Measured on the board (1.7.8): with the SD card in, the card, the
-// recording buffer and the two recording tasks take 36 KB, leaving 15 KB after start-up; the web socket then ran
-// dry (4 KB after connecting) and the hello message could not be sent. Sizes below leave about 36 KB after connecting.
-// tests/test_firmware_rules.py adds these up and fails if they grow.
-#define MIC_BUFFER_BYTES (8 * 1024)  // 0.25 s
-#define SPK_BUFFER_BYTES (24 * 1024) // 0.75 s of speech, 0.4 s of music; the server stays ~0.6 s ahead
-#define SPK_BUFFER_MIN (16 * 1024)   // if memory is short
-#define REC_BUFFER_BYTES (12 * 1024) // 0.4 s of lesson audio waiting for the SD card
-#define STACK_MIC 6144
-#define STACK_PLAY 6144
-#define STACK_AEC 4096
-#define STACK_REC 6144
-#define STACK_UPLOAD 6144
-#define MIN_FREE_HEAP_KB 50          // after start-up; below this the log says so
+// Memory: every buffer of 4 KB or more is listed in memory_plan.h (sizes, which kind of memory, budgets) and is
+// allocated through mem.h. Read firmware/LIMITS.md before adding anything big.
 #define MAX_FIRES 64
 
 // ------------------------------------------------------------------ state
@@ -164,7 +155,9 @@ static float speechGain() {
 
 // ------------------------------------------------------------------ echo cancelling
 // Takes Buddy's own voice out of the mic, so it doesn't hear itself (and you can cut in).
+#define AEC_MALLOC(bytes) memTemp(bytes)  // the echo delay check's scratch space: PSRAM
 #include "aec.h"
+#include "memory_plan.h"
 #include "HWCDC.h"
 #if CONFIG_IDF_TARGET_ESP32S3 && !ARDUINO_USB_CDC_ON_BOOT
 static HWCDC usbJtag;  // the ESP32's own USB socket (Serial is the other one)
@@ -182,12 +175,109 @@ static LogOut logOut;
 #else
 #define logOut Serial
 #endif
-static AecPipeline aec;
+static AecPipeline aec;  // plan: AEC_WORK (its big histories are AEC_REF and AEC_HIST)
 
 static void logMem(const char *when) {
   logOut.printf("[mem] free heap %s: %u KB (largest piece %u KB, lowest ever %u KB)\n", when,
                 (unsigned)(ESP.getFreeHeap() / 1024), (unsigned)(ESP.getMaxAllocHeap() / 1024),
                 (unsigned)(ESP.getMinFreeHeap() / 1024));
+  if (ESP.getFreeHeap() < MIN_FREE_INTERNAL_KB * 1024U)
+    logOut.printf("[mem] LOW: under %d KB of internal RAM left (see firmware/LIMITS.md)\n", MIN_FREE_INTERNAL_KB);
+}
+
+// ---- how close the board is to its limits (memory, CPU, storage). See firmware/LIMITS.md.
+static TaskHandle_t taskMic, taskPlay, taskAec, taskRec, taskUpload, taskLoop;
+static volatile uint32_t loopMaxMs = 0;  // longest single pass of loop() since the last stats message
+static int32_t sdFreeMb = -1;            // measured when the card is mounted (-1 = no card)
+// CPU. Audio arrives in 20 ms blocks: each must be dealt with in well under 20 ms, or the mic task never rests,
+// CPU 0's idle task starves and the watchdog restarts the board (seen in 1.8.0 before this check).
+#define MIC_BLOCK_BUDGET_US 15000
+static volatile uint32_t micMaxUs = 0;      // slowest mic block since the last stats message
+static volatile uint32_t aecSkipped = 0;    // blocks where echo cancelling was skipped to keep up
+static volatile uint32_t aecSkipUntil = 0;  // millis(): skip echo cancelling until then
+static uint8_t cpuBusy[2] = {0, 0};         // % of each core in use over the last stats period
+static char cpuTop[16] = "";                // the busiest task (not counting idle)
+static uint8_t cpuTopPct = 0;
+
+// How busy each core was since the last call, from FreeRTOS's run-time counters.
+static void measureCpu() {
+  static TaskStatus_t tasks[40];
+  static uint32_t lastIdle[2] = {0, 0}, lastTotal = 0;
+  static struct { char name[16]; uint32_t run; } prev[40];
+  static int prevN = 0;
+  uint32_t total = 0;
+  int n = uxTaskGetSystemState(tasks, 40, &total);
+  uint32_t elapsed = total - lastTotal;
+  if (!n || !elapsed) return;
+  uint32_t idle[2] = {0, 0}, topRun = 0;
+  const char *top = "";
+  for (int i = 0; i < n; i++) {
+    const char *nm = tasks[i].pcTaskName;
+    if (!strcmp(nm, "IDLE0")) idle[0] = tasks[i].ulRunTimeCounter;
+    else if (!strcmp(nm, "IDLE1")) idle[1] = tasks[i].ulRunTimeCounter;
+    else {
+      uint32_t before = 0;
+      for (int j = 0; j < prevN; j++)
+        if (!strncmp(prev[j].name, nm, 15)) before = prev[j].run;
+      uint32_t ran = tasks[i].ulRunTimeCounter - before;
+      if (ran > topRun) { topRun = ran; top = nm; }
+    }
+  }
+  for (int c = 0; c < 2; c++) {
+    uint32_t idleRan = idle[c] - lastIdle[c];
+    cpuBusy[c] = idleRan >= elapsed ? 0 : (uint8_t)(100 - (uint64_t)idleRan * 100 / elapsed);
+    lastIdle[c] = idle[c];
+  }
+  strncpy(cpuTop, top, sizeof(cpuTop) - 1);
+  cpuTopPct = (uint8_t)((uint64_t)topRun * 100 / elapsed);
+  prevN = n;
+  for (int i = 0; i < n; i++) {
+    strncpy(prev[i].name, tasks[i].pcTaskName, 15);
+    prev[i].name[15] = 0;
+    prev[i].run = tasks[i].ulRunTimeCounter;
+  }
+  lastTotal = total;
+}
+
+// The task with the least stack to spare (bytes never used so far). Under ~1 KB, a task is close to crashing.
+static uint32_t stackLeast(const char **who) {
+  const struct { const char *name; TaskHandle_t h; } tasks[] = {
+      {"mic", taskMic}, {"play", taskPlay}, {"aec", taskAec}, {"rec", taskRec}, {"upload", taskUpload}, {"loop", taskLoop}};
+  uint32_t least = UINT32_MAX;
+  for (auto &t : tasks) {
+    if (!t.h) continue;
+    uint32_t free = uxTaskGetStackHighWaterMark(t.h);  // bytes on the ESP32
+    if (free < least) {
+      least = free;
+      *who = t.name;
+    }
+  }
+  return least;
+}
+
+static void addHealth(JsonDocument &doc) {
+  doc["heap"] = ESP.getFreeHeap();  // internal RAM only
+  doc["min_heap"] = ESP.getMinFreeHeap();
+  doc["largest"] = ESP.getMaxAllocHeap();
+  doc["psram"] = psramFound();
+  doc["psram_free"] = ESP.getFreePsram();
+  doc["mem_fallbacks"] = memFallbacks;
+  const char *who = "";
+  doc["stack_min"] = stackLeast(&who);
+  doc["stack_task"] = who;
+  doc["loop_max_ms"] = loopMaxMs;
+  doc["mic_max_us"] = micMaxUs;
+  doc["aec_skipped"] = aecSkipped;
+  doc["cpu0"] = cpuBusy[0];
+  doc["cpu1"] = cpuBusy[1];
+  doc["cpu_top"] = cpuTop;
+  doc["cpu_top_pct"] = cpuTopPct;
+  static uint32_t appBytes = ESP.getSketchSize(), slotBytes = ESP.getFreeSketchSpace();
+  doc["app_kb"] = appBytes / 1024;
+  doc["app_slot_kb"] = slotBytes / 1024;
+  nvs_stats_t nvs;
+  if (nvs_get_stats(nullptr, &nvs) == ESP_OK) doc["nvs_free"] = nvs.free_entries;
+  doc["sd_free_mb"] = sdFreeMb;
 }
 
 static void logSendFailed() {
@@ -198,7 +288,7 @@ static volatile bool aecOn = true;  // the server can switch it off ("echo_cance
 
 static void aecTask(void *) {
   for (;;) {
-    if (aec.delayTask()) logOut.printf("[aec] echo delay %d samples\n", (int)aec.lag);
+    if (aec.ready() && aec.delayTask()) logOut.printf("[aec] echo delay %d samples\n", (int)aec.lag);
     vTaskDelay(pdMS_TO_TICKS(50));
   }
 }
@@ -213,7 +303,11 @@ static void micTask(void *) {
   int blocks = 0;
   for (;;) {
     size_t got = 0;
-    if (i2s_channel_read(rxChan, raw, sizeof(raw), &got, portMAX_DELAY) != ESP_OK) continue;
+    if (i2s_channel_read(rxChan, raw, sizeof(raw), &got, portMAX_DELAY) != ESP_OK) {
+      vTaskDelay(1);  // never spin: a busy loop here starves CPU 0 and the watchdog restarts the board
+      continue;
+    }
+    int64_t blockStart = esp_timer_get_time();
     int frames = got / 8;
     if (channel < 0) {
       for (int i = 0; i < frames; i++) {
@@ -234,12 +328,18 @@ static void micTask(void *) {
       hpY = y;
       out[i] = (int16_t)constrain((int32_t)y, -32768, 32767);
     }
-    if (aecOn && !recording && spkRate == SAMPLE_RATE) aec.processMic(out, frames);
+    if (aecOn && aec.ready() && !recording && spkRate == SAMPLE_RATE) {
+      if ((int32_t)(millis() - aecSkipUntil) >= 0) aec.processMic(out, frames);
+      else aecSkipped++;
+    }
     if (recording) {  // a lesson: straight to the SD card, not to the server
       if (xStreamBufferSend(recStream, out, frames * 2, 0) < (size_t)frames * 2) droppedRec++;
     } else if (!micMuted && xStreamBufferSend(micStream, out, frames * 2, 0) < (size_t)frames * 2) {
       droppedMic++;
     }
+    uint32_t took = (uint32_t)(esp_timer_get_time() - blockStart);
+    if (took > micMaxUs) micMaxUs = took;
+    if (took > MIC_BLOCK_BUDGET_US) aecSkipUntil = millis() + 2000;  // falling behind: drop the extra work for 2 s
   }
 }
 
@@ -352,7 +452,7 @@ static void playTask(void *) {
     if (aecOn && spkRate == SAMPLE_RATE) {
       static int16_t played[256];
       for (int i = 0; i < n; i++) played[i] = stereo[2 * i];
-      aec.pushRef(played, n);
+      if (aec.ready()) aec.pushRef(played, n);
     }
     size_t written;
     i2s_channel_write(txChan, stereo, n * 4, &written, portMAX_DELAY);
@@ -463,7 +563,7 @@ static void updateLed() {
 static uint16_t stripCount = STRIP_DEFAULT_LEDS;
 static uint8_t stripBrightness = 70;  // 0-255, set from the web page
 #if STRIP_PIN >= 0
-static rmt_data_t stripBits[STRIP_MAX_LEDS * 24];
+static rmt_data_t stripBits[STRIP_MAX_LEDS * 24];  // plan: STRIP_BITS
 static float stripNow[STRIP_MAX_LEDS][3];  // what's showing (0..1), eased towards the target
 static bool stripReady = false;
 
@@ -906,7 +1006,7 @@ static void sendHello() {
   doc["name"] = DEVICE_NAME;
   doc["mac"] = WiFi.macAddress();
   doc["rssi"] = WiFi.RSSI();
-  doc["heap"] = ESP.getFreeHeap();
+  addHealth(doc);
   doc["muted"] = micMuted;
   doc["uptime"] = millis() / 1000;  // lets the server tell switching on from a Wi-Fi reconnect
   doc["sd"] = sdOk;
@@ -1035,9 +1135,9 @@ static void uploadTask(void *);
 static void startRecTasks() {
   if (recTasksStarted || !sdOk) return;
   recTasksStarted = true;
-  if (!recStream) recStream = xStreamBufferCreate(REC_BUFFER_BYTES, 1);
-  xTaskCreatePinnedToCore(recTask, "rec", STACK_REC, nullptr, 3, nullptr, 1);
-  xTaskCreatePinnedToCore(uploadTask, "upload", STACK_UPLOAD, nullptr, 1, nullptr, 1);
+  if (!recStream) recStream = memStream("lesson recorder", MEM_REC, MEM_REC_FALLBACK, 1);
+  xTaskCreatePinnedToCore(recTask, "rec", MEM_STACK_REC, nullptr, 3, &taskRec, 1);
+  xTaskCreatePinnedToCore(uploadTask, "upload", MEM_STACK_UPLOAD, nullptr, 1, &taskUpload, 1);
 }
 
 static uint8_t sdRawCmd0(uint32_t hz);
@@ -1063,7 +1163,10 @@ static void sdBegin() {
   if (sdOk) {
     SD.mkdir("/rec");
     repairPartials();
-    logOut.printf("[sd] card ready, %llu MB\n", SD.cardSize() / (1024ULL * 1024ULL));
+    uint32_t t0 = millis();
+    sdFreeMb = (int32_t)((SD.totalBytes() - SD.usedBytes()) / (1024ULL * 1024ULL));
+    logOut.printf("[sd] card ready, %llu MB, %ld MB free (took %lu ms to count)\n", SD.cardSize() / (1024ULL * 1024ULL),
+                  (long)sdFreeMb, (unsigned long)(millis() - t0));
   } else {
     logOut.println("[sd] no card found (is the reader wired up and the card in?)");
   }
@@ -1251,7 +1354,7 @@ static void stopRec(bool failed) {
 }
 
 static void recTask(void *) {
-  static int16_t chunk[2048];  // 4 KB
+  static int16_t chunk[2048];  // plan: REC_CHUNK
   uint32_t lastFlush = 0;
   for (;;) {
     uint8_t cmd = recCmd;
@@ -1330,7 +1433,7 @@ static bool uploadFile(const String &name, uint32_t size) {
   c.print(hdr + "\r\n");
   File f = SD.open("/rec/" + name, FILE_READ);
   if (!f) return false;
-  static uint8_t buf[4096];
+  static uint8_t buf[4096];  // plan: UPLOAD_BUF
   uint32_t sent = 0;
   bool ok = true;
   while (sent < size) {
@@ -1538,9 +1641,15 @@ static void sendStats() {
   JsonDocument doc;
   doc["type"] = "stats";
   doc["rssi"] = WiFi.RSSI();
-  doc["heap"] = ESP.getFreeHeap();
-  doc["min_heap"] = ESP.getMinFreeHeap();
+  measureCpu();
+  addHealth(doc);
+  if (cpuBusy[0] > 85 || cpuBusy[1] > 85 || micMaxUs > MIC_BLOCK_BUDGET_US)
+    logOut.printf("[cpu] busy: core 0 %u%%, core 1 %u%%, top %s %u%%, slowest mic block %lu us (budget %d)\n",
+                  cpuBusy[0], cpuBusy[1], cpuTop, cpuTopPct, (unsigned long)micMaxUs, MIC_BLOCK_BUDGET_US);
+  loopMaxMs = 0;
+  micMaxUs = 0;
   doc["uptime"] = millis() / 1000;
+  doc["dropped_rec"] = droppedRec;
   doc["dropped_spk"] = droppedSpk;
   doc["dropped_mic"] = droppedMic;
   doc["muted"] = micMuted;
@@ -1575,15 +1684,21 @@ void setup() {
   stripInit();
   loadFires();
 
-  micStream = xStreamBufferCreate(MIC_BUFFER_BYTES, SEND_BYTES);
-  spkStream = xStreamBufferCreate(SPK_BUFFER_BYTES, 1);
-  if (!spkStream) spkStream = xStreamBufferCreate(SPK_BUFFER_MIN, 1);
+  taskLoop = xTaskGetCurrentTaskHandle();
+  micStream = memStream("mic", MEM_MIC, MEM_MIC_FALLBACK, SEND_BYTES);
+  spkStream = memStream("speaker", MEM_SPEAKER, MEM_SPEAKER_FALLBACK, 1);
+  {
+    auto *played = (int16_t *)memBigOr("echo: what was played", MEM_AEC_REF, MEM_AEC_REF_FALLBACK);
+    auto *heard = (int16_t *)memBigOr("echo: what was heard", MEM_AEC_HIST, MEM_AEC_HIST_FALLBACK);
+    if (played && heard) aec.attach(played, heard);
+    else logOut.println("[aec] no memory for echo cancelling: it's off");
+  }
   logOut.printf("[audio] speaker buffer %u KB, free heap %u KB\n",
                 (unsigned)(xStreamBufferSpacesAvailable(spkStream) / 1024), (unsigned)(ESP.getFreeHeap() / 1024));
   setupI2S();
-  xTaskCreatePinnedToCore(micTask, "mic", STACK_MIC, nullptr, 6, nullptr, 0);
-  xTaskCreatePinnedToCore(playTask, "play", STACK_PLAY, nullptr, 6, nullptr, 1);
-  xTaskCreatePinnedToCore(aecTask, "aec", STACK_AEC, nullptr, 1, nullptr, 0);
+  xTaskCreatePinnedToCore(micTask, "mic", MEM_STACK_MIC, nullptr, 6, &taskMic, 0);
+  xTaskCreatePinnedToCore(playTask, "play", MEM_STACK_PLAY, nullptr, 6, &taskPlay, 1);
+  xTaskCreatePinnedToCore(aecTask, "aec", MEM_STACK_AEC, nullptr, 1, &taskAec, 0);
 
   // Wi-Fi: first boot (or after a 10 s button hold) opens the "Buddy-Setup" hotspot.
   WiFi.mode(WIFI_STA);
@@ -1593,8 +1708,7 @@ void setup() {
   sdBegin();
   startRecTasks();  // (only if the card was found)
   logMem("after start-up (Wi-Fi started, SD mounted)");
-  if (ESP.getFreeHeap() < MIN_FREE_HEAP_KB * 1024U)
-    logOut.printf("[mem] LOW: under %d KB left, the board may not be able to send anything\n", MIN_FREE_HEAP_KB);
+  memReport(logOut);
   // A moment to be set up over USB by the Mac (Wi-Fi name, password and its address), so the setup
   // hotspot isn't needed. Opening the USB port restarts the board, which lands it right here.
   for (uint32_t t0 = millis(); millis() - t0 < 4000 && !usbGotWifi;) {
@@ -1660,6 +1774,8 @@ void setup() {
 }
 
 void loop() {
+  uint32_t loopStart = millis();
+  bool longJob = false;  // the SD test is meant to take a while: don't count it
   readUsb();
   ws.loop();
   pumpMic();
@@ -1681,9 +1797,12 @@ void loop() {
     logOut.println("[sd] test starting");
     sdTest();
     sdTestRunning = false;
+    longJob = true;
   }
   sendStats();
   updateLed();
   stripUpdate();
+  uint32_t took = millis() - loopStart;
+  if (!longJob && took > loopMaxMs) loopMaxMs = took;
   delay(1);
 }

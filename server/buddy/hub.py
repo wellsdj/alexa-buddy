@@ -35,7 +35,7 @@ from zoneinfo import ZoneInfo
 import numpy as np
 from fastapi import WebSocket
 
-from . import intents, timing
+from . import board_limits, intents, timing
 from .alarms import Alarm, AlarmStore, DAY_NAMES, spoken_time
 from .audio import Leveller, peak_db, rms_dbfs
 from .brain import Brain, Conversation, Reply
@@ -863,6 +863,7 @@ class Session:
         t = msg.get("type")
         if t == "hello":
             self.info = {k: v for k, v in msg.items() if k != "type"}
+            self.hub.check_board_limits(self, None)
             await self.hub.greet(self)
             if msg.get("wifi_join"):
                 self.hub._soon(self.hub.wifi_join_result(self, msg))
@@ -871,7 +872,9 @@ class Session:
         elif t == "sd_test":
             self.hub.sd_test_arrived(msg)
         elif t == "stats":
+            prev = dict(self.info)
             self.info.update({k: v for k, v in msg.items() if k != "type"})
+            self.hub.check_board_limits(self, prev)
             await self.hub.broadcast_ui({"type": "event", "kind": "device", "session": self.id, "info": self.info})
         elif t == "playback_done":
             if msg.get("seq") in (None, self.seq):
@@ -1033,6 +1036,25 @@ class Hub:
             if t and not t.done():
                 t.cancel()
         s._drop_live()
+
+    def check_board_limits(self, s: Session, prev: dict | None) -> None:
+        """Warn (log, Activity log, /api/status) when the desk unit gets close to its memory, CPU or storage limits."""
+        warnings = board_limits.check(s.info, prev)
+        old = [w["what"] for w in s.info.get("warnings", [])]
+        s.info["warnings"] = warnings
+        new = [w["what"] for w in warnings]
+        if new and new != old:
+            for w in warnings:
+                log.warning("board limits: %s -> %s", w["what"], w["fix"])
+            self.record("board_limits", device=s.name, warnings=warnings)
+
+    def board_health(self) -> dict:
+        devs = self.devices()
+        if not devs:
+            return {"ok": False, "devices": [], "hint": "No desk unit is connected."}
+        out = [{"name": s.name, "fw": s.info.get("fw"), "measured": board_limits.summary(s.info),
+                "warnings": s.info.get("warnings", [])} for s in devs]
+        return {"ok": not any(d["warnings"] for d in out), "devices": out}
 
     def devices(self) -> list[Session]:
         return [s for s in self.sessions.values() if s.role == "device"]
