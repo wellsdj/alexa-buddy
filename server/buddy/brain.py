@@ -480,6 +480,8 @@ class Brain:
             return Reply("", intent="empty")
         ctx["said"] = text
         reply = await self._pending(text, conv, ctx)
+        if reply is None and intents.wants_off(text) and not ctx.get("ringing"):
+            reply = Reply("", [{"type": "stop"}, {"type": "sleep"}], intent="off")  # "no, I said off": off
         if reply is None:
             reply = self._stray(text, conv)
         if reply is None:
@@ -644,6 +646,11 @@ class Brain:
         p, conv.pending = conv.pending, None
         if not p:
             return None
+        if p.get("intent") != "wifi_pass" and intents.wants_off(text):
+            # "Off" always wins, whatever Buddy was waiting for: a job that wanted an answer stops too.
+            if p.get("intent") == "online_answer" and self.online and self.online.waiting:
+                self.online.stop()
+            return Reply("", [{"type": "stop"}, {"type": "sleep"}], intent="off")
         if p.get("intent") == "wifi_pass":
             return await self._wifi_password(text, conv, p)
         if p.get("intent") == "online_report":

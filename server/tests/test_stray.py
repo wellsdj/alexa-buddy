@@ -28,3 +28,15 @@ def test_saying_leave_you_to_it_stops_listening(settings, apis, claude):
     claude.script = [claude_message(claude_text("No worries, I'll leave you to it."))]
     r = asyncio.run(brain.handle("that's all thanks for now", Conversation()))
     assert not r.follow_up
+
+
+def test_off_always_wins(settings, apis, claude):
+    from buddy import intents
+    brain = make_brain(settings, apis, claude)
+    conv = Conversation()
+    conv.pending = {"intent": "online_report", "text": "Pensford: no courts free."}
+    r = asyncio.run(brain.handle("No, I know what happened. Go off.", conv))
+    assert r.intent == "off" and not r.follow_up
+    r = asyncio.run(brain.handle("No, I said off.", Conversation()))
+    assert r.intent == "off" and not claude.requests
+    assert not intents.wants_off("turn off my alarm") and not intents.wants_off("I'm off to school")

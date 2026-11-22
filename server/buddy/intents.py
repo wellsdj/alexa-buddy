@@ -107,6 +107,18 @@ def name_answer(text: str) -> str | None:
     return " ".join(w[:1].upper() + w[1:] for w in words)
 
 
+def wants_off(text: str) -> bool:
+    """"Off" said as a command anywhere in a short sentence: "er off, I'll do it in settings", "no, I said
+    off", "go off". Not "turn off my alarm" or "off to school"."""
+    if is_off(text):
+        return True
+    t = re.sub(r"[,.!?]", " ", (text or "").lower())
+    t = re.sub(r"\s+", " ", t).strip()
+    if len(t.split()) > 14 or re.search(r"\b(alarm|timer|reminder|light|tv|music|radio|heating|lamp)s?\b", t):
+        return False
+    return bool(re.search(r"(^|\b(said|just|er|um|uh|no|ok|okay|now|please|go|turn|switch|buddy))\s*off\b(?! (to|for|the|my|a|an|at|with)\b)", t))
+
+
 def is_off(text: str) -> bool:
     """Short "go away" type sentences, in lots of wordings. Never things like "turn off my alarm"."""
     t = _norm(text) if text else ""

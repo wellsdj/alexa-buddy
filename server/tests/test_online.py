@@ -38,7 +38,7 @@ def run_job(tmp_path, calls, answers):
     site = tmp_path / "site.html"
     site.write_text(SITE)
     llm = Script(calls)
-    agent = OnlineAgent({"online_on": True}, llm, Browser(tmp_path / "profile", visible=False))
+    agent = OnlineAgent({"online_on": True, "online_show_browser": False}, llm, Browser(tmp_path / "profile", visible=False))
     said = []
 
     async def say(text, listen):
@@ -99,7 +99,7 @@ def test_logs_in_with_a_saved_login_without_claude_seeing_the_password(tmp_path)
     calls = [("open_url", {"url": page.as_uri()}), ("fill_login", {"user_n": 1, "password_n": 2}),
              ("click", {"n": 3}), ("finish", {"summary": "Logged in."})]
     llm = Script(calls)
-    agent = OnlineAgent({"online_on": True}, llm, Browser(tmp_path / "profile", visible=False))
+    agent = OnlineAgent({"online_on": True, "online_show_browser": False}, llm, Browser(tmp_path / "profile", visible=False))
     agent.logins = store
     agent.say = lambda t, l: asyncio.sleep(0)
 
@@ -128,7 +128,7 @@ def test_a_login_you_give_is_saved_for_next_time(tmp_path):
              ("type_text", {"n": 2, "text": "s3cret!"}), ("click", {"n": 3}),
              ("save_login", {"account": "School email"}), ("finish", {"summary": "Signed in."})]
     llm = Script(calls)
-    agent = OnlineAgent({"online_on": True}, llm, Browser(tmp_path / "profile", visible=False))
+    agent = OnlineAgent({"online_on": True, "online_show_browser": False}, llm, Browser(tmp_path / "profile", visible=False))
     agent.logins = store
     agent.say = lambda t, l: asyncio.sleep(0)
 
@@ -168,7 +168,7 @@ def test_google_password_page_uses_the_account_shown(tmp_path):
     store.save_account("https://www.bromcomvle.com/", "me@school.org", "s3cret!")  # named after the site
     calls = [("open_url", {"url": page.as_uri()}), ("fill_login", {"password_n": 1}), ("finish", {"summary": "In."})]
     llm = Script(calls)
-    agent = OnlineAgent({"online_on": True}, llm, Browser(tmp_path / "profile", visible=False))
+    agent = OnlineAgent({"online_on": True, "online_show_browser": False}, llm, Browser(tmp_path / "profile", visible=False))
     agent.logins = store
     agent.say = lambda t, l: asyncio.sleep(0)
 
@@ -202,7 +202,7 @@ def test_google_sign_in_happens_in_one_go(tmp_path, monkeypatch):
     store.save_account("school email", "me@school.org", "s3cret!")
     calls = [("open_url", {"url": page.as_uri()}), ("finish", {"summary": "In."})]
     llm = Script(calls)
-    agent = OnlineAgent({"online_on": True}, llm, Browser(tmp_path / "profile", visible=False))
+    agent = OnlineAgent({"online_on": True, "online_show_browser": False}, llm, Browser(tmp_path / "profile", visible=False))
     agent.logins = store
     agent.say = lambda t, l: asyncio.sleep(0)
 

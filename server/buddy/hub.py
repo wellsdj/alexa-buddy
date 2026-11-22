@@ -1365,7 +1365,7 @@ class Hub:
                     self._save_morning(state)
                 elif now.hour >= 5 and time.time() - self.weather_ready[0] > 3600:
                     await self.prepare_weather()  # keep it fresh through the day
-                busy = self.online.busy
+                busy = self.online.busy or state.get("blocked_day") == today
                 if now.hour >= 5 and state.get("homework_day") != today and not busy:
                     state["homework_day"] = today
                     self._save_morning(state)
@@ -1399,6 +1399,11 @@ class Hub:
             self.brain.weather_ready = self.weather_ready
 
     def morning_job_done(self, job) -> None:
+        if job.status != "done" or getattr(job, "signin_failed", False):
+            # Couldn't sign in (or similar): no more background tries today; they'd only fail the same way.
+            state = self._morning_state()
+            state["blocked_day"] = self.brain.now().date().isoformat()
+            self._save_morning(state)
         if job.kind == "school_homework" and job.status == "done" and job.result:
             self.brain.homework_ready = (time.time(), job.result)
             self.memory.add(f"Homework from Bromcom, checked {time.strftime('%a %d %b')} at "

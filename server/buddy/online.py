@@ -82,6 +82,8 @@ class Job:
     question: str = ""
     result: str = ""
     topic: str = ""
+    password_tries: int = 0
+    signin_failed: bool = False
     typed_user: str = ""
     typed_password: str = ""
     kind: str = ""  # e.g. school_homework: the result is also remembered
@@ -291,6 +293,7 @@ their area to the search when it's about somewhere local.
 search engine, or a different page on the site.
 
 How to work:
+- If signing in fails once, don't keep retrying or reopening the sign-in page: finish and say what went wrong.
 - Don't ask the user whether to do more or how much to read: decide sensibly yourself and get on with it. Only \
 ask_user for something you truly can't do without (a missing password, a real choice like which time to book).
 - Be quick: when you know the next few steps, do them in one go (e.g. type the email, type the password and click \
@@ -421,6 +424,11 @@ class OnlineAgent:
             job.status, job.question = "working", ""
 
     async def _run(self, job: Job, today: str, home: str) -> None:
+        # Buddy's own background checks run out of sight (no window popping up); your jobs are shown.
+        want = (not job.quiet) and bool(self.settings.get("online_show_browser", True))
+        if self.browser._ctx is not None and self.browser.visible != want:
+            await self.browser.close()
+        self.browser.visible = want
         try:
             await asyncio.wait_for(self._loop(job, today, home), timeout=MAX_SECONDS)
         except asyncio.CancelledError:
@@ -434,6 +442,11 @@ class OnlineAgent:
             await self._speak(f"Sorry, something went wrong online, so I stopped: {str(e)[:120]}")
         finally:
             self.history = (self.history + [job])[-20:]
+            if job.quiet:
+                try:
+                    await self.browser.close()  # leave nothing open (and free the profile for your next job)
+                except Exception:  # noqa: BLE001
+                    pass
             if self.on_busy and not job.quiet:
                 self.on_busy(False)
 
@@ -515,6 +528,10 @@ class OnlineAgent:
             steps = await self._autopilot(job)
             if steps:
                 result = f"(Signed in by myself: {', '.join(steps)}.)\n" + await self.browser.look()
+            if job.signin_failed:
+                result = ("SIGN-IN FAILED: the saved password was refused. Don't try again or reopen the page: call finish "
+                          "now (success false) saying the saved password for this account didn't work and they can "
+                          "fix it in Settings, Website logins.\n" + result)
         return result
 
     async def _autopilot(self, job: Job) -> list[str]:
@@ -545,6 +562,11 @@ class OnlineAgent:
                 pw = page.locator('input[type="password"]:visible').first
                 email = page.locator('input[type="email"]:visible').first
                 if acct and await pw.count() and acct[1].get("password"):
+                    job.password_tries += 1
+                    if job.password_tries > 1:
+                        # Back on the password page after trying: the saved password is wrong. Don't keep trying.
+                        job.signin_failed = True
+                        break
                     await pw.fill(acct[1]["password"], timeout=4000)
                     await pw.press("Enter")
                     done.append("password")
