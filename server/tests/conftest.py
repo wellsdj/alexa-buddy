@@ -19,7 +19,8 @@ def settings(tmp_path):
     s.set_secret("ANTHROPIC_API_KEY", "sk-ant-test")
     s.set_secret("GROQ_API_KEY", "gsk_test")
     s.set_secret("ELEVENLABS_API_KEY", "el_test")
-    s.update({"room_listening_on": True, "reword_replies": False, "fact_check": False})  # exact replies in asserts
+    s.update({"room_listening_on": True, "reword_replies": False, "fact_check": False,  # exact replies in asserts
+              "music_on_buddy": False})  # never start the real librespot: with no saved login it opens Spotify's login page in the browser
     return s
 
 
