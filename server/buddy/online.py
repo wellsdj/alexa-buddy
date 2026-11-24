@@ -469,7 +469,9 @@ class OnlineAgent:
         if shortcut:
             start += (f"\n\nLast time a job like this ended up at {shortcut}: open that first (you're probably "
                       "still signed in), and only go the long way round if it doesn't work.")
-        messages: list[dict] = [{"role": "system", "content": system}, {"role": "user", "content": start}]
+        # The rule book is the same on every step of a job: marked "cache" so Claude keeps it ready and it
+        # costs about a tenth as much from the second step on (see claude.convert_messages).
+        messages: list[dict] = [{"role": "system", "content": system, "cache": True}, {"role": "user", "content": start}]
         # The quick model for each step (much faster); the bigger one takes over if it keeps getting stuck.
         tier, stuck = "fast", 0
         for _ in range(MAX_STEPS):

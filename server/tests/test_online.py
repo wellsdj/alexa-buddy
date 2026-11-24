@@ -269,3 +269,25 @@ def test_one_tennis_login_for_lta_clubspark_and_pensford(tmp_path):
     (tmp_path / "x").mkdir()
     store2.save_account("tennis", "me@gmail.com", "pw2")
     assert store2.find("https://clubspark.lta.org.uk/Booking")[1]["password"] == "pw2"
+
+
+def test_the_rule_book_is_cached_for_every_step(tmp_path):
+    """The agent's long instructions are sent on every step; they're marked for caching so they cost ~10%."""
+    from buddy.claude import convert_messages
+
+    class Stop(Exception):
+        pass
+
+    class Peek:
+        async def chat(self, messages, **kw):
+            self.messages = list(messages)
+            raise Stop
+
+    llm = Peek()
+    agent = OnlineAgent({"online_on": True, "online_show_browser": False}, llm, Browser(tmp_path / "profile", visible=False))
+    from buddy.online import Job
+    with pytest.raises(Stop):
+        asyncio.run(agent._loop(Job(task="check my homework", kind="school_homework"), "Monday", "Richmond"))
+    assert llm.messages[0]["role"] == "system" and llm.messages[0].get("cache") is True
+    system, _ = convert_messages(llm.messages)
+    assert system[0]["cache_control"] == {"type": "ephemeral"} and "hands on the web" in system[0]["text"]
