@@ -1,7 +1,9 @@
 """Weather from Open-Meteo (free, no key). Cached for 10 minutes.
 
 Turns the raw forecast into things worth saying out loud: what it's like now, today's
-high and low, and whether it will rain and roughly when.
+high and low, whether it will rain and roughly when, how cloudy it is, and (only when
+asked) the wind. One request also brings back the past 7 days, so "what was it like
+yesterday?" and "has it rained this week?" work too.
 """
 from __future__ import annotations
 
@@ -34,6 +36,38 @@ WMO = {
 }
 WET_CODES = {51, 53, 55, 56, 57, 61, 63, 65, 66, 67, 80, 81, 82, 95, 96, 99}
 LIKELY, POSSIBLE, WET_MM = 50, 30, 0.3
+PAST_DAYS = 7
+WIND_WORDS = re.compile(r"\b(wind|winds|windy|breeze|breezy|gust|gusts|gusty|blowing)\b")
+CLOUD_WORDS = re.compile(r"\b(cloud|clouds|cloudy|cloud cover|overcast|sunny|sunshine|sun|grey|gray)\b")
+PAST_TENSE = re.compile(r"\b(was|were|did|been|had|has it|have we had)\b")
+
+
+def cloud_word(pct: float | None) -> str:
+    if pct is None:
+        return ""
+    if pct < 15:
+        return "clear skies"
+    if pct < 40:
+        return "mostly sunny"
+    if pct < 70:
+        return "partly cloudy"
+    if pct < 90:
+        return "mostly cloudy"
+    return "overcast"
+
+
+def split_past(data: dict, today: str) -> dict:
+    """Open-Meteo returns the past days first. Move them to data["past"] so index 0 is always today."""
+    daily = data.get("daily") or {}
+    times = daily.get("time") or []
+    k = times.index(today) if today in times else 0
+    data["past"] = {key: v[:k] for key, v in daily.items()}
+    if k:
+        data["daily"] = {key: v[k:] for key, v in daily.items()}
+        hourly = data.get("hourly") or {}
+        h = next((i for i, t in enumerate(hourly.get("time") or []) if t.startswith(today)), 0)
+        data["hourly"] = {key: v[h:] for key, v in hourly.items()}
+    return data
 
 
 DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
@@ -43,12 +77,18 @@ NUMBERS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seve
 
 
 def day_indices(when: str, now: datetime) -> list[int] | None:
-    """Which forecast days (0 = today) a phrase means. None = further ahead than 10 days."""
+    """Which days (0 = today, -1 = yesterday) a phrase means. None = further ahead than 10 days;
+    [] = further back than 7 days."""
     t = (when or "").lower()
     m = re.search(r"(\d{4})-(\d{2})-(\d{2})", t)
     if m:
         ahead = (datetime(int(m[1]), int(m[2]), int(m[3])).date() - now.date()).days
-        return [ahead] if 0 <= ahead <= 10 else None
+        if ahead < 0:
+            return [ahead] if ahead >= -PAST_DAYS else []
+        return [ahead] if ahead <= 10 else None
+    past = past_indices(t, now)
+    if past is not None:
+        return past
     m = re.search(r"\b(?:next|coming|following) (\d+|\w+) days\b|\b(\d+|\w+)[- ]day (?:forecast|outlook)", t)
     if m:
         n = m.group(1) or m.group(2)
@@ -87,6 +127,32 @@ def day_indices(when: str, now: datetime) -> list[int] | None:
                 ahead = 7
             return [ahead]
     return [0]
+
+
+def past_indices(t: str, now: datetime) -> list[int] | None:
+    """The past-days part of day_indices. None = the phrase isn't about the past."""
+    if "day before yesterday" in t:
+        return [-2]
+    if "yesterday" in t or "last night" in t:
+        return [-1]
+    m = re.search(r"\b(\d+|\w+) days? ago\b", t)
+    if m:
+        n = int(m.group(1)) if m.group(1).isdigit() else NUMBERS.get(m.group(1), 1 if m.group(1) == "a" else None)
+        if n is not None:
+            return [-n] if n <= PAST_DAYS else []
+    if re.search(r"\b(last|past|previous) (week|7 days|seven days)\b|\bthis past week\b|\bso far this week\b", t):
+        return list(range(-PAST_DAYS, 0))
+    if re.search(r"\b(last|past|previous) (few|couple of|\d+|two|three|four|five|six) days\b", t):
+        m = re.search(r"\b(?:last|past|previous) (\d+|two|three|four|five|six)", t)
+        n = (int(m.group(1)) if m.group(1).isdigit() else NUMBERS[m.group(1)]) if m else 3
+        return list(range(-n, 0)) if n <= PAST_DAYS else []
+    if re.search(r"\b(last|past) (month|year|fortnight)\b|\b(weeks|months) ago\b", t):
+        return []
+    for i, name in enumerate(DAYS):
+        if re.search(rf"\blast {name.lower()}\b", t) or (re.search(rf"\b{name.lower()}\b", t) and PAST_TENSE.search(t)):
+            back = (now.weekday() - i) % 7 or 7
+            return [-back]
+    return None
 
 
 def hour_label(h: int) -> str:
@@ -145,6 +211,23 @@ def rain_windows(hours: list[int], probs: list[float | None], mm: list[float | N
     return merged
 
 
+def _at(block: dict, key: str, i: int):
+    v = block.get(key) or []
+    return v[i] if 0 <= i < len(v) else None
+
+
+def wind_phrase(speed: float | None, gusts: float | None, now: bool = False) -> str:
+    if speed is None:
+        return ""
+    s = round(speed)
+    feel = "calm" if s < 4 else "a light breeze" if s < 13 else "breezy" if s < 25 else "windy" if s < 39 else "very windy"
+    head = f"Wind is {s} miles an hour" if now else f"Wind up to {s} miles an hour"
+    out = f"{head}, {feel}"
+    if gusts is not None and round(gusts) >= s + 8:
+        out += f", with gusts to {round(gusts)}"
+    return out
+
+
 class Weather:
     def __init__(self, settings: Settings, client: httpx.AsyncClient | None = None):
         self.settings = settings
@@ -158,7 +241,8 @@ class Weather:
         return (round(float(s["latitude"]), 4), round(float(s["longitude"]), 4), s["timezone"])
 
     async def fetch(self, force: bool = False, where: tuple | None = None) -> dict | None:
-        """Forecast for home, or for where=(lat, lon, timezone). Today plus 10 days."""
+        """Forecast for home, or for where=(lat, lon, timezone). Today plus 10 days, and the past 7 days
+        in data["past"]."""
         home = where is None
         where = where or self._where()
         hit = self._places.get(where)
@@ -166,18 +250,20 @@ class Weather:
             return hit[1]
         params = {
             "latitude": where[0], "longitude": where[1], "timezone": where[2],
-            "current": "temperature_2m,apparent_temperature,weather_code,precipitation,wind_speed_10m,relative_humidity_2m",
-            "hourly": "temperature_2m,precipitation_probability,precipitation,weather_code",
+            "current": "temperature_2m,apparent_temperature,weather_code,precipitation,cloud_cover,wind_speed_10m,"
+                       "wind_gusts_10m,relative_humidity_2m",
+            "hourly": "temperature_2m,precipitation_probability,precipitation,weather_code,cloud_cover",
             "daily": "weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,precipitation_sum,"
-                     "sunrise,sunset,wind_speed_10m_max",
+                     "sunrise,sunset,wind_speed_10m_max,wind_gusts_10m_max,cloud_cover_mean",
             "forecast_days": 11,
+            "past_days": PAST_DAYS,
             "wind_speed_unit": "mph",
             "temperature_unit": self.settings["temperature_unit"],
         }
         try:
             r = await self.client.get(FORECAST_URL, params=params)
             r.raise_for_status()
-            data = r.json()
+            data = split_past(r.json(), datetime.now(ZoneInfo(where[2])).date().isoformat())
             self._places[where] = (time.time(), data)
             if home:
                 self._cache = (time.time(), where, data)
@@ -225,11 +311,14 @@ class Weather:
             "condition": WMO.get(daily["weather_code"][index], "mixed"),
             "rain_chance": daily["precipitation_probability_max"][index],
             "rain_mm": daily["precipitation_sum"][index],
+            "cloud": _at(daily, "cloud_cover_mean", index),
+            "wind": _at(daily, "wind_speed_10m_max", index),
+            "gusts": _at(daily, "wind_gusts_10m_max", index),
             "windows": rain_windows(hours, probs, mm),
         }
 
     def summarize(self, data: dict, day: str = "today", now: datetime | None = None, place: str | None = None,
-                  tz: str | None = None, idx: int | None = None) -> dict:
+                  tz: str | None = None, idx: int | None = None, asked: str = "") -> dict:
         tz = ZoneInfo(tz or self.settings["timezone"])
         now = now or datetime.now(tz)
         cur = data.get("current", {})
@@ -270,6 +359,16 @@ class Weather:
                 parts.append("And again " + wins[1].phrase().replace("rain is likely ", "").replace("rain is possible ", "") + ".")
         else:
             parts.append("No rain expected" + (" for the rest of the day." if idx == 0 else "."))
+        asked = (asked or "").lower()
+        if CLOUD_WORDS.search(asked):
+            pct = cur.get("cloud_cover") if idx == 0 and cur.get("cloud_cover") is not None else d["cloud"]
+            if pct is not None:
+                parts.append(f"Cloud cover is about {round(pct)} percent, so {cloud_word(pct)}.")
+        if WIND_WORDS.search(asked):  # wind only when asked: nobody wants it every time
+            if idx == 0 and cur.get("wind_speed_10m") is not None:
+                parts.append(wind_phrase(cur["wind_speed_10m"], cur.get("wind_gusts_10m"), now=True) + ".")
+            elif d["wind"] is not None:
+                parts.append(wind_phrase(d["wind"], d["gusts"]) + ".")
         return {
             "spoken": " ".join(parts),
             "today": {k: v for k, v in d.items() if k != "windows"} | {
@@ -305,9 +404,14 @@ class Weather:
         days = day_indices(when, now)
         if days is None:
             return "I can only see the weather up to 10 days ahead."
+        if not days:
+            return f"I can only look back {PAST_DAYS} days."
         label = label or self.settings["location_name"].split(",")[0]
+        asked = (when or "").lower()
+        if days[0] < 0:
+            return self.past_report(data, days, label, asked)
         if len(days) == 1:
-            return self.summarize(data, now=now, place=label, tz=tzname, idx=days[0])["spoken"]
+            return self.summarize(data, now=now, place=label, tz=tzname, idx=days[0], asked=asked)["spoken"]
         d = data["daily"]
         bits = []
         for i in days:
@@ -318,8 +422,38 @@ class Weather:
             bit = f"{name} {WMO.get(d['weather_code'][i], 'mixed')}, {round(d['temperature_2m_max'][i])} and {round(d['temperature_2m_min'][i])}"
             if rain >= 40:
                 bit += f", {rain} percent chance of rain"
+            if CLOUD_WORDS.search(asked) and _at(d, "cloud_cover_mean", i) is not None:
+                bit += f", {round(d['cloud_cover_mean'][i])} percent cloud"
+            if WIND_WORDS.search(asked) and _at(d, "wind_speed_10m_max", i) is not None:
+                bit += f", wind up to {round(d['wind_speed_10m_max'][i])}"
             bits.append(bit)
         return f"In {label}: " + "; ".join(bits) + "."
+
+    def past_report(self, data: dict, days: list[int], label: str, asked: str = "") -> str:
+        """What the weather was like on past days (-1 = yesterday), from data["past"]."""
+        p = data.get("past") or {}
+        times = p.get("time") or []
+        bits = []
+        for i in days:
+            j = len(times) + i
+            if j < 0 or j >= len(times):
+                continue
+            name = "yesterday" if i == -1 else DAYS[datetime.strptime(times[j], "%Y-%m-%d").weekday()]
+            rain = _at(p, "precipitation_sum", j) or 0
+            bit = (f"{name} was {WMO.get(_at(p, 'weather_code', j), 'mixed')}, high {round(_at(p, 'temperature_2m_max', j))}, "
+                   f"low {round(_at(p, 'temperature_2m_min', j))}")
+            bit += f", {round(rain, 1):g} millimetres of rain" if rain >= 0.2 else ", dry"
+            if CLOUD_WORDS.search(asked) and _at(p, "cloud_cover_mean", j) is not None:
+                bit += f", {round(p['cloud_cover_mean'][j])} percent cloud"
+            if WIND_WORDS.search(asked) and _at(p, "wind_speed_10m_max", j) is not None:
+                bit += f", wind up to {round(p['wind_speed_10m_max'][j])} miles an hour"
+            bits.append(bit)
+        if not bits:
+            return "I don't have the weather for those days."
+        if len(bits) == 1:
+            return f"In {label}, " + bits[0] + "."
+        wet = sum(1 for i in days if 0 <= len(times) + i < len(times) and (_at(p, "precipitation_sum", len(times) + i) or 0) >= 0.2)
+        return f"In {label} over the last {len(bits)} days it rained on {wet} of them. " + "; ".join(bits) + "."
 
     async def context_line(self) -> str:
         """Compact snapshot for the system prompt so Buddy always knows the weather."""

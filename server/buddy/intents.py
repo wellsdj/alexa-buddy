@@ -295,7 +295,8 @@ def _volume(t: str) -> Intent | None:
 
 def _weather(t: str) -> Intent | None:
     weathery = re.search(r"\b(weather|forecast|rain|raining|umbrella|temperature|how (hot|cold|warm)|"
-                         r"sunny|snow|cold out|warm out|coat|jacket)\b", t)
+                         r"sunny|snow|cold out|warm out|coat|jacket|windy|how windy|the wind|wind speed|gusts?|gusty|breezy|cloudy|"
+                         r"clouds|cloud cover|overcast)\b", t)
     if not weathery:
         return None
     if re.search(r"\b(oven|fridge|freezer|body|water|bath|room|cook|cooking|bake|baking|core|cpu|recipe)\b", t):

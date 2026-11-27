@@ -160,12 +160,14 @@ TOOLS = [
             "ids": {"type": "array", "items": {"type": "string"}},
             "all_of_kind": {"type": "string", "description": "alarm, timer, reminder or all"}}}}},
     {"type": "function", "function": {
-        "name": "get_weather", "description": "Weather forecast for any place (default: the user's home), for any "
-                                              "day up to 10 days ahead, or a range of days.",
+        "name": "get_weather", "description": "Weather for any place (default: the user's home): any day up to 10 days "
+                                              "ahead, a range of days, or the past 7 days. Wind is only said if 'when' "
+                                              "mentions wind; cloud cover if it mentions cloud.",
         "parameters": {"type": "object", "properties": {
             "place": {"type": "string", "description": "town or city, e.g. 'Paris' or 'Manchester'; empty = home"},
             "when": {"type": "string", "description": "e.g. 'today', 'tomorrow', 'friday', 'the weekend', "
-                                                      "'in 5 days', 'this week', 'next 10 days', or YYYY-MM-DD"}}}}},
+                                                      "'in 5 days', 'this week', 'next 10 days', 'yesterday', 'last week', "
+                                                      "YYYY-MM-DD; add 'wind' or 'cloud' if asked about them"}}}}},
     {"type": "function", "function": {
         "name": "remember", "description": "Save a lasting fact or preference about the user.",
         "parameters": {"type": "object", "properties": {
@@ -766,7 +768,8 @@ class Brain:
             when, place = a.get("when", a.get("day", "today")), a.get("place", "")
             at, ready = self.weather_ready
             other_day = re.search(r"\b(tomorrow|tonight|week|weekend|monday|tuesday|wednesday|thursday|friday|"
-                                  r"saturday|sunday|next|later|days?)\b", str(when or "").lower())
+                                  r"saturday|sunday|next|later|days?|yesterday|last|ago|past|was|were|wind|windy|"
+                                  r"gusts?|breezy|cloud|cloudy|clouds|overcast)\b", str(when or "").lower())
             if ready and not place and not other_day and time.time() - at < 2 * 3600:
                 await asyncio.sleep(0.4)  # already worked out: a natural moment's pause, not an instant blurt
                 return Reply(ready, intent=n)
