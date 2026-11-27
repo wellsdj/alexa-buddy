@@ -20,6 +20,7 @@
 #include <driver/i2s_std.h>
 #include <freertos/stream_buffer.h>
 #include <esp_timer.h>
+#include <esp_task_wdt.h>
 #include <math.h>
 #include <sys/time.h>
 
@@ -27,7 +28,7 @@
 #include "mem.h"
 #include <nvs.h>
 
-#define FW_VERSION "1.8.1"
+#define FW_VERSION "1.8.3"
 #define SAMPLE_RATE 16000
 #define MIC_FRAMES 320               // 20 ms per I2S read
 #define SEND_BYTES 1280              // 40 ms of 16-bit audio per WebSocket frame
@@ -192,6 +193,19 @@ static int32_t sdFreeMb = -1;            // measured when the card is mounted (-
 // CPU. Audio arrives in 20 ms blocks: each must be dealt with in well under 20 ms, or the mic task never rests,
 // CPU 0's idle task starves and the watchdog restarts the board (seen in 1.8.0 before this check).
 #define MIC_BLOCK_BUDGET_US 15000
+// Health limits, the same as server/buddy/board_limits.py (a test checks they match). The heartbeat light turns
+// amber when any is crossed. MIN_FREE_INTERNAL_KB is in memory_plan.h.
+#define HEALTH_MIN_LOWEST_KB 16   // internal RAM's lowest point since start-up
+#define HEALTH_MIN_STACK 1024     // bytes of stack every task must have spare
+#define HEALTH_MAX_CPU 85         // % busy, either core
+#define HEALTH_MAX_LOOP_MS 250    // longest pass of loop()
+
+// ---- heartbeat: a dim blink every 3 s while idle, so you can see the board is working (firmware/LIMITS.md).
+// Driven from loop(), never from a timer, so it stops if the program stops. The mic and speaker tasks check in on
+// every pass; they're also on the hardware watchdog, which restarts the board if either is stuck for 5 s.
+static volatile uint32_t beatMic = 0, beatPlay = 0;  // millis() when each task last checked in
+static bool heartbeatOn = true;                      // the server's "heartbeat_light" setting
+static uint8_t hbLevel = 1;                          // 0 = a task has stopped checking in, 1 = fine, 2 = near a limit
 static volatile uint32_t micMaxUs = 0;      // slowest mic block since the last stats message
 static volatile uint32_t aecSkipped = 0;    // blocks where echo cancelling was skipped to keep up
 static volatile uint32_t aecSkipUntil = 0;  // millis(): skip echo cancelling until then
@@ -255,7 +269,34 @@ static uint32_t stackLeast(const char **who) {
   return least;
 }
 
+// Worked out once a second from loop(). Same limits as the server's warnings.
+static void updateHeartbeat() {
+  static uint32_t last = 0;
+  uint32_t now = millis();
+  if (now - last < 1000) return;
+  last = now;
+  if (now - beatMic > 1000 || now - beatPlay > 1000) {
+    hbLevel = 0;
+    return;
+  }
+  const char *who = "";
+  bool near = ESP.getFreeHeap() < MIN_FREE_INTERNAL_KB * 1024U || ESP.getMinFreeHeap() < HEALTH_MIN_LOWEST_KB * 1024U ||
+              !psramFound() || memFallbacks || cpuBusy[0] > HEALTH_MAX_CPU || cpuBusy[1] > HEALTH_MAX_CPU ||
+              micMaxUs > MIC_BLOCK_BUDGET_US || loopMaxMs > HEALTH_MAX_LOOP_MS || stackLeast(&who) < HEALTH_MIN_STACK;
+  hbLevel = near ? 2 : 1;
+}
+
+// How bright the heartbeat is at time t (0..1): one short blip every 3 s, two when near a limit, none if stuck.
+static float heartbeatAt(uint32_t t, uint32_t blipMs) {
+  if (!heartbeatOn || hbLevel == 0) return 0;
+  uint32_t ph = t % 3000;
+  if (ph < blipMs) return 1;
+  if (hbLevel == 2 && ph >= 2 * blipMs + 100 && ph < 3 * blipMs + 100) return 1;
+  return 0;
+}
+
 static void addHealth(JsonDocument &doc) {
+  doc["heartbeat"] = hbLevel;
   doc["heap"] = ESP.getFreeHeap();  // internal RAM only
   doc["min_heap"] = ESP.getMinFreeHeap();
   doc["largest"] = ESP.getMaxAllocHeap();
@@ -301,7 +342,10 @@ static void micTask(void *) {
   int channel = -1;  // auto-detect which slot the INMP441 is on
   uint64_t sums[2] = {0, 0};
   int blocks = 0;
+  esp_task_wdt_add(nullptr);  // stuck for 5 s: the watchdog restarts the board
   for (;;) {
+    esp_task_wdt_reset();
+    beatMic = millis();
     size_t got = 0;
     if (i2s_channel_read(rxChan, raw, sizeof(raw), &got, portMAX_DELAY) != ESP_OK) {
       vTaskDelay(1);  // never spin: a busy loop here starves CPU 0 and the watchdog restarts the board
@@ -332,10 +376,14 @@ static void micTask(void *) {
       if ((int32_t)(millis() - aecSkipUntil) >= 0) aec.processMic(out, frames);
       else aecSkipped++;
     }
+    // All or nothing, as for the speaker: half a block would shift every later sample by a byte (loud static).
+    size_t bytes = frames * 2;
     if (recording) {  // a lesson: straight to the SD card, not to the server
-      if (xStreamBufferSend(recStream, out, frames * 2, 0) < (size_t)frames * 2) droppedRec++;
-    } else if (!micMuted && xStreamBufferSend(micStream, out, frames * 2, 0) < (size_t)frames * 2) {
-      droppedMic++;
+      if (xStreamBufferSpacesAvailable(recStream) >= bytes) xStreamBufferSend(recStream, out, bytes, 0);
+      else droppedRec++;
+    } else if (!micMuted) {
+      if (xStreamBufferSpacesAvailable(micStream) >= bytes) xStreamBufferSend(micStream, out, bytes, 0);
+      else droppedMic++;
     }
     uint32_t took = (uint32_t)(esp_timer_get_time() - blockStart);
     if (took > micMaxUs) micMaxUs = took;
@@ -392,7 +440,10 @@ static void playTask(void *) {
   static int16_t mono[256];
   static int16_t stereo[512];
   bool playing = false;
+  esp_task_wdt_add(nullptr);  // stuck for 5 s: the watchdog restarts the board
   for (;;) {
+    esp_task_wdt_reset();
+    beatPlay = millis();
     if (wantRate != spkRate) {
       // A stream at another rate (music vs speech): switch the speaker clock between buffers.
       i2s_channel_disable(txChan);
@@ -553,8 +604,10 @@ static void updateLed() {
     float w = (sinf(t / 1000.0f * 2.0f * PI * 0.3f) + 1.0f) * 0.5f;
     uint8_t v = 15 + (uint8_t)(200 * w);
     led(v, v * 0.25f, v * 0.55f);
-  } else {
-    led(0, 0, 0);
+  } else {  // idle: the heartbeat (green blip = fine, amber double blip = near a limit, dark = stuck)
+    float h = heartbeatAt(t, 60);
+    if (hbLevel == 2) led(140 * h, 70 * h, 0);
+    else led(0, 110 * h, 0);
   }
 }
 
@@ -643,6 +696,10 @@ static void stripUpdate() {
     } else if (working) {  // a job in the background: pink, fading slowly in and out together
       float v = 0.05f + 0.6f * ((sinf(sec * 2 * PI * 0.3f) + 1) * 0.5f);
       r = v; g = v * 0.25f; b = v * 0.55f;
+    } else if (k == (uint16_t)mid) {  // idle: the heartbeat on the middle light (longer, as the strip fades)
+      float h = heartbeatAt(t, 200) * 0.35f;
+      if (hbLevel == 2) { r = h; g = h * 0.5f; }
+      else g = h;
     }
     want[k][0] = r; want[k][1] = g; want[k][2] = b;
   }
@@ -738,6 +795,13 @@ static void checkAlarms() {
 }
 
 // ------------------------------------------------------------------ server messages
+static void setHeartbeat(bool on) {
+  if (on == heartbeatOn) return;  // only write to flash when it changes
+  heartbeatOn = on;
+  prefs.putBool("hb", on);
+  logOut.printf("[light] heartbeat %s\n", on ? "on" : "off");
+}
+
 static void handleJson(uint8_t *payload, size_t len) {
   JsonDocument doc;
   DeserializationError jsonErr = deserializeJson(doc, payload, len);
@@ -756,6 +820,7 @@ static void handleJson(uint8_t *payload, size_t len) {
   if (!strcmp(type, "hello_ack")) {
     if (doc["volume"].is<int>()) volumeLevel = constrain(doc["volume"].as<int>(), 0, 10);
     if (doc["mic_shift"].is<int>()) micShift = constrain(doc["mic_shift"].as<int>(), 8, 18);
+    if (doc["heartbeat"].is<bool>()) setHeartbeat(doc["heartbeat"].as<bool>());
     if (doc["strip_leds"].is<int>()) stripSet(doc["strip_leds"].as<int>(), doc["strip_brightness"] | -1);
     // No tune here: the server plays the "I'm on" sound once, when the unit is switched on.
   } else if (!strcmp(type, "state")) {
@@ -813,6 +878,8 @@ static void handleJson(uint8_t *payload, size_t len) {
     logOut.printf("[alarms] schedule updated: %d fire times\n", n);
   } else if (!strcmp(type, "alarm_stop")) {
     stopRinging(doc["reason"] | (doc["quiet"] | false ? "snooze" : "voice"));
+  } else if (!strcmp(type, "heartbeat")) {
+    setHeartbeat(doc["on"] | true);
   } else if (!strcmp(type, "sd_test")) {
     logOut.println("[sd] test requested by the server");
     if (!sdTestRunning) wantSdTest = true;  // done in loop(): it takes a moment
@@ -1679,6 +1746,7 @@ void setup() {
   volumeLevel = prefs.getUChar("volume", 6);
   micShift = prefs.getUChar("micShift", MIC_SHIFT_DEFAULT);
   micMuted = prefs.getBool("muted", false);
+  heartbeatOn = prefs.getBool("hb", true);
   stripCount = min((int)prefs.getUShort("stripLeds", STRIP_DEFAULT_LEDS), STRIP_MAX_LEDS);
   stripBrightness = prefs.getUChar("stripBri", 70);
   stripInit();
@@ -1800,6 +1868,7 @@ void loop() {
     longJob = true;
   }
   sendStats();
+  updateHeartbeat();
   updateLed();
   stripUpdate();
   uint32_t took = millis() - loopStart;

@@ -107,7 +107,9 @@ Budgets (in `memory_plan.h`, checked by the tests and on the board):
    `prebuilt/build_info.json`, which the tests check.
 3. **The board log at start-up** lists every big buffer and where it landed, whether PSRAM was found, and free
    internal RAM after each step. `[mem] LOW` and `[cpu] busy` lines appear when something is close.
-4. **The server**, every 30 s, checks the board's numbers (`server/buddy/board_limits.py`). It logs a warning,
+4. **The heartbeat light**: a dim green blip every 3 s while idle; an amber double blip when a limit below is
+   close; none if an audio task is stuck. Every light is explained in `firmware/LIGHTS.md`.
+5. **The server**, every 30 s, checks the board's numbers (`server/buddy/board_limits.py`). It logs a warning,
    adds a `board_limits` entry to the Activity log, and shows everything at
    `curl -s localhost:8000/api/board_health | python3 -m json.tool`: each number, and each warning with what to do.
 

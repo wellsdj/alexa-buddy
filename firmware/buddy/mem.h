@@ -59,9 +59,12 @@ static void *memTemp(size_t bytes) {
 static StreamBufferHandle_t memStream(const char *name, size_t bytes, size_t fallback, size_t trigger) {
   auto *ctl = (StaticStreamBuffer_t *)heap_caps_malloc(sizeof(StaticStreamBuffer_t), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
   size_t got = 0;
-  auto *store = (uint8_t *)memBigOr(name, bytes + 1, fallback + 1, &got);  // a stream buffer needs one spare byte
+  // A static stream buffer keeps one byte of its storage empty, so `bytes` of room needs bytes + 1 of storage,
+  // and the size passed in is the storage size. (1.8.0-1.8.2 passed one less: 16383 bytes of room, an odd number,
+  // so a full mic buffer took half a sample and shifted every later one by a byte: loud static, no "hey buddy".)
+  auto *store = (uint8_t *)memBigOr(name, bytes + 1, fallback + 1, &got);
   if (!ctl || !store) return nullptr;
-  return xStreamBufferCreateStatic(got - 1, trigger, store, ctl);
+  return xStreamBufferCreateStatic(got, trigger, store, ctl);
 }
 
 static void memReport(Print &out) {
