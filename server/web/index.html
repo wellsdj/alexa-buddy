@@ -76,12 +76,11 @@
     <button role="tab" data-tab="alarms" aria-selected="true">Alarms</button>
     <button role="tab" data-tab="memory" aria-selected="false">Memory</button>
     <button role="tab" data-tab="weather" aria-selected="false">Weather</button>
-    <button role="tab" data-tab="voices" aria-selected="false">Voices</button>
+    <button role="tab" data-tab="voicemenu" aria-selected="false">Voices</button>
     <button role="tab" data-tab="settings" aria-selected="false">Settings</button>
     <button role="tab" data-tab="speed" aria-selected="false">Speed</button>
     <button role="tab" data-tab="activity" aria-selected="false">Activity</button>
     <button role="tab" data-tab="mictest" aria-selected="false">Mic test</button>
-    <button role="tab" data-tab="yourvoice" aria-selected="false">Your voice</button>
   </nav>
   <div class="drawer-body">
     <div class="panel" id="panel-alarms" role="tabpanel">
@@ -125,8 +124,16 @@
       <p class="note" id="weather-place"></p>
     </div>
 
+    <div class="panel settings" id="panel-voicemenu" role="tabpanel" hidden>
+      <header class="panel-head"><h2>Voices</h2><p>How Buddy sounds, or how Buddy knows who's talking.</p></header>
+      <div class="set-menu">
+        <button type="button" class="set-row" data-voice-go="voices"><span><b>Buddy's voice</b><small>Pick the voice Buddy talks with</small></span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></button>
+        <button type="button" class="set-row" data-voice-go="yourvoice"><span><b>Your voice</b><small>Teach Buddy what you sound like, so it knows who's talking</small></span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></button>
+      </div>
+    </div>
     <div class="panel settings" id="panel-voices" role="tabpanel" hidden>
-      <header class="panel-head"><h2>Voices</h2><p>Up to 8 ElevenLabs voices. Tap one to use it, or say “change your voice”, “next voice”, “use voice 3” or “use the George voice”.</p></header>
+      <button type="button" class="btn small ghost voice-back" data-voice-back>← Voices</button>
+      <header class="panel-head"><h2>Buddy's voice</h2><p>Up to 8 ElevenLabs voices. Tap one to use it, or say “change your voice”, “next voice”, “use voice 3” or “use the George voice”.</p></header>
       <fieldset>
         <legend>Your voices</legend>
         <ol class="voice-list" id="voice-list"></ol>
@@ -307,6 +314,7 @@
     </div>
 
     <div class="panel" id="panel-yourvoice" role="tabpanel" hidden>
+      <button type="button" class="btn small ghost voice-back" data-voice-back>← Voices</button>
       <header class="panel-head"><h2>Your voice</h2><p>Buddy learns what you sound like, so it knows who's talking. It all stays on this computer.</p></header>
       <section class="vid-step" id="vid-setup" hidden>
         <p class="vid-big">First, download the voice model (40 MB, free).</p>

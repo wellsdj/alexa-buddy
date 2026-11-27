@@ -1031,10 +1031,23 @@ function init() {
       document.querySelectorAll(".panel").forEach((p) => (p.hidden = p.id !== "panel-" + tab.dataset.tab));
       if (tab.dataset.tab === "weather") loadWeather();
       if (tab.dataset.tab === "activity") loadStatus();
-      if (tab.dataset.tab === "yourvoice") loadVoiceID();
       if (tab.dataset.tab === "speed") loadSpeed();
-      if (tab.dataset.tab !== "yourvoice" && vidRecording) stopMicAll();
+      if (vidRecording) stopMicAll();
       if (tab.dataset.tab !== "mictest" && S.micTest && !vidRecording) micTest(false);
+    };
+  }
+  // Voices: one tab, then a choice of Buddy's voice or your voice.
+  const showPanel = (id) => document.querySelectorAll(".panel").forEach((p) => (p.hidden = p.id !== "panel-" + id));
+  for (const b of document.querySelectorAll("[data-voice-go]")) {
+    b.onclick = () => {
+      showPanel(b.dataset.voiceGo);
+      if (b.dataset.voiceGo === "yourvoice") loadVoiceID();
+    };
+  }
+  for (const b of document.querySelectorAll("[data-voice-back]")) {
+    b.onclick = () => {
+      if (vidRecording) stopMicAll();
+      showPanel("voicemenu");
     };
   }
   $("meter-source").onchange = (e) => (S.meterSource = e.target.value);

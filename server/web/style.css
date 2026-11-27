@@ -457,3 +457,4 @@ a.btn { text-decoration: none; }
 .speed-bar { display: flex; height: 10px; border-radius: 6px; overflow: hidden; background: var(--s3); }
 .speed-bar i { display: block; height: 100%; }
 .speed-empty { color: var(--muted); font-size: 15px; }
+.voice-back { margin: 0 0 6px; }
