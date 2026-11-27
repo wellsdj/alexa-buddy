@@ -40,12 +40,6 @@
           <span class="row"><input type="password" id="setup-eleven-key" placeholder="sk_…" autocomplete="off"><button class="btn primary small" data-save-key="ELEVENLABS_API_KEY" data-input="setup-eleven-key">Save</button></span>
           <p class="note">Skip this and Buddy uses a free offline voice instead. <a href="#" id="setup-skip-eleven">Skip</a></p>
         </div>
-        <div class="setup-step" id="setup-groq">
-          <p><b>3. Groq key (free, optional: helps Buddy tell when you're talking to it).</b> Open <a href="https://console.groq.com/keys" target="_blank" rel="noopener">console.groq.com/keys</a>,
-            sign in (Google is fine), click <i>Create API Key</i>, then copy the key and paste it here:</p>
-          <span class="row"><input type="password" id="setup-groq-key" placeholder="gsk_…" autocomplete="off"><button class="btn primary small" data-save-key="GROQ_API_KEY" data-input="setup-groq-key">Save</button></span>
-          <p class="note">Skip this and Buddy uses simple phrase rules instead. <a href="#" id="setup-skip-groq">Skip</a></p>
-        </div>
       </div>
       <ol class="chat" id="chat" aria-live="polite"></ol>
   </div>
@@ -163,9 +157,9 @@
         <button type="button" class="set-row" data-open="studyweb"><span><b>Study website</b><small>Connect Buddy to Study Buddy online, so lesson recordings go there</small></span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></button>
         <button type="button" class="set-row" data-open="timetable"><span><b>Timetable</b><small>Your Week A and Week B, from photos</small></span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></button>
         <button type="button" class="set-row" data-open="logins"><span><b>Website logins</b><small>Logins Buddy can use when it does things online for you</small></span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></button>
-        <button type="button" class="set-row" data-open="keys"><span><b>Keys</b><small>Claude, ElevenLabs and Groq keys</small></span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></button>
+        <button type="button" class="set-row" data-open="keys"><span><b>Keys</b><small>Claude and ElevenLabs keys</small></span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></button>
         <button type="button" class="set-row" data-open="updates"><span><b>Update Buddy</b><small>Get the newest features</small></span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></button>
-        <button type="button" class="set-row" data-open="brains"><span><b>Advanced: brains</b><small>Which Claude and Groq models Buddy uses</small></span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></button>
+        <button type="button" class="set-row" data-open="brains"><span><b>Advanced: brains</b><small>Which Claude models Buddy uses</small></span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></button>
         <button type="button" class="set-row" data-open="security"><span><b>Advanced: security</b><small>An access code for the desk unit and this page</small></span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></button>
       </nav>
       <button type="button" class="set-back" id="set-back" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 6-6 6 6 6"/></svg>All settings</button>
@@ -273,8 +267,6 @@
         <legend>Keys</legend>
         <label>Claude <span class="note">Buddy's brain (pay as you go)</span> <span class="keystate" id="key-claude"></span>
           <span class="row"><input type="password" id="claude-key" placeholder="sk-ant-…" autocomplete="off"><button class="btn small" data-save-key="ANTHROPIC_API_KEY" data-input="claude-key">Save</button></span></label>
-        <label>Groq <span class="note">optional, free: tells when you're talking to Buddy</span> <span class="keystate" id="key-groq"></span>
-          <span class="row"><input type="password" id="groq-key" placeholder="gsk_…" autocomplete="off"><button class="btn small" data-save-key="GROQ_API_KEY" data-input="groq-key">Save</button></span></label>
         <label>ElevenLabs <span class="keystate" id="key-eleven"></span>
           <span class="row"><input type="password" id="eleven-key" placeholder="sk_…" autocomplete="off"><button class="btn small" data-save-key="ELEVENLABS_API_KEY" data-input="eleven-key">Save</button></span></label>
         <p class="note" id="eleven-quota"></p>
@@ -291,10 +283,6 @@
         <label>Deep-thinking model (Claude) <span class="note">used only after Buddy asks and you say yes</span>
           <input data-setting="claude_smart_model" type="text" list="claude-models"></label>
         <datalist id="claude-models"><option value="claude-haiku-5-5"><option value="claude-sonnet-5-5"><option value="claude-opus-5-5"></datalist>
-        <label>Listener model (Groq) <span class="note">judges whether room talk is for Buddy</span> <input data-setting="fast_model" type="text" list="model-list"></label>
-        <label>Listener fallbacks (comma separated) <input data-setting="fallback_models" type="text"></label>
-        <datalist id="model-list"></datalist>
-        <p class="note" id="model-note"></p>
       </fieldset>
       <fieldset data-section="security" hidden>
         <legend>Advanced: security</legend>

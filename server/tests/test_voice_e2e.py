@@ -14,7 +14,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from buddy.main import create_app
-from tests.fakes import chat_response, claude_message, claude_text
+from tests.fakes import claude_message, claude_text
 from tests.test_server import recv_until
 
 CLIPS = Path(os.environ.get("BUDDY_TEST_CLIPS", "/nonexistent"))
@@ -110,10 +110,6 @@ def test_borderline_wake_is_confirmed_by_transcript(settings, apis):
 
 
 # ---------- listening to the room, context and "off" ----------
-def judge(verdict: bool):
-    return chat_response("openai/gpt-oss-20b", json.dumps({"for_assistant": verdict}))
-
-
 def said(clip_name: str, rng, before: float = 1.0, after: float = 2.0) -> np.ndarray:
     return np.concatenate([room(before, rng), (clip(clip_name) * 0.6).astype(np.int16), room(after, rng)])
 
@@ -138,7 +134,6 @@ def wake_earcons(seen) -> int:
 def test_question_without_wake_word_is_answered_in_context(settings, apis, claude):
     rng = np.random.default_rng(3)
     apis.transcripts = ["Let me ask you a question."]
-    apis.chat_script = [judge(True)]
     claude.script = [claude_message(claude_text("Of course. What is it?"))]
     app = create_app(settings, apis.client(), claude.client(), apis.stt())
     with TestClient(app) as client, device(client) as ws:
@@ -147,16 +142,13 @@ def test_question_without_wake_word_is_answered_in_context(settings, apis, claud
         stream(ws, said("room_let_me_ask__en-gb-alan-low__0.9.wav", rng))
         start, seen = recv_until(ws, lambda m: m.get("type") == "audio_start")
         assert start["text"] == "Of course. What is it?" and wake_earcons(seen) == 1
-        asked = apis.chat_requests[0]["messages"][-1]["content"]
-        assert 'New sentence: "Let me ask you a question."' in asked
         heard = [e for e in app.state.hub.log if e["event"] == "heard"]
-        assert heard[-1]["for_buddy"] and heard[-1]["how"] == "Groq"
+        assert heard[-1]["for_buddy"] and heard[-1]["how"] == "phrase rules"
 
 
 def test_people_talking_to_each_other_is_ignored(settings, apis, claude):
     rng = np.random.default_rng(4)
     apis.transcripts = ["What do you fancy for dinner tonight?"]
-    apis.chat_script = [judge(False)]
     app = create_app(settings, apis.client(), claude.client(), apis.stt())
     with TestClient(app) as client, device(client) as ws:
         ws.send_text(json.dumps({"type": "hello"}))
@@ -176,7 +168,6 @@ def test_buddy_mid_sentence_does_not_wake(settings, apis, claude, name):
     rng = np.random.default_rng(5)
     apis.transcripts = ["So yesterday I told my buddy about the match." if "my_buddy" in name
                         else "So I walked in and went hey buddy to my mate, and he just ignored me."]
-    apis.chat_script = [judge(False)]
     app = create_app(settings, apis.client(), claude.client(), apis.stt())
     with TestClient(app) as client, device(client) as ws:
         ws.send_text(json.dumps({"type": "hello"}))
@@ -223,7 +214,6 @@ def test_mid_sentence_hey_buddy_with_room_listening_off_is_judged_in_context(set
     settings.update({"room_listening_on": False})
     rng = np.random.default_rng(7)
     apis.transcripts = ["So I walked in and went hey buddy to my mate, and he just ignored me."]
-    apis.chat_script = [judge(False)]
     app = create_app(settings, apis.client(), claude.client(), apis.stt())
     with TestClient(app) as client, device(client) as ws:
         ws.send_text(json.dumps({"type": "hello"}))
@@ -231,7 +221,6 @@ def test_mid_sentence_hey_buddy_with_room_listening_off_is_judged_in_context(set
         stream(ws, said("mid_hey_buddy__en-us-lessac-medium__0.9.wav", rng))
         heard = wait_for_log(app.state.hub, "heard")
         assert not heard["for_buddy"]
-        assert "wake-word detector heard" in apis.chat_requests[-1]["messages"][-1]["content"]
         ws.send_text(json.dumps({"type": "text", "text": "what time is it"}))
         _, seen = recv_until(ws, lambda m: m.get("type") == "audio_start")
         assert wake_earcons(seen) == 0 and not claude.requests

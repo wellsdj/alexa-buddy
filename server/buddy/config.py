@@ -17,9 +17,7 @@ DATA_DIR = Path(os.environ.get("BUDDY_DATA_DIR", ROOT / "data"))
 
 load_dotenv(ROOT / ".env")
 
-# Claude Haiku answers. Groq's free models (optional key) only judge whether something said
-# in the room was meant for Buddy. Groq retires models regularly, so its model names are
-# preferences, not hard requirements: llm.py checks what the account can actually see.
+# Claude Haiku answers everything. (Groq was used once for room listening; it's gone now.)
 DEFAULTS: dict[str, Any] = {
     "settings_version": 3,
     "assistant_name": "Buddy",
@@ -29,9 +27,6 @@ DEFAULTS: dict[str, Any] = {
     "longitude": -0.3037,
     "timezone": "Europe/London",
     "temperature_unit": "celsius",
-    "fast_model": "openai/gpt-oss-20b",
-    "smart_model": "openai/gpt-oss-120b",
-    "fallback_models": ["qwen/qwen3.6-27b", "openai/gpt-oss-120b", "openai/gpt-oss-20b"],
     "room_listening_on": False,  # off: Buddy only wakes for "hey buddy" (True: also answers room talk meant for it)
     "claude_fast_model": "claude-haiku-5-5",
     "claude_smart_model": "claude-haiku-5-5",
@@ -87,7 +82,9 @@ DEFAULTS: dict[str, Any] = {
     "device_token": "",
 }
 
-SECRET_KEYS = ("GROQ_API_KEY", "ELEVENLABS_API_KEY", "ANTHROPIC_API_KEY", "STUDY_SYNC_KEY")
+SECRET_KEYS = ("ELEVENLABS_API_KEY", "ANTHROPIC_API_KEY", "STUDY_SYNC_KEY")
+
+RETIRED_SECRETS = ("GROQ_API_KEY",)  # dropped when settings load, and gone from the file at the next save
 
 
 class Settings:
@@ -110,7 +107,7 @@ class Settings:
                 except json.JSONDecodeError:
                     continue
                 for k, v in stored.items():
-                    if target is self._secrets or k in DEFAULTS:
+                    if (target is self._secrets and k not in RETIRED_SECRETS) or k in DEFAULTS:
                         target[k] = v
                 if target is self._values and int(stored.get("settings_version", 1)) < 2:
                     # Version 2: a proper back-and-forth. Buddy keeps listening after every answer, and only

@@ -415,24 +415,21 @@ function showKeys(keys) {
     $(id).textContent = s.set ? `set (${s.source})` : "missing";
     $(id).className = "keystate " + (s.set ? "ok" : "missing");
   };
-  k("GROQ_API_KEY", "key-groq");
   k("ELEVENLABS_API_KEY", "key-eleven");
   k("ANTHROPIC_API_KEY", "key-claude");
-  let skipEleven = false, skipGroq = false;
+  let skipEleven = false;
   try {
     skipEleven = localStorage.getItem("buddy-skip-eleven") === "1";
-    skipGroq = localStorage.getItem("buddy-skip-groq") === "1";
   } catch {}
   $("setup-claude").hidden = keys.ANTHROPIC_API_KEY.set;
   $("setup-eleven").hidden = keys.ELEVENLABS_API_KEY.set || skipEleven;
-  $("setup-groq").hidden = keys.GROQ_API_KEY.set || skipGroq;
-  $("setup-box").hidden = $("setup-claude").hidden && $("setup-eleven").hidden && $("setup-groq").hidden;
+  $("setup-box").hidden = $("setup-claude").hidden && $("setup-eleven").hidden;
   S.lastKeys = keys;
   const pill = $("pill-keys");
   const brain = keys.ANTHROPIC_API_KEY.set, voice = keys.ELEVENLABS_API_KEY.set;
   pill.dataset.ok = brain && voice ? "true" : brain ? "warn" : "false";
   pill.title = !brain ? "Claude key missing: Buddy can't answer questions"
-    : voice ? (keys.GROQ_API_KEY.set ? "All keys set" : "No Groq key: phrase rules decide when you're talking to Buddy")
+    : voice ? "All keys set"
     : "No ElevenLabs key: offline voice will be used";
 }
 // ---------------------------------------------------------------- voices
@@ -692,21 +689,13 @@ async function loadStatus() {
                                                     : "Starting the Spotify login… (refresh this in a few seconds)")
     : mu.running ? `Ready: “${mu.name}” is your Spotify speaker${mu.playing ? ", playing now" : ""}.`
     : `Not running${mu.error ? ": " + mu.error : ""}.`;
-  const dl = $("model-list");
-  dl.replaceChildren(...(st.llm.available || []).map((m) => el("option", { value: m })));
-  $("model-note").textContent = st.llm.available
-    ? `Your key can use: ${st.llm.available.filter((m) => !/whisper|guard|tts|orpheus/.test(m)).join(", ")}`
-    : "Add a Groq key to see which listener models your account can use.";
   const q = st.tts.elevenlabs.quota;
   $("eleven-quota").textContent = q && q.limit ? `ElevenLabs credits used this month: ${q.used.toLocaleString()} of ${q.limit.toLocaleString()} (${q.tier})` : "";
-  const cool = Object.entries(st.llm.cooldowns || {}).map(([m, s]) => `${m.replace("openai/", "")} ${s}s`).join(", ");
   const stats = [
     ["Buddy is", st.listening.awake ? (st.listening.room ? "on, listening to the room" : "on") : "off (say “hey buddy”)"],
     ["Everyday model", (st.llm.fast || [])[0] || "none"],
     ["Deep-thinking model", (st.llm.smart || [])[0] || "none"],
     ["Ears", st.stt.installed ? `${st.stt.engine}${st.stt.last_ms ? `, last ${st.stt.last_ms} ms` : ""}` : "not downloaded: run Update Buddy"],
-    ["Listener", st.keys.GROQ_API_KEY.set ? ((st.llm.listener || [])[0] || "none available") : "phrase rules (no Groq key)"],
-    ["Rate-limited", cool || "none"],
     ["Voice", st.tts.last_engine || (st.tts.elevenlabs.available ? "ElevenLabs" : st.tts.piper.available ? "Piper" : "browser only")],
     ["Memory", `${st.memory.count} items`],
     ["Connected", st.sessions.map((s) => `${s.role}:${s.state}`).join(", ") || "–"],
@@ -1080,11 +1069,6 @@ function init() {
   $("setup-skip-eleven").onclick = (e) => {
     e.preventDefault();
     try { localStorage.setItem("buddy-skip-eleven", "1"); } catch {}
-    if (S.lastKeys) showKeys(S.lastKeys);
-  };
-  $("setup-skip-groq").onclick = (e) => {
-    e.preventDefault();
-    try { localStorage.setItem("buddy-skip-groq", "1"); } catch {}
     if (S.lastKeys) showKeys(S.lastKeys);
   };
   $("place-go").onclick = async (e) => {

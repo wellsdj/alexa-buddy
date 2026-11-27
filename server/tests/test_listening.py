@@ -1,13 +1,10 @@
 import asyncio
-import json
 
 from buddy.listening import ContextJudge
-from buddy.llm import GroqLLM
-from tests.fakes import chat_response
 
 
-def judge_for(settings, apis):
-    return ContextJudge(settings, GroqLLM(settings, apis.client()))
+def judge_for(settings):
+    return ContextJudge(settings)
 
 
 def ask(j, text, **kw):
@@ -16,36 +13,38 @@ def ask(j, text, **kw):
 
 
 def test_hey_buddy_at_the_start_needs_no_model(settings, apis):
-    j = judge_for(settings, apis)
+    j = judge_for(settings)
     assert ask(j, "Hey buddy, what's the weather?") and j.last_how == "hey buddy"
     assert not apis.chat_requests
 
 
-def test_groq_decides_with_recent_context(settings, apis):
-    j = judge_for(settings, apis)
-    apis.chat_script = [chat_response("openai/gpt-oss-20b", json.dumps({"for_assistant": False})),
-                        chat_response("openai/gpt-oss-20b", json.dumps({"for_assistant": True}))]
-    assert not ask(j, "Did you see the match last night?")
-    assert ask(j, "And what time does it start tomorrow?", last_reply="Arsenal play at three.", since_reply_s=20)
-    sent = apis.chat_requests[1]["messages"][1]["content"]
-    assert "- Did you see the match last night?" in sent and "Arsenal play at three." in sent
-    assert apis.chat_requests[1]["response_format"] == {"type": "json_object"}
-
-
 def test_quick_command_right_after_buddy_spoke(settings, apis):
-    j = judge_for(settings, apis)
+    j = judge_for(settings)
     assert ask(j, "stop", since_reply_s=3) and not apis.chat_requests
 
 
-def test_without_groq_phrase_rules_decide(settings, apis):
-    settings.set_secret("GROQ_API_KEY", "")
-    j = judge_for(settings, apis)
+def test_phrase_rules_decide_and_no_model_is_asked(settings, apis):
+    j = judge_for(settings)
     assert ask(j, "Let me ask you a question.") and j.last_how == "phrase rules"
-    assert not ask(j, "I was telling my buddy about it.")
-    assert not apis.chat_requests
-
-
-def test_groq_failure_falls_back_to_rules(settings, apis):
-    j = judge_for(settings, apis)
-    apis.chat_script = [lambda body: (500, {"error": "boom"}, {})] * 12
     assert ask(j, "Quick question for you") and j.last_how == "phrase rules"
+    assert not ask(j, "I was telling my buddy about it.")
+    assert not ask(j, "Did you see the match last night?")
+    assert not apis.chat_requests  # Groq is gone: nothing is sent anywhere to decide
+
+
+def test_groq_is_gone(settings):
+    import buddy.llm as llm
+    from buddy.config import DEFAULTS, SECRET_KEYS
+    assert not hasattr(llm, "GroqLLM")
+    assert "GROQ_API_KEY" not in SECRET_KEYS
+    assert not {"fast_model", "smart_model", "fallback_models"} & set(DEFAULTS)
+
+
+def test_an_old_groq_key_is_dropped_on_load(tmp_path):
+    import json
+    from buddy.config import Settings
+    (tmp_path / "secrets.json").write_text(json.dumps({"GROQ_API_KEY": "gsk_old", "ANTHROPIC_API_KEY": "sk-ant"}))
+    (tmp_path / "settings.json").write_text(json.dumps({"fast_model": "openai/gpt-oss-20b", "volume": 4}))
+    s = Settings(tmp_path)
+    assert s.secret("GROQ_API_KEY") in ("", None) and s.secret("ANTHROPIC_API_KEY") == "sk-ant"
+    assert s.get("fast_model") is None and s["volume"] == 4

@@ -1,11 +1,9 @@
-"""The brain (Claude Haiku via a fake Anthropic API) and the Groq client that now only
-judges whether room talk is meant for Buddy."""
+"""The brain (Claude Haiku via a fake Anthropic API)."""
 import asyncio
 
 from buddy.alarms import AlarmStore
 from buddy.brain import THINK_OFFER, Brain, Conversation
 from buddy.claude import ClaudeLLM
-from buddy.llm import GroqLLM, LLMError
 from buddy.memory import MemoryManager, MemoryStore
 from buddy.weather import Weather
 from tests.fakes import chat_response, claude_error, claude_message, claude_text, claude_tool
@@ -21,57 +19,6 @@ def make_brain(settings, apis, claude):
 
 def run(coro):
     return asyncio.run(coro)
-
-
-# ---------- Groq: the room listener's model client ----------
-def test_fast_model_request_shape(settings, apis):
-    llm = GroqLLM(settings, apis.client())
-    res = run(llm.chat([{"role": "user", "content": "hi"}]))
-    body = apis.chat_requests[0]
-    assert body["model"] == "openai/gpt-oss-20b"
-    assert body["reasoning_effort"] == "low" and body["include_reasoning"] is False
-    assert res.content == "Okay." and res.model == "openai/gpt-oss-20b"
-
-
-def test_rate_limit_falls_back_and_cools_down(settings, apis):
-    def limited(body):
-        return 429, {"error": {"message": "Rate limit reached ... tokens per minute (TPM)"}}, {"retry-after": "7"}
-    apis.chat_script = [limited, chat_response("qwen/qwen3.6-27b", "From the fallback.")]
-    llm = GroqLLM(settings, apis.client())
-    res = run(llm.chat([{"role": "user", "content": "hi"}]))
-    assert res.model == "qwen/qwen3.6-27b" and res.content == "From the fallback."
-    assert apis.chat_requests[1]["reasoning_effort"] == "none"  # qwen: thinking off on the fast path
-    assert "openai/gpt-oss-20b" in llm.status()["cooldowns"]
-    # Next call skips the cooling model entirely.
-    run(llm.chat([{"role": "user", "content": "again"}]))
-    assert apis.chat_requests[2]["model"] == "qwen/qwen3.6-27b"
-
-
-def test_retired_model_is_skipped(settings, apis):
-    apis.models = ["openai/gpt-oss-120b", "whisper-large-v3-turbo"]  # 20b and qwen gone
-    llm = GroqLLM(settings, apis.client())
-    run(llm.chat([{"role": "user", "content": "hi"}]))
-    assert apis.chat_requests[0]["model"] == "openai/gpt-oss-120b"
-
-
-def test_decommissioned_error_marks_dead(settings, apis):
-    def gone(body):
-        return 400, {"error": {"message": "The model has been decommissioned", "code": "model_decommissioned"}}, {}
-    apis.chat_script = [gone]
-    llm = GroqLLM(settings, apis.client())
-    run(llm.chat([{"role": "user", "content": "hi"}]))
-    assert "openai/gpt-oss-20b" in llm.dead
-
-
-def test_all_models_failing_raises(settings, apis):
-    fail = lambda body: (500, {"error": "boom"}, {})  # noqa: E731
-    apis.chat_script = [fail] * 12
-    llm = GroqLLM(settings, apis.client())
-    try:
-        run(llm.chat([{"role": "user", "content": "hi"}]))
-        assert False, "expected LLMError"
-    except LLMError:
-        pass
 
 
 # ---------- the brain ----------
@@ -106,7 +53,7 @@ def test_web_search_uses_claude_search(settings, apis, claude):
     assert claude.requests[1]["tools"][0]["type"].startswith("web_search_")
     result = claude.requests[2]["messages"][-1]["content"][0]
     assert result["type"] == "tool_result" and result["content"] == "Arsenal won 2-1 on Saturday."
-    assert not apis.chat_requests  # Groq is never asked to answer
+    assert not apis.chat_requests  # only Claude is asked
 
 
 def test_deep_thinking_asks_permission_first(settings, apis, claude):

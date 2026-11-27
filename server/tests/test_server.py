@@ -105,7 +105,7 @@ def test_voice_stop_silences_ringing_alarm_and_briefs(settings, apis):
 def test_rest_api_round_trip(settings, apis):
     app = create_app(settings, apis.client(), None, apis.stt())
     with TestClient(app) as client:
-        assert client.get("/api/status").json()["keys"]["GROQ_API_KEY"]["set"]
+        assert client.get("/api/status").json()["keys"]["ANTHROPIC_API_KEY"]["set"]
         r = client.post("/api/memory", json={"text": "Likes flat whites", "category": "preferences"})
         mid = r.json()["id"]
         assert client.get("/api/memory").json()["items"][0]["text"] == "Likes flat whites."
@@ -144,10 +144,7 @@ def test_token_protects_api_and_socket(settings, apis):
 def test_saving_a_key_says_whether_it_works(settings, apis):
     app = create_app(settings, apis.client(), None, apis.stt())
     with TestClient(app) as client:
-        bad = client.post("/api/secrets", json={"name": "GROQ_API_KEY", "value": " gsk_wrong "}).json()
-        assert not bad["check"]["ok"] and "didn't accept" in bad["check"]["message"]
-        good = client.post("/api/secrets", json={"name": "GROQ_API_KEY", "value": "gsk_right"}).json()
-        assert good["check"] == {"ok": True, "message": "Groq key works. Buddy uses it to tell when you're talking to it."}
+        old = client.post("/api/secrets", json={"name": "GROQ_API_KEY", "value": "gsk_right"})
+        assert old.status_code == 400  # Groq is gone
         el = client.post("/api/secrets", json={"name": "ELEVENLABS_API_KEY", "value": "sk_x"}).json()
         assert el["check"]["message"] == "ElevenLabs key works. 8,800 characters left this month."
-        assert settings.secret("GROQ_API_KEY") == "gsk_right"

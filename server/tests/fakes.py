@@ -1,4 +1,4 @@
-"""Fake Claude / Groq / ElevenLabs / Open-Meteo at the HTTP layer, plus fake ears, so tests
+"""Fake Claude / ElevenLabs / Open-Meteo at the HTTP layer, plus fake ears, so tests
 exercise the real request building and response parsing without network access or API keys."""
 from __future__ import annotations
 
@@ -70,10 +70,6 @@ class FakeAPIs:
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         url = str(request.url)
-        if "api.groq.com" in url and url.endswith("/models"):
-            if request.headers.get("authorization") == "Bearer gsk_wrong":
-                return httpx.Response(401, json={"error": {"message": "Invalid API Key"}})
-            return httpx.Response(200, json={"data": [{"id": m, "active": True} for m in self.models]})
         if "audio/transcriptions" in url:
             body = request.content.decode(errors="ignore")
             self.stt_requests.append({"has_wav": "RIFF" in body, "model": "whisper" in body})

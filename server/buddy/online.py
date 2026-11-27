@@ -84,6 +84,7 @@ class Job:
     topic: str = ""
     password_tries: int = 0
     signin_failed: bool = False
+    stopped_by_user: bool = False  # they said stop or cancel: they know, so it's never reported back
     typed_user: str = ""
     typed_password: str = ""
     kind: str = ""  # e.g. school_homework: the result is also remembered
@@ -389,6 +390,7 @@ class OnlineAgent:
         if not self.busy:
             return "nothing running"
         j.status = "stopped"
+        j.stopped_by_user = True  # they know: never report this one back to them
         if j.answer and not j.answer.done():
             j.answer.cancel()
         if j.task_handle:
@@ -731,6 +733,10 @@ class OnlineAgent:
                 q = str(a.get("question", "")).strip()
                 job.steps.append(f"asked: {q[:60]}")
                 reply = await self._ask(job, q)
+                if STOP_WORDS.search(reply or "") and not a.get("final"):
+                    job.status, job.stopped_by_user = "stopped", True  # "cancel it", "never mind": stop, quietly
+                    job.steps.append("stopped by the user")
+                    return "stopped"
                 if not reply:
                     return "No answer (they may have walked away). Don't do anything final; finish and say so."
                 if a.get("final") and YES.search(reply) and not NO.search(reply):
@@ -740,6 +746,8 @@ class OnlineAgent:
                     return f'They said: "{reply}". That is NOT a yes: don\'t do the final step. Adjust or finish.'
                 return f'They said: "{reply}"'
             if name == "finish":
+                if job.status == "stopped":
+                    return "ok"  # stopped while this step was running: nothing to report
                 job.result = str(a.get("summary", "")).strip() or "Done."
                 job.status = "done" if a.get("success", True) else "failed"
                 job.steps.append("finished")
@@ -756,4 +764,5 @@ class OnlineAgent:
 
 YES = re.compile(r"\b(yes|yeah|yep|yup|sure|go ahead|do it|please do|ok|okay|book it|confirm|correct|that's right|"
                  r"sounds good|perfect|done|go for it)\b", re.I)
+STOP_WORDS = re.compile(r"\b(stop|cancel( it| that)?|forget (it|about it)|never ?mind|leave it|don't bother)\b", re.I)
 NO = re.compile(r"\b(no|nope|don't|do not|stop|wait|hold on|not yet|cancel|never mind)\b", re.I)

@@ -42,7 +42,6 @@ from .brain import Brain, Conversation, Reply
 from .claude import ClaudeLLM
 from .config import Settings
 from .listening import ContextJudge
-from .llm import GroqLLM
 from .memory import MemoryManager, MemoryStore
 from .alarm_sounds import AlarmSounds
 from .study import StudyStore, StudyWorker
@@ -913,8 +912,7 @@ class Hub:
         self.settings = settings
         d = settings.data_dir
         self.llm = ClaudeLLM(settings, claude_http)  # Buddy's brain
-        self.listener = GroqLLM(settings, http)  # optional: judges whether room talk is for Buddy
-        self.judge = ContextJudge(settings, self.listener)
+        self.judge = ContextJudge(settings)  # phrase rules: is room talk meant for Buddy?
         self.stt = stt or LocalSTT(settings)
         self.voiceid = VoiceID(settings.data_dir)  # knows who is speaking
         self.asked_who: dict | None = None  # asked a new voice "who's this?": their held answer and voice
@@ -923,6 +921,7 @@ class Hub:
         self.awake = True  # "off" sets this to False until the next "hey buddy"
         self.startup_played: dict[str, float] = {}
         self.reported: list[str] = []  # online results already told (never twice)
+        self.failures_told: dict[str, str] = {}  # job kind/topic -> day: a failure is mentioned once a day at most
         self.last_user_at = 0.0  # when someone last said something to Buddy
         self.weather_ready: tuple[float, str] = (0.0, "")  # (when, the spoken report), ready before you ask  # board name -> when it switched on (sound played once)
         self.device_gone_at: dict[str, float] = {}
@@ -1007,7 +1006,6 @@ class Hub:
         self.tasks.append(asyncio.create_task(self._morning_loop()))
         self.tasks.append(asyncio.create_task(self._scheduler()))
         self.tasks.append(asyncio.create_task(self._housekeeping()))
-        asyncio.create_task(self.listener.discover())
         if hasattr(self.stt, "warm"):
             asyncio.create_task(asyncio.to_thread(self.stt.warm))
         asyncio.create_task(asyncio.to_thread(self.voiceid.warm))
@@ -1300,15 +1298,6 @@ class Hub:
             await s.set_state("idle")
             return
         s.relistened = False
-        if (getattr(s, "follow_up", "") == "after" and not (s.speaker or {}).get("name")
-                and not intents.has_wake(text) and self.settings.secret("GROQ_API_KEY")):
-            # Listening on after a statement, and it's not a voice Buddy knows: the TV or people chatting?
-            since = time.time() - self.last_spoke_at if self.last_spoke_at else 1e9
-            if not await self.judge.is_for_buddy(text, False, self.conv.last_reply, since):
-                self.record("heard", session=s.id, heard=text, for_buddy=False, how=self.judge.last_how)
-                await self.note(s, f'Heard "{text}" and decided it wasn\'t for me.')
-                await s.set_state("idle")
-                return
         if not intents.strip_wake(text):  # just "hey buddy" and a pause: wait for the question
             await s.start_listening(earcon=False, no_speech_s=6.0)
             return
@@ -1474,6 +1463,16 @@ class Hub:
         if job.quiet:  # Buddy's own early-morning check: kept, not said
             self.morning_job_done(job)
             return
+        if job.status == "stopped" or getattr(job, "stopped_by_user", False):
+            return  # they stopped it themselves: they know what happened
+        if job.status != "done":
+            # Said once, in one line, with no "want to hear what happened?" to answer. Not again today for the
+            # same kind of job, so retries that fail the same way don't keep bringing it up.
+            fkey = (job.kind or job.topic or job.task or "").lower()[:80]
+            today = time.strftime("%Y-%m-%d")
+            if self.failures_told.get(fkey) == today:
+                return
+            self.failures_told[fkey] = today
         if job.status == "done" and job.kind == "school_homework" and job.result:
             # Remembered, so Buddy can keep them on top of it later ("what homework have I got?")
             self.memory.add(f"Homework from Bromcom, checked {time.strftime('%a %d %b')}: {job.result}",
@@ -1495,6 +1494,14 @@ class Hub:
         self.reported = self.reported[-20:]
         what = job.topic or "that"
         moved_on = self.last_user_at > job.started + 5  # they've talked about other things since asking
+        if job.status != "done":
+            why = (job.result or "").strip().rstrip(".")
+            line = f"I couldn't manage {what}" + (f": {why[:140]}." if why and len(why) < 160 else ".")
+            self.conv.add("assistant", line, "(the online job failed; told them once, nothing more to say about it)")
+            await self.broadcast_ui({"type": "event", "kind": "transcript", "session": s.id, "role": "assistant",
+                                     "text": line})
+            await s.speak(line)
+            return
         if not moved_on and job.result:
             # They asked, and nothing else has come up since: just tell them.
             line = job.result
@@ -1503,8 +1510,7 @@ class Hub:
                                      "text": line})
             await s.speak(line, then_listen=True)
             return
-        line = (f"By the way, I've got {what}. Want to hear it?" if job.status == "done"
-                else f"By the way, I couldn't quite manage {what}. Want to hear what happened?")
+        line = f"By the way, I've got {what}. Want to hear it?"
         self.conv.pending = {"intent": "online_report", "text": job.result}
         self.conv.add("assistant", line, "(the online job finished; offering the result)")
         await self.broadcast_ui({"type": "event", "kind": "transcript", "session": s.id, "role": "assistant", "text": line})
@@ -2117,23 +2123,18 @@ class Hub:
                     if self.memory_mgr.needs_compaction():
                         r = await self.memory_mgr.compact()
                         self.record("memory_compaction", result=r)
-                    await self.listener.discover(force=True)
             except asyncio.CancelledError:
                 raise
             except Exception:  # noqa: BLE001
                 log.exception("housekeeping failed")
 
     def llm_status(self) -> dict:
-        """Claude (the brain) plus the Groq listener, in the shape the web page expects."""
-        g = self.listener.status()
+        """Claude (the brain), in the shape the web page expects."""
         claude = self.llm.status()
-        groq_err = g["last_error"] if self.settings.secret("GROQ_API_KEY") else ""
         return {
             "brain": "claude", "claude": claude,
             "fast": [claude["fast"]], "smart": [claude["smart"]],
-            "listener": g["fast"][:1], "available": g["available"],
-            "cooldowns": g["cooldowns"], "limits": g["limits"],
-            "last_error": claude["last_error"] or (f"listener: {groq_err}" if groq_err else ""),
+            "last_error": claude["last_error"],
         }
 
     def status(self) -> dict:
