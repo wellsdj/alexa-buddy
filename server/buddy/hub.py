@@ -93,6 +93,26 @@ CALENDAR_TASK = (
     "\"what\": \"October half term\"}, ...]} listing every weekday students are NOT in school: half terms, "
     "Christmas, Easter and summer holidays, bank holidays and INSET / training days (from-to inclusive).")
 
+HOMEWORK_URL = "https://www.bromcomvle.com/Homework"
+# One Claude call turns the homework page's text into a short spoken list (much cheaper than clicking through it).
+HOMEWORK_READ = (
+    "Below is all the text on a student's Bromcom homework page, read at 5am on {today}. List the homework still to "
+    "do that is due {tomorrow} or later, soonest first: for each piece one short spoken sentence with the subject, "
+    "the due day, and what to do in a few words. Leave out anything due today or earlier, and anything marked as "
+    "handed in or completed. If there's none, say \"No homework due.\" Reply with only those sentences. If the text "
+    "isn't a homework list at all (a sign-in page, an error, an empty page), reply with exactly: NOT_HOMEWORK_PAGE")
+
+
+def homework_day_skip(day, calendar) -> str:
+    """Why the 5am homework check doesn't run today, or "" if it does. Saturdays and school holidays are skipped;
+    Sunday still runs (homework for Monday), unless Monday is a holiday too."""
+    from datetime import timedelta
+    if day.weekday() == 5:
+        return "Saturday"
+    if day.weekday() == 6:
+        return calendar.why_off(day + timedelta(days=1))
+    return calendar.why_off(day)
+
 
 class Session:
     def __init__(self, hub: "Hub", ws: WebSocket, role: str, name: str):
@@ -1390,10 +1410,17 @@ class Hub:
                     await self.prepare_weather()  # keep it fresh through the day
                 busy = self.online.busy or state.get("blocked_day") == today
                 if now.hour >= 5 and state.get("homework_day") != today and not busy:
+                    from .school_calendar import SchoolCalendar
                     state["homework_day"] = today
+                    state["homework_skipped"] = homework_day_skip(now.date(), SchoolCalendar(self.settings.data_dir))
                     self._save_morning(state)
-                    self.online.start(self.brain._school_task("homework", ""), today=now.strftime("%A %d %B %Y"),
-                                      home=self.settings["location_name"] or "", kind="school_homework", quiet=True)
+                    if state["homework_skipped"]:
+                        self.record("homework_skipped", why=state["homework_skipped"])
+                    elif not await self.read_homework(now):
+                        # The page has changed or wants signing in again: the step-by-step agent finds its way.
+                        self.online.start(self.brain._school_task("homework", ""), today=now.strftime("%A %d %B %Y"),
+                                          home=self.settings["location_name"] or "", kind="school_homework",
+                                          quiet=True)
                 elif (now.hour >= 5 and not busy and state.get("homework_day") == today
                       and time.time() - float(state.get("week_at", 0)) > 6 * 86400):
                     state["week_at"] = time.time()
@@ -1409,6 +1436,37 @@ class Hub:
                 raise
             except Exception:  # noqa: BLE001
                 log.exception("morning routine failed")
+
+    async def read_homework(self, now) -> bool:
+        """The 5am homework check, the cheap way: read the homework page straight off, then one Claude call to
+        sum it up. False if that didn't work (then the online agent does it step by step)."""
+        from datetime import timedelta
+        url = self.online.shortcuts().get("school_homework") or HOMEWORK_URL
+        text = await self.online.read_page(url, "school")
+        if not text or len(text) < 40:
+            self.record("homework_read", ok=False, why="no page text")
+            return False
+        prompt = HOMEWORK_READ.format(today=now.strftime("%A %d %B"), tomorrow=(now + timedelta(days=1)).strftime("%A %d %B"))
+        try:
+            res = await self.llm.chat([{"role": "system", "content": prompt}, {"role": "user", "content": text}],
+                                      tier="fast", max_tokens=600)
+        except Exception as e:  # noqa: BLE001
+            self.record("homework_read", ok=False, why=str(e)[:120])
+            return False
+        out = (res.content or "").strip()
+        if not out or "NOT_HOMEWORK_PAGE" in out:
+            self.record("homework_read", ok=False, why="not the homework page")
+            return False
+        self.save_homework(out)
+        self.record("homework_read", ok=True, chars=len(text))
+        return True
+
+    def save_homework(self, result: str) -> None:
+        """Today's homework: ready to say when asked, and remembered."""
+        self.brain.homework_ready = (time.time(), result)
+        self.memory.add(f"Homework from Bromcom, checked {time.strftime('%a %d %b')} at "
+                        f"{time.strftime('%H:%M')}: {result}", "plans", source="learned")
+        self.record("homework_checked", result=result[:300])
 
     async def prepare_weather(self) -> None:
         """Works out today's weather report now, so asking for it is instant."""
@@ -1428,10 +1486,7 @@ class Hub:
             state["blocked_day"] = self.brain.now().date().isoformat()
             self._save_morning(state)
         if job.kind == "school_homework" and job.status == "done" and job.result:
-            self.brain.homework_ready = (time.time(), job.result)
-            self.memory.add(f"Homework from Bromcom, checked {time.strftime('%a %d %b')} at "
-                            f"{time.strftime('%H:%M')}: {job.result}", "plans", source="learned")
-            self.record("homework_checked", result=job.result[:300])
+            self.save_homework(job.result)
         elif job.kind == "school_week" and job.status == "done":
             from datetime import date as _date
             from .llm import parse_json_loose

@@ -27,6 +27,8 @@ log = logging.getLogger("buddy.online")
 MAX_STEPS = 60
 MAX_SECONDS = 15 * 60  # well inside config.MAX_REQUEST_SECONDS (an hour), the limit for anything
 PAGE_TEXT = 4500  # characters of page text Claude sees per look
+READ_TEXT = 15000  # characters kept when reading a whole page in one go (read_page)
+SIGN_IN_PAGE = re.compile(r"accounts\.google\.com|login\.microsoftonline|/account/log_?in|/log_?in\b|/signin|/sso\b", re.I)
 
 # Clicking one of these finishes something for real: it needs a spoken yes first.
 FINAL = re.compile(r"\b(book|booking|reserve|confirm|pay|payment|purchase|buy|order|checkout|check out|submit|"
@@ -378,6 +380,33 @@ class OnlineAgent:
         if self.on_busy and not quiet:
             self.on_busy(True)
         return "started"
+
+    async def read_page(self, url: str, which: str = "school", wait_s: float = 4.0) -> str | None:
+        """Open one page out of sight in Buddy's own signed-in browser and give back all its text, with no
+        Claude in the loop. None if it landed on a sign-in page, or anything went wrong: then the step-by-step
+        agent can take over."""
+        if self.busy:
+            return None
+        browser = self.browsers[which]
+        try:
+            if browser._ctx is not None and browser.visible:
+                await browser.close()
+            browser.visible = False
+            await browser.open(url)
+            await asyncio.sleep(wait_s)  # pages like Bromcom fill themselves in after loading
+            if SIGN_IN_PAGE.search(browser.page.url or ""):
+                log.info("read_page: %s wants a sign-in", url)
+                return None
+            text = await browser.page.evaluate("document.body ? document.body.innerText : ''")
+            return (text or "").strip()[:READ_TEXT] or None
+        except Exception as e:  # noqa: BLE001
+            log.info("read_page %s failed: %s", url, e)
+            return None
+        finally:
+            try:
+                await browser.close()
+            except Exception:  # noqa: BLE001
+                pass
 
     def answer(self, text: str) -> None:
         """The user's spoken answer to the question the job asked."""
