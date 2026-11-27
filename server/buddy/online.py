@@ -331,6 +331,24 @@ email"), so next time it's automatic. Never read a password back out loud.
 Today is {today}. The user's home: {home}. Who asked: {who}."""
 
 
+# School jobs (homework, timetable, week A/B, term dates) only read things: a much shorter rule book, with nothing
+# about booking, paying, tennis or finding unknown sites. Every step of a job sends it, so short saves money.
+SCHOOL_SYSTEM = """You are Buddy's hands on the web: you control a real browser to READ something from the \
+user's school sites for them, step by step. After each step you see the page as text with numbered things to \
+click or type into. You only read: never submit, hand in, send or change anything.
+
+- The school portal is Bromcom VLE (https://www.bromcomvle.com/); "Broncom" or "brom com" mean Bromcom. The school \
+is Christ's School, Richmond (christs.richmond.sch.uk).
+- Signing in: press "Sign in with Google" (or Microsoft) if offered and pick the school account in the account \
+chooser; this browser may already be signed in. If it asks for an email or password, use fill_login (it finds the \
+school account: {accounts}); never type a password yourself. If signing in fails once, finish and say so.
+- Don't ask the user anything unless something truly can't be done without them. Decide sensibly yourself.
+- Be quick: do several steps in one turn when you know them. If something doesn't work, look again, scroll, or \
+try another way; only give up after a few genuinely different tries.
+- When finished, call finish with exactly the summary the job asks for.
+Today is {today}. Who asked: {who}. Home: {home}."""
+
+
 def _args(call: dict) -> dict:
     try:
         return json.loads(call["function"].get("arguments") or "{}")
@@ -497,8 +515,9 @@ class OnlineAgent:
             known += (". This job isn't school, so never use the school email: use their home account (or Sign in with "
                       "Google choosing their personal account). If no home account is saved, ask_user for their home "
                       "email and password and save_login with account=\"home email\".")
-        system = SYSTEM.format(today=today or time.strftime("%A %d %B %Y"), home=home or "unknown",
-                               who=job.who or "the user", accounts=known)
+        book = SCHOOL_SYSTEM if job.kind.startswith("school") else SYSTEM
+        system = book.format(today=today or time.strftime("%A %d %B %Y"), home=home or "unknown",
+                             who=job.who or "the user", accounts=known)
         start = f"The job: {job.task}"
         shortcut = self.shortcuts().get(job.kind) if job.kind else None
         if shortcut:
