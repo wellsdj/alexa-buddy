@@ -6,8 +6,14 @@ sherpa-onnx, the same library as Buddy's ears. It turns a few seconds of speech 
 some of your speech (a recording, or a few sentences said to the desk unit) and Buddy keeps the
 voiceprints in data/voiceprints.json, which never leaves this computer.
 
-Each time someone talks to Buddy, the sentence's voiceprint is compared with everyone saved.
-The closest match above the threshold (setting voice_id_threshold) is who spoke.
+Each time someone talks to Buddy, the sentence's voiceprint is compared with everyone saved: half
+with their average voice, half with their few closest samples (a voice changes a bit from day to
+day and mic to mic; the closest samples catch that). The closest match above the threshold
+(setting voice_id_threshold) is who spoke.
+
+Each person can also say their own name about 20 times ("name prints"), so when Buddy asks
+"who's this?" it can tell the name from how it sounds, even if the words come out wrong
+("Wales" for "Wells").
 """
 from __future__ import annotations
 
@@ -39,6 +45,9 @@ MIN_ID_S = 0.8  # shorter sentences aren't checked ("off", "stop")
 # A new voice is only named once Buddy has this much of their speech. Tested on the user's recording:
 # recognition stops improving at about 30-60 s (96% of 2 s clips, no strangers named).
 TRUST_S = 60.0
+TOP_K = 5  # the closest few samples, compared alongside the average voice
+MAX_NAME_SAMPLES = 30  # "Wells" said this many times is plenty
+NAME_MATCH = 0.5  # the answer to "who's this?" sounds like someone's own name prints at least this much
 
 
 class VoiceIDError(Exception):
@@ -68,6 +77,25 @@ def pieces(pcm: np.ndarray, piece_s: float = PIECE_S) -> list[np.ndarray]:
     return [p for p in out if len(p) >= MIN_PIECE_S * SR and has_speech(p)]
 
 
+def utterances(pcm: np.ndarray, min_s: float = 0.25, max_s: float = 2.5, gap_s: float = 0.25) -> list[np.ndarray]:
+    """Split a recording into separate short things said (a name said over and over), at the pauses."""
+    loud = _loud_frames(pcm)
+    frame, out, start, quiet = SR // 50, [], None, 0
+    for i, on in enumerate(list(loud) + [False] * int(gap_s * 50 + 1)):
+        if on:
+            start = i if start is None else start
+            quiet = 0
+        elif start is not None:
+            quiet += 1
+            if quiet > gap_s * 50:
+                end = i - quiet + 1
+                if min_s * 50 <= end - start <= max_s * 50:
+                    a, b = max(0, (start - 5) * frame), min(len(pcm), (end + 5) * frame)
+                    out.append(pcm[a:b])
+                start, quiet = None, 0
+    return out
+
+
 def _unit(v) -> np.ndarray:
     v = np.asarray(v, dtype=np.float32)
     n = float(np.linalg.norm(v))
@@ -87,6 +115,8 @@ class VoiceID:
         self.last_error = ""
         self.people: dict[str, dict] = {}
         self._centroids: dict[str, np.ndarray] = {}
+        self._samples: dict[str, np.ndarray] = {}  # name -> every sample, one row each
+        self._names: dict[str, np.ndarray] = {}  # name -> their name said out loud, one row each
         self._load()
 
     # ---------- storage ----------
@@ -98,7 +128,8 @@ class VoiceID:
         except (json.JSONDecodeError, OSError):
             log.warning("voiceprints.json unreadable; starting empty")
             return
-        self.people = {name: p for name, p in data.get("people", {}).items() if p.get("samples")}
+        self.people = {name: p for name, p in data.get("people", {}).items()
+                       if p.get("samples") or p.get("name_samples")}
         self._refresh()
 
     def _save(self) -> None:
@@ -111,8 +142,24 @@ class VoiceID:
             pass
 
     def _refresh(self) -> None:
-        self._centroids = {name: _unit(np.mean([_unit(s) for s in p["samples"]], axis=0))
-                           for name, p in self.people.items() if p.get("samples")}
+        self._samples = {name: np.array([_unit(s) for s in p["samples"]])
+                         for name, p in self.people.items() if p.get("samples")}
+        self._centroids = {name: _unit(m.mean(axis=0)) for name, m in self._samples.items()}
+        self._names = {name: np.array([_unit(s) for s in p["name_samples"]])
+                       for name, p in self.people.items() if p.get("name_samples")}
+
+    def score(self, v: np.ndarray, name: str) -> float:
+        """How alike a voiceprint is to someone (0..1): half their average voice, half their few
+        closest samples."""
+        c = float(v @ self._centroids[name])
+        m = self._samples[name]
+        if len(m) < 3:
+            return c
+        top = float(np.sort(m @ v)[-TOP_K:].mean())
+        return 0.5 * c + 0.5 * top
+
+    def _ranked(self, v: np.ndarray) -> list[tuple[str, float]]:
+        return sorted(((n, self.score(v, n)) for n in self._centroids), key=lambda x: -x[1])
 
     # ---------- the model ----------
     def installed(self) -> bool:
@@ -250,21 +297,23 @@ class VoiceID:
         if not has_speech(voice, 0.25):
             return empty
         v = self.embed(voice)
-        scores = {name: float(v @ c) for name, c in self._centroids.items()}
-        best = max(scores, key=scores.get)
-        score = round(scores[best], 2)
+        ranked = self._ranked(v)
+        best, score = ranked[0][0], round(ranked[0][1], 2)
+        second, second_score = (ranked[1][0], round(ranked[1][1], 2)) if len(ranked) > 1 else ("", 0.0)
         match = best if score >= threshold else ""
         trusted = bool(match) and self.trusted(match, trust_s)
+        speech_s = float(_loud_frames(voice).sum()) / 50
         return {"name": match if trusted else "", "score": score, "best": best,
-                "learning": match if match and not trusted else "", "print": v, "seconds": len(voice) / SR}
+                "second": second, "margin": round(score - second_score, 2) if second else 1.0,
+                "learning": match if match and not trusted else "", "print": v, "seconds": len(voice) / SR,
+                "speech_s": round(speech_s, 1)}
 
     def match_print(self, v: np.ndarray) -> tuple[str, float]:
         """The saved person closest to a voiceprint, and how close (0..1). ("", 0) if nobody is saved."""
         if not self._centroids:
             return "", 0.0
-        scores = {name: float(_unit(v) @ c) for name, c in self._centroids.items()}
-        best = max(scores, key=scores.get)
-        return best, round(scores[best], 2)
+        best, score = self._ranked(_unit(v))[0]
+        return best, round(score, 2)
 
     def add_print(self, name: str, v: np.ndarray, seconds: float, source: str = "learnt while talking",
                   create: bool = False) -> None:
@@ -284,6 +333,54 @@ class VoiceID:
             self._refresh()
             self._save()
 
+    def remove_last(self, name: str, seconds: float) -> bool:
+        """Take back the sample just learnt for someone (Buddy thought it was them; it wasn't)."""
+        with self._lock:
+            p = self.people.get(name)
+            if not p or not p.get("samples"):
+                return False
+            p["samples"].pop()
+            p["seconds"] = round(max(0.0, p.get("seconds", 0.0) - seconds), 1)
+            if not p["samples"] and not p.get("name_samples"):
+                del self.people[name]
+            self._refresh()
+            self._save()
+        return True
+
+    # ---------- names said out loud ----------
+    def add_name_audio(self, name: str, pcm: np.ndarray) -> dict:
+        """Someone saying their own name (once, or over and over with pauses): one name print each time."""
+        name = " ".join(str(name).split())[:40]
+        if not name:
+            raise VoiceIDError("Type a name first.")
+        said = utterances(np.asarray(pcm, dtype=np.int16))
+        if not said:
+            raise VoiceIDError("I didn't catch a name in that. Say it clearly, with a little pause after.")
+        prints = [self.embed(x) for x in said]
+        with self._lock:
+            p = self.people.setdefault(name, {"samples": [], "seconds": 0.0, "added": time.time()})
+            p["name_samples"] = (p.get("name_samples", []) + [[round(float(x), 5) for x in v] for v in prints]
+                                 )[-MAX_NAME_SAMPLES:]
+            self._refresh()
+            self._save()
+        return {"name": name, "said": len(prints), "name_samples": len(p["name_samples"])}
+
+    def name_match(self, pcm: np.ndarray) -> tuple[str, float]:
+        """Whose own name does this short answer sound like? ("", 0) if nobody has name prints, or no speech."""
+        if not self._names or not self.installed():
+            return "", 0.0
+        said = utterances(np.asarray(pcm, dtype=np.int16), max_s=4.0) or [pcm]
+        best, top = "", 0.0
+        for x in said[-2:]:  # "it's Wells": the name is at the end
+            if len(x) < 0.25 * SR:
+                continue
+            v = self.embed(x)
+            for n, m in self._names.items():
+                s = float(np.sort(m @ v)[-TOP_K:].mean())
+                if s > top:
+                    best, top = n, s
+        return best, round(top, 2)
+
     def status(self, trust_s: float = TRUST_S) -> dict:
         return {
             "installed": self.installed(),
@@ -292,6 +389,7 @@ class VoiceID:
             "error": self.last_error,
             "trust_seconds": trust_s,
             "people": [{"name": n, "samples": len(p["samples"]), "seconds": p.get("seconds", 0.0),
+                        "name_samples": len(p.get("name_samples", [])),
                         "sources": p.get("sources", []), "trusted": self.trusted(n, trust_s)}
                        for n, p in sorted(self.people.items())],
         }

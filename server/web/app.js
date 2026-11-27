@@ -221,6 +221,7 @@ function onEvent(m) {
     case "transcript": addChat(m); break;
     case "mic_test": micTestEvent(m); break;
     case "voice_enroll": vidEvent(m); break;
+    case "voice_name": vidNameEvent(m); break;
     case "log": addLog(m.entry); if (m.entry.event === "turn") loadStatusSoon();
       if (m.entry.event === "timing" && !$("panel-speed").hidden) loadSpeed(); break;
     case "alarms": loadAlarms(); break;
@@ -564,7 +565,8 @@ function micLive() {
   if (on) $("mic-live-text").textContent = vidRecording ? "Learning your voice…" : "Mic test is on";
 }
 function stopMicAll() {
-  if (vidRecording) vidRec(false);
+  if (vidNaming) vidNameRec(false);
+  else if (vidRecording) vidRec(false);
   else if (S.micTest) micTest(false);
 }
 
@@ -584,7 +586,8 @@ async function loadVoiceID() {
   $("vid-people").replaceChildren(...(st.people.length ? st.people.map((p) => el("li", {},
     el("div", {}, el("b", {}, p.name),
       el("small", {}, p.trusted ? `Knows this voice ✓ · ${Math.round(p.seconds)} s of speech · ${p.sources.join(", ")}`
-        : `Still learning: ${Math.round(p.seconds)} of ${st.trust_seconds} s heard. It learns more each time they talk.`)),
+        : `Still learning: ${Math.round(p.seconds)} of ${st.trust_seconds} s heard. It learns more each time they talk.`,
+        p.name_samples ? ` · name said ${p.name_samples} times` : "")),
     el("button", { class: "btn small ghost", type: "button", onclick: async () => {
       if (!confirm(`Delete ${p.name}'s saved voice?`)) return;
       try { await api("/api/voiceid/" + encodeURIComponent(p.name), { method: "DELETE" }); loadVoiceID(); toast("Deleted"); }
@@ -631,6 +634,29 @@ async function vidRec(on) {
   if (!on && !S.handsFree && !S.ptt) Mic.stop();
   if (!on) loadVoiceID();
   micLive();
+}
+let vidNaming = false;
+async function vidNameRec(on) {
+  const name = on ? vidName() : "";
+  if (on && !name) return;
+  if (on) {
+    try { await Mic.start(); } catch (err) { toast("Microphone: " + err.message, 5000); return; }
+  }
+  vidNaming = on;
+  vidRecording = on;  // the same mic test underneath: one Stop button stops either
+  S.micTest = on;
+  send({ type: "mic_test", on, target: "me", enroll: name, mode: "name" });
+  $("vid-namerec").textContent = on ? "Stop" : "Start";
+  vidSay("vid-name-status", on ? `Say “${name}”… pause… “${name}”… 20 times.` : "Stopped.");
+  if (!on && !S.handsFree && !S.ptt) Mic.stop();
+  if (!on) loadVoiceID();
+  micLive();
+}
+function vidNameEvent(m) {
+  if (m.error) { vidSay("vid-name-status", m.error, "bad"); return; }
+  const n = m.name_samples || 0;
+  vidSay("vid-name-status", n >= 20 ? `Done ✓ ${m.name} said ${n} times. You can press Stop.` : `${n} of 20 ✓ keep going`, "ok");
+  if (n >= 20 && vidNaming) vidNameRec(false);
 }
 function vidEvent(m) {
   if (m.error) { vidSay("vid-rec-status", m.error, "bad"); return; }
@@ -1007,7 +1033,7 @@ function init() {
       if (tab.dataset.tab === "activity") loadStatus();
       if (tab.dataset.tab === "yourvoice") loadVoiceID();
       if (tab.dataset.tab === "speed") loadSpeed();
-      if (tab.dataset.tab !== "yourvoice" && vidRecording) vidRec(false);
+      if (tab.dataset.tab !== "yourvoice" && vidRecording) stopMicAll();
       if (tab.dataset.tab !== "mictest" && S.micTest && !vidRecording) micTest(false);
     };
   }
@@ -1097,6 +1123,7 @@ function init() {
   $("vid-install").onclick = async () => { try { await api("/api/voiceid/install", { method: "POST" }); } catch (err) { toast(err.message); } loadVoiceID(); };
   $("vid-upload").onclick = vidUpload;
   $("vid-rec").onclick = () => vidRec(!vidRecording);
+  $("vid-namerec").onclick = () => vidNameRec(!vidNaming);
   $("mic-live-stop").onclick = stopMicAll;
   $("update-now").onclick = async () => {
     if (!confirm("Update Buddy now? It restarts by itself; give it a minute or two.")) return;

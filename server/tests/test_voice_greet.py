@@ -48,7 +48,9 @@ def test_asks_a_new_voice_who_it_is_then_remembers_them(known):
     turn(hub, s, "what time is it", voice(700, 3, seed=6))
     assert spoken[-1] == "Oh, hello! Who's this?"
     turn(hub, s, "It's Sam", voice(700, 3, seed=7))
-    assert spoken[-1].startswith("Nice to meet you, Sam!") and ":" in spoken[-1]  # then the time it held back
+    assert spoken[-1] == "Nice to meet you! Did I get that right, Sam?" and "Sam" not in hub.voiceid.people
+    turn(hub, s, "yes", voice(700, 3, seed=12))
+    assert spoken[-1].startswith("Lovely, hi Sam!") and ":" in spoken[-1]  # then the time it held back
     assert "Sam" in hub.voiceid.people
     r = hub.voiceid.identify(voice(700, 3, seed=8))
     assert r["name"] == "" and r["learning"] == "Sam"  # not named until it's heard 60 s of Sam

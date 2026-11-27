@@ -87,7 +87,27 @@ NOT_NAMES = {
     "timer", "weather", "time", "please", "thanks", "thank", "yes", "yeah", "hmm", "um", "uh", "just", "again",
     "doesn't", "matter", "secret", "guess", "someone", "somebody", "friend", "me", "him", "her", "them", "it",
     "that", "this", "here", "there", "now", "today", "tomorrow", "volume", "music", "song", "remind", "what's",
+    # Everyday words that came out as a "name" when a sentence was mis-heard ("Say About").
+    "say", "said", "about", "like", "know", "think", "got", "have", "want", "going", "gonna", "need", "mean", "look",
+    "see", "get", "go", "really", "maybe", "actually", "wait", "hang", "hold", "sure", "fine", "good", "great",
+    "hungry", "tired", "busy", "back", "home", "done", "ready", "right", "wrong", "and", "but", "or", "if", "so",
+    "for", "with", "of", "to", "in", "on", "at", "by", "from", "up", "down", "out", "over", "all", "some", "any",
+    "one", "two", "three", "my", "mine", "we", "us", "they", "he", "she", "i", "am", "was", "were", "be", "been",
 }
+
+
+def correction_name(text: str) -> str | None:
+    """'No, I'm Wells', 'it's Wells, not Sam', 'that's not me, it's Wells': Buddy got the voice wrong.
+    The right name, or None. Needs the 'no' / 'not' so 'I'm tired' never counts."""
+    t = strip_wake(text).strip().lower()
+    t = " ".join(re.sub(r"[.!?,]+", " ", t).split())
+    m = (re.fullmatch(r"(?:no|nope|nah|wrong)(?: (?:that's|that is) not me)?(?: no)? (?:it's|it is|this is|i'm|i am|"
+                      r"its) ([a-z][a-z'-]+)(?: not [a-z]+)?", t)
+         or re.fullmatch(r"(?:that's|that is) not me (?:it's|i'm|it is|i am|its) ([a-z][a-z'-]+)", t)
+         or re.fullmatch(r"(?:it's|it is|this is|i'm|i am|its) ([a-z][a-z'-]+) not [a-z]+", t))
+    if not m or m.group(1) in NOT_NAMES or len(m.group(1)) < 2:
+        return None
+    return m.group(1)[:1].upper() + m.group(1)[1:]
 
 
 def name_answer(text: str) -> str | None:

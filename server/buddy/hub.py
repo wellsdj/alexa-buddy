@@ -52,7 +52,7 @@ from .stt import LocalSTT, STTError
 from .tts import ElevenLabsTTS, TTSRouter, TTSUnavailable
 from .vad import CHUNK as VAD_CHUNK
 from .vad import Endpointer, StreamingVad
-from .voiceid import VoiceID, VoiceIDError
+from .voiceid import NAME_MATCH, VoiceID, VoiceIDError
 from .wakeword import WakeDetector
 from .weather import Weather
 
@@ -97,6 +97,9 @@ CALENDAR_TASK = (
     "school also publishes which weeks are Week A, add \"week_a_mondays\": [\"YYYY-MM-DD\", ...] (the Monday of "
     "each Week A); leave it out if not.")
 
+VOICE_LEARN_PER_DAY = 30  # voiceprints added per person per day while talking
+YES_NAME = re.compile(r"\b(yes|yeah|yep|yup|right|correct|that's (me|right|it)|spot on)\b", re.I)
+NO_NAME = re.compile(r"\b(no|nope|nah|wrong|not quite)\b", re.I)
 HOMEWORK_URL = "https://www.bromcomvle.com/Homework"
 # One Claude call turns the homework page's text into a short spoken list (much cheaper than clicking through it).
 HOMEWORK_READ = (
@@ -149,6 +152,7 @@ class Session:
         self.mic_test_viewer: "Session | None" = None
         self.mic_test_until = 0.0
         self.enroll_name = ""  # Your voice tab: add what's said in the mic test to this person's voice
+        self.enroll_mode = ""  # "name": they're saying their own name over and over (name prints)
         self.speaker: dict = {}  # who said the sentence being answered
         self.early: dict | None = None  # words being written down at the first pause (before the end)
         self.reply_task: asyncio.Task | None = None  # the answer being worked out (cancelled if cut off)
@@ -293,7 +297,13 @@ class Session:
                 self.mt_busy = False
         ms = int((time.monotonic() - t0) * 1000)
         who: dict = {}
-        if final and self.enroll_name and self.mic_test_viewer:
+        if final and self.enroll_name and self.mic_test_viewer and self.enroll_mode == "name":
+            try:
+                res = await asyncio.to_thread(self.hub.voiceid.add_name_audio, self.enroll_name, audio)
+                await self.mic_test_viewer.send_json({"type": "event", "kind": "voice_name", **res})
+            except VoiceIDError as e:
+                await self.mic_test_viewer.send_json({"type": "event", "kind": "voice_name", "error": str(e)})
+        elif final and self.enroll_name and self.mic_test_viewer:
             source = "desk unit mic" if self.role == "device" else "browser mic"
             try:
                 res = await asyncio.to_thread(self.hub.voiceid.add_audio, self.enroll_name, audio, source)
@@ -916,7 +926,8 @@ class Session:
             if self.state == "speaking":
                 await self.stop_speaking()
         elif t == "mic_test":
-            await self.hub.mic_test(self, bool(msg.get("on")), msg.get("target") or "me", msg.get("enroll") or "")
+            await self.hub.mic_test(self, bool(msg.get("on")), msg.get("target") or "me", msg.get("enroll") or "",
+                                    msg.get("mode") or "")
         elif t == "text":
             text = (msg.get("text") or "").strip()
             if text:
@@ -940,6 +951,10 @@ class Hub:
         self.stt = stt or LocalSTT(settings)
         self.voiceid = VoiceID(settings.data_dir)  # knows who is speaking
         self.asked_who: dict | None = None  # asked a new voice "who's this?": their held answer and voice
+        self.confirm_who: dict | None = None  # a new name heard: "did I get that right?" before saving it
+        self.last_who: dict = {}  # the last sentence's voice: who Buddy took it for, its voiceprint, when
+        self.last_learnt: dict = {}  # the last voiceprint added while talking (taken back if it was wrong)
+        self.learnt_today: dict[str, int] = {}  # "name day" -> voiceprints added while talking that day
         self.greeted: dict[str, float] = {}  # name -> when Buddy last said hello to them
         self.heard: dict[str, float] = {}  # name -> when Buddy last heard their voice
         self.awake = True  # "off" sets this to False until the next "hey buddy"
@@ -1111,12 +1126,12 @@ class Hub:
                 await s.play_startup_sound()
         self.record("connect", session=s.id, role=s.role, info=s.info)
 
-    async def mic_test(self, viewer: Session, on: bool, target: str, enroll: str = "") -> None:
+    async def mic_test(self, viewer: Session, on: bool, target: str, enroll: str = "", mode: str = "") -> None:
         """Start or stop the live mic test. target: "me" (this browser) or a desk unit's session id.
         enroll: a name, to add everything said to that person's voice (the Your voice tab)."""
         for x in self.sessions.values():  # only one test at a time, per viewer
             if x.mic_test_viewer is viewer:
-                x.mic_test, x.mic_test_viewer, x.enroll_name = False, None, ""
+                x.mic_test, x.mic_test_viewer, x.enroll_name, x.enroll_mode = False, None, "", ""
         if not on:
             return
         who = viewer if target == "me" else self.sessions.get(target)
@@ -1125,6 +1140,7 @@ class Hub:
             return
         who.mic_test, who.mic_test_viewer = True, viewer
         who.enroll_name = " ".join(str(enroll or "").split())[:40]
+        who.enroll_mode = "name" if mode == "name" else ""
         who.mic_test_until = time.time() + 300  # switches itself off after 5 minutes
         who.mt_buf, who.mt_silence, who.mt_peak, who.mt_clipped = [], 0, 0.0, 0
         self.record("mic_test", target=who.id)
@@ -1180,7 +1196,14 @@ class Hub:
         if name:
             self.heard[name] = time.time()
         v = who.get("print")
+        self.last_who = {"name": name or "", "print": v, "seconds": float(who.get("seconds", 0)), "at": time.time()}
         if v is None or not self.settings["voice_learn_on"]:
+            return
+        # Learn only from clean sentences: enough talking in it, and clearly closer to one person than to
+        # anyone else (a muddle of two voices, or the TV, would blur everyone's voiceprint). At most
+        # VOICE_LEARN_PER_DAY a day each, so one long chat can't swamp the rest.
+        clean = float(who.get("speech_s", who.get("seconds", 0))) >= 1.5 and float(who.get("margin", 1.0)) >= 0.1
+        if not clean:
             return
         thr = float(self.settings["voice_id_threshold"])
         score = float(who.get("score", 0))
@@ -1195,13 +1218,40 @@ class Hub:
             who["name"], name = sure_name, sure_name
             self.last_sure = (sure_name, time.time())
             self.record("voice_kept_up", name=sure_name, score=round(score, 2))
-            await asyncio.to_thread(self.voiceid.add_print, name, v, float(who.get("seconds", 0)))
+            await self._learn_print(name, v, float(who.get("seconds", 0)))
             return
         if who.get("learning") or (who.get("name") and score >= thr + 0.05):
             was = self.voiceid.trusted(name, float(self.settings["voice_trust_seconds"]))
-            await asyncio.to_thread(self.voiceid.add_print, name, v, float(who.get("seconds", 0)))
+            await self._learn_print(name, v, float(who.get("seconds", 0)))
             if not was and self.voiceid.trusted(name, float(self.settings["voice_trust_seconds"])):
                 self.record("voice_now_known", name=name)
+
+    async def _learn_print(self, name: str, v, seconds: float) -> None:
+        key = f"{name} {time.strftime('%Y-%m-%d')}"
+        if self.learnt_today.get(key, 0) >= VOICE_LEARN_PER_DAY:
+            return
+        self.learnt_today = {k: n for k, n in self.learnt_today.items() if k.endswith(key[-10:])}
+        self.learnt_today[key] = self.learnt_today.get(key, 0) + 1
+        await asyncio.to_thread(self.voiceid.add_print, name, v, seconds)
+        self.last_learnt = {"name": name, "seconds": seconds, "at": time.time()}
+
+    def _log_voice(self, who: dict) -> None:
+        """Every match score, kept in data/voice_scores.jsonl, to see how well it's telling voices apart."""
+        if not who or "score" not in who:
+            return
+        row = {"t": round(time.time()), "name": who.get("name", ""), "best": who.get("best", ""),
+               "score": who.get("score"), "second": who.get("second", ""), "margin": who.get("margin"),
+               "learning": who.get("learning", ""), "speech_s": who.get("speech_s")}
+        self.record("voice_id", **row)
+        path = self.settings.data_dir / "voice_scores.jsonl"
+        try:
+            with path.open("a") as f:
+                f.write(json.dumps(row) + "\n")
+            if path.stat().st_size > 1_000_000:  # about 8,000 sentences: keep the newest half
+                lines = path.read_text().splitlines()
+                path.write_text("\n".join(lines[len(lines) // 2:]) + "\n")
+        except OSError:
+            pass
 
     def present(self, minutes: float = 15) -> list[str]:
         """People whose voices Buddy heard in the last few minutes."""
@@ -1213,8 +1263,10 @@ class Hub:
         if not self.settings["voice_id_on"] or not self.voiceid.people or not self.voiceid.installed():
             return {}
         try:
-            return await asyncio.to_thread(self.voiceid.identify, audio, float(self.settings["voice_id_threshold"]),
-                                           float(self.settings["voice_trust_seconds"]))
+            who = await asyncio.to_thread(self.voiceid.identify, audio, float(self.settings["voice_id_threshold"]),
+                                          float(self.settings["voice_trust_seconds"]))
+            self._log_voice(who)
+            return who
         except Exception as e:  # noqa: BLE001 - never let this stop an answer
             log.info("voice ID skipped: %s", e)
             return {}
@@ -1622,6 +1674,8 @@ class Hub:
                                  **({"speaker": speaker.get("name", "")} if speaker else {})})
         if await self._answer_to_who(s, text, audio):
             return
+        if await self._voice_correction(s, text, audio):
+            return
         starting = not self.conv.history or time.time() - self.conv.last_active > 600
         hint_kind, hint = self._trouble_hint()
         ctx = {"ringing": s.ringing or next((d.ringing for d in self.devices() if d.ringing), None),
@@ -1903,17 +1957,48 @@ class Hub:
     async def _answer_to_who(self, s: Session, text: str, audio: np.ndarray | None) -> bool:
         """The reply to "who's this?": remember their voice under that name, then give the answer they were
         waiting for. Returns False if it wasn't a name (then it's treated as a new request)."""
+        pend, self.confirm_who = self.confirm_who, None
+        if pend and time.time() - pend["at"] < 90:
+            # "Did I get that right, Sam?"
+            again = intents.name_answer(text)
+            if YES_NAME.search(text) and not NO_NAME.search(text):
+                return await self._save_who(s, pend["asked"], pend["name"], [pend["audio"], audio], known=False)
+            if again and again.lower() != pend["name"].lower():
+                return await self._save_who(s, pend["asked"], again, [pend["audio"], audio], known=False)
+            if NO_NAME.search(text):
+                self.asked_who = {**pend["asked"], "at": time.time()}
+                await s.speak("Sorry! What's your name?", then_listen=True)
+                return True
+            return False
         asked, self.asked_who = self.asked_who, None
         if not asked or time.time() - asked["at"] > 90:
             return False
         name = intents.name_answer(text)
+        by_sound, sounded = "", 0.0
+        if audio is not None and len(text.split()) <= 5:
+            try:  # their own name, said the way they said it in voice setup ("Wales" heard, "Wells" meant)
+                by_sound, sounded = await asyncio.to_thread(self.voiceid.name_match, audio)
+            except Exception:  # noqa: BLE001
+                by_sound = ""
+            self.record("name_by_sound", heard=name or text, closest=by_sound, score=sounded)
+            if by_sound and sounded >= NAME_MATCH:
+                name = by_sound
         if not name:
             return False
         known = name.lower() in {n.lower() for n in self.voiceid.people}
         if known:
             name = next(n for n in self.voiceid.people if n.lower() == name.lower())
+        else:
+            # A new name: check it before saving anyone under it (a mis-heard sentence once became "Say About").
+            self.confirm_who = {"asked": asked, "name": name, "audio": audio, "at": time.time()}
+            await s.speak(f"Nice to meet you! Did I get that right, {name}?", then_listen=True)
+            return True
+        return await self._save_who(s, asked, name, [audio], known=True)
+
+    async def _save_who(self, s: Session, asked: dict, name: str, extra: list, known: bool) -> bool:
+        """Remember their voice under that name, then give the answer they were waiting for."""
         learnt = 0.0
-        for pcm in (asked["audio"], audio):
+        for pcm in [asked["audio"], *extra]:
             if pcm is None:
                 continue
             try:
@@ -1923,12 +2008,44 @@ class Hub:
                 pass  # too short to learn from
         self.record("voice_learnt", name=name, seconds=round(learnt, 1), already_known=known)
         self.greeted[name] = time.time()
-        hello = (f"Oh, sorry {name}, I didn't recognise you!" if known else f"Nice to meet you, {name}!")
+        hello = (f"Oh, sorry {name}, I didn't recognise you!" if known else f"Lovely, hi {name}!")
         if not learnt and not known:
             hello += " I'll learn your voice as we chat."
         said = " ".join(x for x in (hello, asked["text"]) if x)
         await self.broadcast_ui({"type": "event", "kind": "transcript", "session": s.id, "role": "assistant", "text": said})
         await s.speak(said, then_listen=asked["follow_up"])
+        return True
+
+    async def _voice_correction(self, s: Session, text: str, audio: np.ndarray | None) -> bool:
+        """'No, I'm Wells' after Buddy took them for someone else: move what it just learnt to the right person,
+        learn from this sentence too, and say sorry."""
+        name = intents.correction_name(text)
+        last = self.last_who
+        if not name or not last or time.time() - last.get("at", 0) > 120 or self.voiceid is None:
+            return False
+        wrong = last.get("name", "")
+        if not wrong or wrong.lower() == name.lower():
+            return False
+        name = next((n for n in self.voiceid.people if n.lower() == name.lower()), name)
+        learnt = self.last_learnt
+        if learnt.get("name") == wrong and learnt.get("at", 0) >= last.get("at", 0) - 1:
+            await asyncio.to_thread(self.voiceid.remove_last, wrong, float(learnt.get("seconds", 0)))
+            self.last_learnt = {}
+        if last.get("print") is not None:
+            await asyncio.to_thread(self.voiceid.add_print, name, last["print"], float(last.get("seconds", 0)),
+                                    "corrected by you", True)
+        if audio is not None:
+            try:
+                await asyncio.to_thread(self.voiceid.add_audio, name, audio, "corrected by you")
+            except VoiceIDError:
+                pass
+        self.last_sure = (name, time.time())
+        self.greeted[name] = time.time()
+        self.last_who = {**last, "name": name}
+        self.record("voice_corrected", wrong=wrong, right=name)
+        line = f"Sorry {name}, my mistake! I'll remember that's your voice."
+        await self.broadcast_ui({"type": "event", "kind": "transcript", "session": s.id, "role": "assistant", "text": line})
+        await s.speak(line)
         return True
 
     async def apply_action(self, s: Session, act: dict) -> None:
