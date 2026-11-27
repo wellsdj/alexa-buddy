@@ -40,7 +40,7 @@ from .alarms import Alarm, AlarmStore, DAY_NAMES, spoken_time
 from .audio import Leveller, peak_db, rms_dbfs
 from .brain import Brain, Conversation, Reply
 from .claude import ClaudeLLM
-from .config import Settings
+from .config import MAX_REQUEST_SECONDS, Settings
 from .listening import ContextJudge
 from .memory import MemoryManager, MemoryStore
 from .alarm_sounds import AlarmSounds
@@ -1572,7 +1572,11 @@ class Hub:
             if not done and not ctx.get("said_while") and not (speech and speech.started):
                 ctx["said_while"] = True
                 await s.interim(random.choice(STILL_WORKING))
-            reply: Reply = await work
+            reply: Reply = await asyncio.wait_for(work, timeout=MAX_REQUEST_SECONDS)
+        except asyncio.TimeoutError:
+            log.warning("a request ran over an hour and was stopped: %s", text[:80])
+            reply = Reply("Sorry, that was taking over an hour, so I stopped it completely.", intent="error")
+            self.record("error", where="brain", error="over an hour: stopped")
         except Exception as e:  # noqa: BLE001
             log.exception("brain failed")
             reply = Reply("Ah, sorry, something went a bit wrong on my end. Give it another go?", intent="error")

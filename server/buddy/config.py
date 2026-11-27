@@ -84,6 +84,9 @@ DEFAULTS: dict[str, Any] = {
 
 SECRET_KEYS = ("ELEVENLABS_API_KEY", "ANTHROPIC_API_KEY", "STUDY_SYNC_KEY")
 
+# No request runs longer than this: after an hour it's cancelled and cleaned up, whatever it was doing.
+MAX_REQUEST_SECONDS = 60 * 60
+
 RETIRED_SECRETS = ("GROQ_API_KEY",)  # dropped when settings load, and gone from the file at the next save
 
 

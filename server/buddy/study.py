@@ -24,6 +24,7 @@ from pathlib import Path
 
 import numpy as np
 
+from .config import MAX_REQUEST_SECONDS
 from .audio import resample
 from .study_text import CHECK_PROMPT, LESSON_PROMPT, timetable_guess, too_few_words, StudyError, _clean_name, _hash_pin, _parse_json, tidy  # noqa: F401
 
@@ -456,14 +457,22 @@ class StudyWorker:
             try:
                 if lid.startswith("rec:"):
                     try:
-                        await self.check_recording(pid, lid[4:])
+                        await asyncio.wait_for(self.check_recording(pid, lid[4:]), timeout=MAX_REQUEST_SECONDS)
                     except Exception:  # noqa: BLE001 - Claude down, say: check it again in 5 minutes
                         log.exception("checking a recording failed; trying again later")
                         asyncio.get_running_loop().call_later(300, self.queue.put_nowait, (pid, lid))
                     continue
-                await self.process(pid, lid)
+                await asyncio.wait_for(self.process(pid, lid), timeout=MAX_REQUEST_SECONDS)
             except asyncio.CancelledError:
                 raise
+            except asyncio.TimeoutError:
+                log.warning("making lesson %s ran over an hour: stopped", lid)
+                try:
+                    lesson = self.store.lesson(pid, lid)
+                    lesson.update(status="failed", error="It took over an hour, so it was stopped. Try it again.")
+                    self.store.save_lesson(pid, lesson)
+                except StudyError:
+                    pass
             except Exception as e:  # noqa: BLE001 - one bad lesson mustn't stop the rest
                 log.exception("study lesson failed")
                 try:

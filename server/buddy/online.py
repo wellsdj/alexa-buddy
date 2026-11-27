@@ -25,7 +25,7 @@ from pathlib import Path
 log = logging.getLogger("buddy.online")
 
 MAX_STEPS = 60
-MAX_SECONDS = 15 * 60
+MAX_SECONDS = 15 * 60  # well inside config.MAX_REQUEST_SECONDS (an hour), the limit for anything
 PAGE_TEXT = 4500  # characters of page text Claude sees per look
 
 # Clicking one of these finishes something for real: it needs a spoken yes first.
@@ -441,6 +441,10 @@ class OnlineAgent:
             job.status = "stopped"
         except asyncio.TimeoutError:
             job.status, job.result = "failed", "it was taking too long"
+            try:
+                await self.browser.close()  # stopped completely: nothing left half-done in an open page
+            except Exception:  # noqa: BLE001
+                pass
             await self._speak(f"Sorry, I gave up on {job.task}: it was taking too long. Nothing was booked or paid.")
         except Exception as e:  # noqa: BLE001
             log.exception("online job failed")
