@@ -78,20 +78,24 @@ def _sound(name: str) -> bytes:
 STARTUP_SOUND = _sound("startup")  # the desk unit has just been switched on
 WAKE_SOUND = _sound("wake")  # it's sure it heard "hey buddy" (not when it listens again for an answer)
 NOTHING_SOUND = _sound("nothing_heard")  # it was listening, but you didn't say anything
-# Once a week Buddy checks on Bromcom whether it's week A or week B, so it never has to ask.
+# Once a term (on the first school day back) Buddy checks on Bromcom whether THIS week is week A or week B,
+# in case a holiday changed the pattern. Buddy works out the Monday itself: it's the week the check ran in.
 WEEK_TASK = (
     "On the user's Bromcom student portal (https://www.bromcomvle.com/, sign in with the school account using "
-    "'Sign in with Google' if asked), open My Timetable and find whether the current or coming school week is "
+    "'Sign in with Google' if asked), open My Timetable and find whether THIS school week (today's) is "
     "Week A or Week B (look for a 'Week A' / 'Week B' label, or the week name shown above the timetable). Then "
-    "call finish with summary set to ONLY this JSON: {\"week\": \"A\", \"monday\": \"YYYY-MM-DD\"} where monday is "
-    "the Monday of the week you read it for.")
-# Once a week Buddy reads the school's own term dates, so it knows half terms, INSET days and the end of term.
+    "call finish with summary set to ONLY this JSON: {\"week\": \"A\"} (or \"B\"). If you can't tell for sure, "
+    "finish with {\"week\": \"\"}.")
+# Once a term Buddy reads the school's own term dates, so it knows half terms, INSET days and the end of term,
+# and the school's list of Week A weeks if it publishes one.
 CALENDAR_TASK = (
     "Find Christ's School Richmond's term dates for this school year and next (the school's website, "
     "christs.richmond.sch.uk: its calendar or term dates page, or a term dates PDF there). Then call finish with "
     "summary set to ONLY this JSON, nothing else: {\"off\": [{\"from\": \"YYYY-MM-DD\", \"to\": \"YYYY-MM-DD\", "
     "\"what\": \"October half term\"}, ...]} listing every weekday students are NOT in school: half terms, "
-    "Christmas, Easter and summer holidays, bank holidays and INSET / training days (from-to inclusive).")
+    "Christmas, Easter and summer holidays, bank holidays and INSET / training days (from-to inclusive). If the "
+    "school also publishes which weeks are Week A, add \"week_a_mondays\": [\"YYYY-MM-DD\", ...] (the Monday of "
+    "each Week A); leave it out if not.")
 
 HOMEWORK_URL = "https://www.bromcomvle.com/Homework"
 # One Claude call turns the homework page's text into a short spoken list (much cheaper than clicking through it).
@@ -1422,13 +1426,13 @@ class Hub:
                                           home=self.settings["location_name"] or "", kind="school_homework",
                                           quiet=True)
                 elif (now.hour >= 5 and not busy and state.get("homework_day") == today
-                      and time.time() - float(state.get("week_at", 0)) > 6 * 86400):
-                    state["week_at"] = time.time()
+                      and self._new_term(state.get("week_on"), now.date(), school_day_only=True)):
+                    state["week_on"] = today
                     self._save_morning(state)
                     self.online.start(WEEK_TASK, today=now.strftime("%A %d %B %Y"), kind="school_week", quiet=True)
                 elif (now.hour >= 5 and not busy and state.get("homework_day") == today
-                      and time.time() - float(state.get("calendar_at", 0)) > 7 * 86400):
-                    state["calendar_at"] = time.time()
+                      and self._new_term(state.get("calendar_on"), now.date())):
+                    state["calendar_on"] = today
                     self._save_morning(state)
                     self.online.start(CALENDAR_TASK, today=now.strftime("%A %d %B %Y"), kind="school_calendar",
                                       quiet=True)
@@ -1436,6 +1440,19 @@ class Hub:
                 raise
             except Exception:  # noqa: BLE001
                 log.exception("morning routine failed")
+
+    def _new_term(self, last: str | None, today, school_day_only: bool = False) -> bool:
+        """Once a term: never checked, or a term (or half term) has started since the last check."""
+        from datetime import date as _date
+        from .school_calendar import SchoolCalendar
+        cal = SchoolCalendar(self.settings.data_dir)
+        if school_day_only and not cal.is_school_day(today):
+            return False  # "this week" only means something on a school day
+        try:
+            when = _date.fromisoformat(last) if last else None
+        except ValueError:
+            when = None
+        return cal.term_started_since(when, today)
 
     async def read_homework(self, now) -> bool:
         """The 5am homework check, the cheap way: read the homework page straight off, then one Claude call to
@@ -1494,12 +1511,11 @@ class Hub:
             data = parse_json_loose(job.result or "")
             week = str(data.get("week", "")).upper()[:1] if isinstance(data, dict) else ""
             if week in ("A", "B"):
-                try:
-                    monday = _date.fromisoformat(str(data.get("monday", "")))
-                except ValueError:
-                    monday = self.brain.now().date()
-                Timetable(self.settings.data_dir).set_this_week(week, monday)
-                self.record("timetable_week", week=week, monday=monday.isoformat())
+                # The week the check ran in (it only runs on school days), never a date read off the page:
+                # that's how the saved week once went wrong.
+                ran = _date.fromtimestamp(job.started)
+                Timetable(self.settings.data_dir).set_this_week(week, ran)
+                self.record("timetable_week", week=week, checked=ran.isoformat())
         elif job.kind == "school_calendar" and job.status == "done":
             from .llm import parse_json_loose
             from .school_calendar import SchoolCalendar
@@ -1508,6 +1524,10 @@ class Hub:
             if isinstance(off, list) and off:
                 SchoolCalendar(self.settings.data_dir).save(off)
                 self.record("term_dates_updated", days_off=len(off))
+            if isinstance(data, dict) and data.get("week_a_mondays"):
+                from .timetable import Timetable
+                n = Timetable(self.settings.data_dir).set_week_a_mondays(data["week_a_mondays"])
+                self.record("week_a_list_updated", weeks=n)
 
     async def _until_awake(self) -> None:
         while not self.awake:

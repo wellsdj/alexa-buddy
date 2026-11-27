@@ -100,3 +100,39 @@ def test_other_ways_of_asking_about_a_subject(settings, apis, claude):
         assert r.intent == "timetable", q
     assert "Maths" in asyncio.run(brain.handle("any maths on Wednesday", Conversation())).text
     assert not claude.requests
+
+
+def test_the_schools_list_of_week_a_mondays_beats_counting(tmp_path):
+    tt = Timetable(tmp_path)
+    tt.set_this_week("A", date(2026, 11, 16))  # counting alone: 23 Nov would be B, 4 Jan A ...
+    # ... but say the school restarts at Week A after Christmas: its list wins inside the dates it covers.
+    assert tt.set_week_a_mondays(["2026-11-16", "2026-11-30", "2027-01-04", "2027-01-18", "not a date",
+                                  "2027-01-20"]) == 4  # 20 Jan isn't a Monday
+    assert tt.week_of(date(2026, 11, 25)) == "B"
+    assert tt.week_of(date(2027, 1, 5)) == "A" and tt.week_of(date(2027, 1, 13)) == "B"
+    assert tt.week_of(date(2027, 1, 21)) == "A"
+
+
+def test_once_a_term(tmp_path):
+    from buddy.school_calendar import SchoolCalendar
+    cal = SchoolCalendar(tmp_path)
+    assert cal.term_started_since(None, date(2026, 11, 27))
+    assert not cal.term_started_since(date(2026, 11, 2), date(2026, 11, 27))  # same half term
+    assert cal.term_started_since(date(2026, 12, 18), date(2027, 1, 4))  # back after Christmas
+
+
+def test_the_week_check_uses_the_week_it_ran_in_not_a_date_off_the_page(settings, apis):
+    import time as _time
+    from types import SimpleNamespace
+
+    from fastapi.testclient import TestClient
+
+    from buddy.main import create_app
+    app = create_app(settings, apis.client(), None, apis.stt())
+    with TestClient(app):
+        ran = _time.mktime((2026, 11, 25, 5, 30, 0, 0, 0, -1))  # Wednesday 25 Nov, week B
+        job = SimpleNamespace(kind="school_week", status="done", started=ran, signin_failed=False,
+                              result='{"week": "B", "monday": "2026-11-30"}')  # a wrong date on the page
+        app.state.hub.morning_job_done(job)
+    tt = Timetable(settings.data_dir)
+    assert tt.week_of(date(2026, 11, 23)) == "B" and tt.week_of(date(2026, 11, 30)) == "A"

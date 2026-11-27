@@ -71,6 +71,17 @@ class SchoolCalendar:
             return False
         return (self.next_school_day(day) - day).days > 3
 
+    def term_started_since(self, when: date | None, today: date) -> bool:
+        """Has a new term (or half term) begun since `when`? None = never checked. Used to run the
+        once-a-term checks (term dates, week A/B) on the first school day back."""
+        if when is None:
+            return True
+        for _, b, _ in self.off_days():
+            back = b + timedelta(days=1)
+            if when < back <= today:
+                return True
+        return False
+
     def note(self, day: date) -> str:
         """A line for Buddy: today's/that day's school status."""
         why = self.why_off(day)

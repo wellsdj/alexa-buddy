@@ -19,6 +19,13 @@ read only Week {week}."""
 DEFAULT = Path(__file__).with_name("timetable_default.json")  # your Week A / Week B, five periods a day
 
 
+def _is_monday(d: str) -> bool:
+    try:
+        return date.fromisoformat(d).weekday() == 0
+    except ValueError:
+        return False
+
+
 def _lessons(day: list) -> list[dict]:
     """A day is a list of subjects (or lessons read from a photo)."""
     return [{"subject": x} if isinstance(x, str) else x for x in day]
@@ -65,8 +72,24 @@ class Timetable:
         self.save(data)  # from now on this file (with the timetable in it) is the one used
         return week
 
+    def set_week_a_mondays(self, mondays: list[str]) -> int:
+        """The school's own list of Week A Mondays (from its calendar): it beats counting, which a holiday
+        can throw out. Returns how many were saved."""
+        good = sorted({d for d in (str(m)[:10] for m in mondays or []) if _is_monday(d)})
+        if good:
+            data = self.load()
+            data["week_a_mondays"] = good
+            self.save(data)
+        return len(good)
+
     def week_of(self, day: date) -> str:
-        start = self.load().get("week_a_monday")
+        data = self.load()
+        listed = data.get("week_a_mondays") or []
+        if listed:
+            monday = (day - timedelta(days=day.weekday())).isoformat()
+            if listed[0] <= monday <= (date.fromisoformat(listed[-1]) + timedelta(days=7)).isoformat():
+                return "A" if monday in listed else "B"  # inside the school's list: it decides
+        start = data.get("week_a_monday")
         if not start:
             return ""
         weeks = (day - day.fromisoformat(start)).days // 7
