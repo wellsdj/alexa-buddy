@@ -149,6 +149,21 @@ def is_off(text: str) -> bool:
     return bool(_OFF.fullmatch(t))
 
 
+# Speech-to-text sometimes splits or misspells everyday words ("Can you tell me the weather to morrow?"),
+# and then nothing recognises them. Put them back together before anything reads the sentence.
+MISHEARD = [
+    (re.compile(r"\b(?:to|2|tu)[ -]?mor+o[wh]?\b|\btomor+[ -]?r?ow\b|\btmrw\b|\btmr\b", re.I),
+     "tomorrow"),
+    (re.compile(r"\bto[ -]?nite\b", re.I), "tonight"),
+]
+
+
+def fix_heard(text: str) -> str:
+    for pattern, word in MISHEARD:
+        text = pattern.sub(word, text)
+    return text
+
+
 def _norm(text: str) -> str:
     t = text.lower().strip()
     t = re.sub(r"[“”\"]", "", t)

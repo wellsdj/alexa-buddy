@@ -85,6 +85,7 @@ async def say_while(ctx: dict, kind: str) -> None:
 
 # Ready-made replies that get reworded by Claude so they don't always sound the same. Not:
 # Claude's own answers (already natural), "say that again" (must repeat exactly), long lists, silence.
+MISMATCH = "WRONG_ANSWER"  # what the rewording step says when a quick answer doesn't fit the question
 REWORD = {"alarm", "alarm_in", "alarm_list", "alarm_cancel_all", "alarm_needs_time", "timer", "reminder", "snooze",
           "volume", "weather", "thanks", "help", "time", "date", "voice", "music", "llm_tools", "llm_error"}
 
@@ -479,7 +480,7 @@ class Brain:
     async def handle(self, text: str, conv: Conversation, ctx: dict | None = None) -> Reply:
         ctx = ctx or {}
         t0 = time.monotonic()
-        text = intents.strip_wake(text)
+        text = intents.fix_heard(intents.strip_wake(text))
         if not text:
             return Reply("", intent="empty")
         ctx["said"] = text
@@ -516,7 +517,15 @@ class Brain:
                 reply = await self._make_sure(text, conv, ctx, reply)
         reply.text = speakable(reply.text, 1400 if reply.intent == "llm_deep" else 900)
         if reply.text and reply.intent in REWORD and self.settings["reword_replies"]:
-            reply.text = await self._reword(text, reply.text)
+            reworded = await self._reword(text, reply.text)
+            if reworded is None:
+                # The quick answer didn't fit the question (asked about tomorrow, got today): answer it
+                # properly instead of saying the wrong thing and apologising for it.
+                log.info("quick reply didn't fit %r: asking Claude", text)
+                reply = await self._llm(text, conv, ctx)
+                reply.text = speakable(reply.text, 900)
+            else:
+                reply.text = reworded
         if self.missed and reply.text and reply.intent not in ("off", "stop", "repeat", "think_offer", "wifi_pass"):
             reply.text = await self._mention_missed(text, reply.text)
         if reply.intent == "wifi_pass" or (conv.pending or {}).get("intent") == "wifi_pass":
@@ -1029,16 +1038,19 @@ class Brain:
         return Reply("Actually, I've double-checked that. " + fixed, checked.actions, model=checked.model,
                      intent="correction")
 
-    async def _reword(self, said_by_user: str, reply: str) -> str:
+    async def _reword(self, said_by_user: str, reply: str) -> str | None:
         """Say a quick, ready-made reply in Buddy's own words so it doesn't sound the same every time.
-        Facts stay exact. Falls back to the original if Claude is slow or unavailable."""
+        Facts stay exact. Falls back to the original if Claude is slow or unavailable. None: the reply
+        doesn't answer what they asked (e.g. today's weather when they asked about tomorrow)."""
         user = self.settings["user_name"] or "the user"
         system = (f"You are {self.settings['assistant_name']}, {user}'s voice assistant and friend, in their bedroom. "
                   "Reword the reply below so it sounds natural, warm and a bit different each time, like a mate "
                   "talking. Keep every fact exactly: times, dates, numbers, names, temperatures. Keep it about as "
                   "short as the original (for quick tasks, a few words). If it's about a problem, be kind and "
                   "relaxed about it and keep any instruction in it. British English. Spoken aloud: no lists, "
-                  "markdown or emojis. Reply with only the words to say.")
+                  "markdown or emojis. Reply with only the words to say. If the reply plainly doesn't answer what they "
+                  "asked (for example they asked about tomorrow or another day and it's about today), don't "
+                  f"explain or apologise: reply with exactly {MISMATCH}.")
         msgs = [{"role": "system", "content": system},
                 {"role": "user", "content": f'They said: "{said_by_user}"\nReply to reword: "{reply}"'}]
         try:
@@ -1048,6 +1060,8 @@ class Brain:
             log.info("rewording skipped: %s", e)
             return reply
         out = (res.content or "").strip().strip('"').strip()
+        if out.strip(". ").upper() == MISMATCH:
+            return None
         # Never let a reword drop a number (a time, a temperature) that was in the original.
         if not out or any(n not in out for n in re.findall(r"\d+", reply)):
             return reply
