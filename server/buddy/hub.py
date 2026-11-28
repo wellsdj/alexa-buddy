@@ -65,6 +65,10 @@ AS_I_WAS_SAYING = ["Sorry about that! As I was saying,", "Oh sorry, where was I?
 YOU_WERE_SAYING = ["Oh sorry, you were saying?", "Sorry about that! What were you saying?", "Sorry! Go on, you were saying?"]
 QUIET_INTENTS = ("off", "stop", "empty", "snooze", "error", "llm_error", "repeat", "carry_on", "more_memory")
 STILL_WORKING = ["Hmm, one sec.", "Bear with me.", "Just a sec.", "Hang on a moment."]
+# The day's warm-up (yellow fading light on the desk unit): at least this long so it's seen, at most this long.
+WARM_UP_MIN_S = 3.0
+WARM_UP_MAX_S = 45.0
+
 # Played once when the desk unit is switched on: 16 kHz mono 16-bit.
 # Sound effects, 16 kHz mono 16-bit (made from your mp3s: silence trimmed, peaks at -3 dB like the voice).
 _SOUNDS = Path(__file__).resolve().parent.parent / "sounds"
@@ -959,6 +963,8 @@ class Hub:
         self.heard: dict[str, float] = {}  # name -> when Buddy last heard their voice
         self.awake = True  # "off" sets this to False until the next "hey buddy"
         self.startup_played: dict[str, float] = {}
+        self.warmed = False  # the day's warm-up has run since Buddy started (see warm_up_day)
+        self.warming = False
         self.reported: list[str] = []  # online results already told (never twice)
         self.failures_told: dict[str, str] = {}  # job kind/topic -> day: a failure is mentioned once a day at most
         self.last_user_at = 0.0  # when someone last said something to Buddy
@@ -1124,7 +1130,68 @@ class Hub:
             await self.push_schedule(s)
             if self.should_play_startup(s):
                 await s.play_startup_sound()
+            if self.needs_warm_up(s):
+                self._soon(self.warm_up_day(s))
         self.record("connect", session=s.id, role=s.role, info=s.info)
+
+    def needs_warm_up(self, s: Session) -> bool:
+        """The first switch-on of the day, or the first board to connect since Buddy (re)started."""
+        if self.warming:
+            return False
+        if not self.warmed:
+            return True
+        today = self.brain.now().date().isoformat()
+        return self.just_switched_on(s) and self._morning_state().get("warm_day") != today
+
+    async def warm_up_day(self, s: Session) -> dict:
+        """Get everything ready while the light fades yellow: the weather (today's report, and the whole
+        forecast cached), and the connections to Claude, the voice and Spotify. Then the first questions of
+        the day are answered quickly. Takes as long as it needs, up to WARM_UP_MAX_S."""
+        self.warming = True
+        start = time.monotonic()
+        results: dict[str, str] = {}
+        try:
+            # Its own light switch (like "working"), not a state: "hey buddy" still works while it runs.
+            await s.send_json({"type": "warming", "on": True})
+
+            async def step(name: str, work) -> None:
+                try:
+                    out = await asyncio.wait_for(work, WARM_UP_MAX_S)
+                    results[name] = "ok" if out is not False else "not ready"
+                except Exception as e:  # noqa: BLE001 - one part failing mustn't stop the rest
+                    results[name] = f"failed: {e}"[:120]
+
+            async def weather() -> bool:
+                await self.prepare_weather()
+                return time.time() - self.weather_ready[0] < 60
+
+            async def voice() -> bool:
+                eleven = getattr(self.tts, "eleven", None)
+                if eleven is None or not self.settings.secret("ELEVENLABS_API_KEY"):
+                    return True  # not used: the Mac's own voice needs no connection
+                await eleven.refresh_quota()
+                return eleven.quota_status == 200
+
+            async def spotify() -> bool:
+                if not self.spotify.connected:
+                    return True
+                return bool(await self.spotify._token())
+
+            await asyncio.gather(step("weather", weather()), step("claude", self.llm.warm()),
+                                 step("voice", voice()), step("spotify", spotify()))
+            left = WARM_UP_MIN_S - (time.monotonic() - start)
+            if left > 0:
+                await asyncio.sleep(left)  # at least one slow fade, so it doesn't just flicker
+        finally:
+            self.warming, self.warmed = False, True
+            await s.send_json({"type": "warming", "on": False})
+        state = self._morning_state()
+        state["warm_day"] = self.brain.now().date().isoformat()
+        self._save_morning(state)
+        took = round(time.monotonic() - start, 1)
+        self.record("warm_up", seconds=took, **results)
+        log.info("warm-up done in %.1f s: %s", took, results)
+        return results
 
     async def mic_test(self, viewer: Session, on: bool, target: str, enroll: str = "", mode: str = "") -> None:
         """Start or stop the live mic test. target: "me" (this browser) or a desk unit's session id.

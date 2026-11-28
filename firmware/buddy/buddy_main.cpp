@@ -28,7 +28,7 @@
 #include "mem.h"
 #include <nvs.h>
 
-#define FW_VERSION "1.8.3"
+#define FW_VERSION "1.8.4"
 #define SAMPLE_RATE 16000
 #define MIC_FRAMES 320               // 20 ms per I2S read
 #define SEND_BYTES 1280              // 40 ms of 16-bit audio per WebSocket frame
@@ -102,6 +102,10 @@ static bool wantScan = false, wantJoin = false;  // Wi-Fi change by voice (see w
 static String joinSsid, joinPass, joinResult;
 static String serverState = "offline";
 static volatile bool working = false;  // Buddy is doing a job in the background (online): slow pink fade
+// First switch-on of the day: the server is getting everything ready (yellow fade). Shown until it says
+// it's done, and never more than a minute (in case that message is lost).
+static uint32_t warmingUntil = 0;
+static bool warmingNow(uint32_t t) { return warmingUntil && (int32_t)(warmingUntil - t) > 0; }
 static bool shouldSaveConfig = false;
 
 // ------------------------------------------------------------------ small helpers
@@ -600,6 +604,10 @@ static void updateLed() {
   } else if (serverState == "speaking") {
     uint8_t v = 40 + (uint8_t)min(215.0f, speakLevel * 900.0f);  // pulses with the voice
     led(0, v, v * 0.45f);
+  } else if (warmingNow(t)) {  // getting ready for the day: warm yellow, fading slowly in and out
+    float w = (sinf(t / 1000.0f * 2.0f * PI * 0.4f) + 1.0f) * 0.5f;
+    uint8_t v = 15 + (uint8_t)(220 * w);
+    led(v, v * 0.7f, 0);
   } else if (working) {  // a job in the background: pink, fading slowly in and out
     float w = (sinf(t / 1000.0f * 2.0f * PI * 0.3f) + 1.0f) * 0.5f;
     uint8_t v = 15 + (uint8_t)(200 * w);
@@ -693,6 +701,9 @@ static void stripUpdate() {
       float reach = min(1.0f, 0.15f + speakLevel * 6.0f) * (mid + 1);
       float v = (fabsf(k - mid) <= reach) ? 1.0f : 0.12f;
       g = v; b = v * 0.45f;
+    } else if (warmingNow(t)) {  // getting ready for the day: warm yellow, fading in and out with a ripple
+      float v = 0.05f + 0.65f * ((sinf(sec * 2 * PI * 0.4f - k * 0.15f) + 1) * 0.5f);
+      r = v; g = v * 0.7f;
     } else if (working) {  // a job in the background: pink, fading slowly in and out together
       float v = 0.05f + 0.6f * ((sinf(sec * 2 * PI * 0.3f) + 1) * 0.5f);
       r = v; g = v * 0.25f; b = v * 0.55f;
@@ -885,6 +896,8 @@ static void handleJson(uint8_t *payload, size_t len) {
     if (!sdTestRunning) wantSdTest = true;  // done in loop(): it takes a moment
   } else if (!strcmp(type, "working")) {
     working = doc["on"] | false;
+  } else if (!strcmp(type, "warming")) {
+    warmingUntil = (doc["on"] | false) ? (millis() + 60000) | 1 : 0;
   } else if (!strcmp(type, "aec")) {
     bool on = doc["on"] | true;
     if (on && !aecOn) aec.restart();
@@ -1110,6 +1123,7 @@ static void wsEvent(WStype_t type, uint8_t *payload, size_t len) {
     case WStype_DISCONNECTED:
       if (wsConnected) logOut.println("[ws] disconnected");
       wsConnected = false;
+      warmingUntil = 0;  // the server starts it again if it still needs to
       lastConnected = millis();
       serverState = "offline";
       acceptSeq = -1;

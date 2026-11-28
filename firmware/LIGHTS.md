@@ -28,6 +28,7 @@ Pattern key: ▬ steady · ∿ breathing or pulsing · ● one short blip every 
 | 🟣 ∿ | **Purple, breathing** (strip: a bright dot sweeping) | Thinking about an answer | Wait |
 | 🟢 ∿ | **Green-cyan, moving with the voice** | Speaking | Tap the button to stop it |
 | 🩷 ∿ | **Pink, fading slowly in and out** | Doing a job in the background (e.g. on a website) | Wait, or ask what it's doing |
+| 🟡 ∿ | **Warm yellow, fading slowly in and out** (the strip ripples gently) | The first switch-on of the day (or just after Buddy restarted on the Mac): getting the weather ready and connecting to Claude, the voice and Spotify, so your first questions are answered quickly | Wait a few seconds; "hey Buddy" still works. It stops by itself after a minute at most |
 | 🟠 ⚡ | **Orange, flashing twice a second** | An alarm or timer is ringing | Tap the button, or say "stop" |
 | 🟣 ▬ | **Magenta, while holding the button** (after 2 s) | Let go now to start or stop recording a lesson | |
 | 🔴 ▬ | **Red, while holding the button** (after 4 s) | Let go now to mute or unmute | Keep holding to 10 s to forget Wi-Fi |
